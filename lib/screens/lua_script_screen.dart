@@ -12,8 +12,10 @@ class LuaScriptScreen extends StatefulWidget {
 class _LuaScriptScreenState extends State<LuaScriptScreen> {
   final _scriptController = TextEditingController();
   final _outputController = TextEditingController();
+  final _debugLogController = TextEditingController();
   bool _isRunning = false;
   bool _isPaused = false;
+  int _outputTab = 0; // 0=Output, 1=Debug Log
 
   // Device selection
   List<(String, String)> _devices = []; // (id, name)
@@ -261,31 +263,69 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
     }
   }
 
+  // 轮询日志的后台任务
+  Future<void> _pollLogs(int durationMs) async {
+    const pollInterval = 200; // 每200ms检查一次
+    final endTime = DateTime.now().add(Duration(milliseconds: durationMs));
+    while (DateTime.now().isBefore(endTime) && _isRunning && mounted) {
+      await Future.delayed(const Duration(milliseconds: pollInterval));
+      if (!mounted) break;
+      try {
+        final logs = luaGetLogs();
+        if (logs.isNotEmpty) {
+          setState(() {
+            for (final log in logs) {
+              final withTimestamp = '[${DateTime.now().toString().substring(11, 19)}] $log';
+              _outputController.text += '$withTimestamp\n';
+              _debugLogController.text += '$withTimestamp\n';
+            }
+          });
+        }
+      } catch (e) {
+        // 忽略轮询中的错误
+      }
+    }
+  }
+
   Future<void> _runScript() async {
     if (_isRunning) return;
-    setState(() => _isRunning = true);
+    setState(() {
+      _isRunning = true;
+      _outputTab = 1; // 切换到调试日志标签页
+    });
     final script = _scriptController.text;
     try {
       luaClearLogs();
+      _debugLogController.text = '=== Script started at ${DateTime.now()} ===\n';
       final result = luaExecuteScript(script: script);
       final logs = luaGetLogs();
       setState(() {
         _outputController.text += '> Running script...\n';
         for (final log in logs) {
           _outputController.text += '$log\n';
+          _debugLogController.text += '$log\n';
         }
         if (result) {
           _outputController.text += '--- Done ---\n';
+          _debugLogController.text += '--- Main script done, polling for async logs... ---\n';
         } else {
           _outputController.text += 'Execution failed.\n';
+          _debugLogController.text += 'Execution failed.\n';
         }
       });
+      // 等待异步定时器回调完成（最多5秒）
+      await _pollLogs(5000);
     } catch (e) {
       setState(() {
-        _outputController.text += 'Error: $e\n';
+        final errMsg = 'Error: $e';
+        _outputController.text += '$errMsg\n';
+        _debugLogController.text += '$errMsg\n';
       });
     } finally {
-      setState(() => _isRunning = false);
+      setState(() {
+        _isRunning = false;
+        _debugLogController.text += '=== Script finished at ${DateTime.now()} ===\n';
+      });
     }
   }
 
@@ -305,13 +345,17 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
   }
 
   void _clearOutput() {
-    setState(() => _outputController.clear());
+    setState(() {
+      _outputController.clear();
+      _debugLogController.clear();
+    });
   }
 
   @override
   void dispose() {
     _scriptController.dispose();
     _outputController.dispose();
+    _debugLogController.dispose();
     super.dispose();
   }
 
@@ -465,20 +509,83 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          // Output area
+          // Tabbed output area
           Expanded(
             flex: 2,
-            child: TextField(
-              controller: _outputController,
-              maxLines: null,
-              expands: true,
-              readOnly: true,
-              decoration: const InputDecoration(
-                labelText: 'Output',
-                border: OutlineInputBorder(),
-                alignLabelWithHint: true,
-              ),
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+            child: Column(
+              children: [
+                // Tab bar
+                Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey),
+                    borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _outputTab = 0),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            color: _outputTab == 0 ? Colors.blue[100] : Colors.grey[200],
+                            child: const Text(
+                              'Output',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(() => _outputTab = 1),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            color: _outputTab == 1 ? Colors.orange[100] : Colors.grey[200],
+                            child: const Text(
+                              'Debug Log',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Tab content
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey),
+                      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
+                    ),
+                    child: _outputTab == 0
+                        ? TextField(
+                            controller: _outputController,
+                            maxLines: null,
+                            expands: true,
+                            readOnly: true,
+                            decoration: const InputDecoration(
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.all(8),
+                            ),
+                            style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+                          )
+                        : TextField(
+                            controller: _debugLogController,
+                            maxLines: null,
+                            expands: true,
+                            readOnly: true,
+                            decoration: const InputDecoration(
+                              border: InputBorder.none,
+                              contentPadding: EdgeInsets.all(8),
+                            ),
+                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.orange),
+                          ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],

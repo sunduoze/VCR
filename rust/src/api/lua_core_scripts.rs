@@ -226,8 +226,9 @@ function sys.tigger(param)
         if taskTimerPool[taskId] == param then
             taskTimerPool[taskId] = nil
             local r, i = coroutine.resume(taskId)
-            i = i and i..",hex:"..i:toHex() or nil
-            assert(r, i)
+            if not r then
+                log.error("task", "coroutine resume failed: " .. tostring(i))
+            end
         end
     else
         local cb = timerPool[param]
@@ -313,6 +314,7 @@ end
 -- id >= 0: 定时器消息 → sys.tigger(id)
 -- id < 0: 通道消息 → channelCb[type] 回调
 tiggerCB = function(id, msgType, data)
+    print("[tiggerCB] id=" .. tostring(id) .. ", msgType=" .. tostring(msgType))
     local result, info = pcall(function()
         if id >= 0 then
             sys.tigger(id)

@@ -833,6 +833,7 @@ pub fn lua_open_scripts_folder() -> bool {
 
 /// 定时器到期时调用 Lua 的 tiggerCB(timerId)
 fn fire_sys_timer(timer_id: u32) {
+    log::info!("[fire_sys_timer] timer_id={} fired", timer_id);
     let engine = get_lua_engine();
     if let Some(ref e) = *engine {
         let globals = e.lua.globals();

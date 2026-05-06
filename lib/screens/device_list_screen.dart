@@ -60,7 +60,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _loadSortOrder();
     _loadDevices();
     _loadProtocols();
-    // Don't auto-scan ports — user must click refresh in dialog
+    // Don't auto-scan ports �?user must click refresh in dialog
     // Scanning happens on-demand when opening add/edit device dialog
   }
 
@@ -155,11 +155,13 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
               flowControl: flowControl,
               receiveTimeoutMs: BigInt.from(100),
             );
+            saveDevices(); // 持久化新设备
           } else if (connType == ConnectionType.tcp) {
             final parts = address.split(':');
             final host = parts[0];
             final port = parts.length > 1 ? int.tryParse(parts[1]) ?? 502 : 502;
             addTcpDevice(name: name, host: host, port: port, protocol: protocol);
+            saveDevices(); // 持久化新设备
           }
           await _loadDevices();
         },
@@ -176,7 +178,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         editDevice: device,
         onConfirm: (name, connType, address, protocol) async {
           await updateDevice(deviceId: device.id, name: name, address: address, protocol: protocol);
-          await _loadDevices();
+          saveDevices(); // 持久化更�?          await _loadDevices();
         },
       ),
     );
@@ -205,7 +207,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
   Future<void> _removeDevice(String deviceId) async {
     await removeDevice(deviceId: deviceId);
-    await _loadDevices();
+    saveDevices(); // 持久化删�?    await _loadDevices();
     _saveDeviceState();
   }
 
@@ -397,8 +399,7 @@ class _DeviceCard extends StatelessWidget {
                   ),
                 ),
               ],
-              // 操作按钮行（仅编辑和删除，无连接按钮）
-              const SizedBox(height: 12),
+              // 操作按钮行（仅编辑和删除，无连接按钮�?              const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [
@@ -588,7 +589,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
         _portController = TextEditingController(text: parts.length > 1 ? parts[1] : '502');
       }
     } else {
-      // 新增模式：默认值
+      // 新增模式：默认值为空
       _nameController = TextEditingController();
       _connType = ConnectionType.serial;
       _hostController = TextEditingController(text: '192.168.1.1');
@@ -811,7 +812,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                 ],
                 const SizedBox(height: 16),
 
-                // Data Bits, Stop Bits, Parity, Flow Control — 2x2 grid
+                // Data Bits, Stop Bits, Parity, Flow Control �?2x2 grid
                 Row(
                   children: [
                     Expanded(

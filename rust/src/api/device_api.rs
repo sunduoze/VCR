@@ -304,10 +304,13 @@ pub fn save_devices() {
         .into_iter()
         .filter(|d| !d.is_virtual)
         .map(|d| PersistedDevice {
-            name: d.name,
+            name: d.name.clone(),
             connection_type: format!("{:?}", d.connection_type),
-            address: d.address,
+            address: d.address.clone(),
             protocol: format!("{:?}", d.protocol),
+            flow_control: None,
+            dtr_enabled: None,
+            rts_enabled: None,
         })
         .collect();
     
@@ -424,4 +427,7 @@ struct PersistedDevice {
     connection_type: String,
     address: String,
     protocol: String,
+    flow_control: Option<String>,    // "N", "H", "S"
+    dtr_enabled: Option<bool>,       // DTR 信号状态
+    rts_enabled: Option<bool>,       // RTS 信号状态
 }

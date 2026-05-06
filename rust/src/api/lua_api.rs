@@ -9,8 +9,8 @@ use super::debug_api::debug_send_bytes;
 use crate::core::app_context::RT;
 use super::lua_core_scripts::{LOG_LUA, SYS_LUA, HEAD_LUA};
 
-/// 安全获取 Mutex 锁，遇到 PoisonError 时恢复而非 panic
-/// Poisoned 仅表示"持锁期间曾发生 panic"，数据本身通常仍可用
+/// 安全获取 Mutex 锁,遇到 PoisonError 时恢复而非 panic
+/// Poisoned 仅表示"持锁期间曾发生 panic",数据本身通常仍可用
 fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
     match mutex.lock() {
         Ok(guard) => guard,
@@ -34,7 +34,7 @@ lazy_static! {
 struct InputBoxState {
     /// 等待中的请求
     pending: Option<InputBoxRequest>,
-    /// 请求计数器（用于生成唯一 ID）
+    /// 请求计数器(用于生成唯一 ID)
     next_id: u64,
 }
 
@@ -51,18 +51,18 @@ impl InputBoxState {
     }
 }
 
-/// Lua 引擎（私有，不暴露给 Dart）
+/// Lua 引擎(私有,不暴露给 Dart)
 struct LuaEngine {
     lua: Lua,
     device_id: Arc<Mutex<String>>,
-    /// Lua 日志缓冲区（供 Dart 端读取）
+    /// Lua 日志缓冲区(供 Dart 端读取)
     log_buffer: Arc<Mutex<Vec<String>>>,
-    /// Plot 数据点缓冲区（供 Dart 端读取）
+    /// Plot 数据点缓冲区(供 Dart 端读取)
     point_buffer: Arc<Mutex<Vec<(f64, usize)>>>,
 }
 
 impl LuaEngine {
-    /// 创建新的 Lua 引擎（crate 内部可见）
+    /// 创建新的 Lua 引擎(crate 内部可见)
     fn new() -> LuaResult<Self> {
         let lua = Lua::new();
         let engine = Self {
@@ -76,7 +76,7 @@ impl LuaEngine {
         Ok(engine)
     }
 
-    /// 设置当前设备 ID（crate 内部可见）
+    /// 设置当前设备 ID(crate 内部可见)
     fn set_device_id(&mut self, device_id: String) {
         let mut id = lock_mutex(&self.device_id);
         *id = device_id;
@@ -86,7 +86,8 @@ impl LuaEngine {
     fn register_basic_api(&self) -> LuaResult<()> {
         let globals = self.lua.globals();
 
-        // 重写 print 函数，输出到 Rust 日志
+        // 重写 print 函数,输出到 Rust 日志和 Flutter UI
+        let log_buf = Arc::clone(&self.log_buffer);
         let print_fn = self.lua.create_function(move |_lua, args: MultiValue| {
             let mut msg = String::new();
             for (i, value) in args.iter().enumerate() {
@@ -102,6 +103,13 @@ impl LuaEngine {
                 }
             }
             log::info!("[Lua Print] {}", msg);
+            // 同时写入 log_buffer 供 Flutter UI 读取
+            let mut buf = lock_mutex(&log_buf);
+            buf.push(msg);
+            let len = buf.len();
+            if len > 200 {
+                buf.drain(0..len - 200);
+            }
             Ok(())
         })?;
         globals.set("print", print_fn)?;
@@ -136,13 +144,13 @@ impl LuaEngine {
         log_table.set("error", error_fn)?;
         let fatal_fn = self.lua.create_function(move |_lua, (tag, msg): (String, String)| {
             log::error!("[Lua FATAL {}] {}", tag, msg);
-            // 可以选择 panic 或退出，这里只记录日志
+            // 可以选择 panic 或退出,这里只记录日志
             Ok(())
         })?;
         log_table.set("fatal", fatal_fn)?;
         globals.set("log", log_table)?;
 
-        // 字符串扩展：toHex
+        // 字符串扩展:toHex
         let string_table: Table = globals.get("string")?;
         let to_hex_fn = self.lua.create_function(move |_lua, s: String| {
             let hex: String = s.bytes().map(|b| format!("{:02X}", b)).collect();
@@ -150,7 +158,7 @@ impl LuaEngine {
         })?;
         string_table.set("toHex", to_hex_fn)?;
 
-        // 字符串扩展：fromHex
+        // 字符串扩展:fromHex
         let from_hex_fn = self.lua.create_function(move |_lua, hex: String| {
             let hex_clean: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
             if hex_clean.len() % 2 != 0 {
@@ -164,20 +172,20 @@ impl LuaEngine {
         })?;
         string_table.set("fromHex", from_hex_fn)?;
 
-        // 字符串扩展：utf8Len
+        // 字符串扩展:utf8Len
         let utf8_len_fn = self.lua.create_function(move |_lua, s: String| {
             Ok(s.chars().count())
         })?;
         string_table.set("utf8Len", utf8_len_fn)?;
 
-        // 字符串扩展：split
+        // 字符串扩展:split
         let split_fn = self.lua.create_function(move |_lua, (s, sep): (String, String)| {
             let parts: Vec<String> = s.split(&sep).map(|p| p.to_string()).collect();
             Ok(parts)
         })?;
         string_table.set("split", split_fn)?;
 
-        // 字符串扩展：urlEncode
+        // 字符串扩展:urlEncode
         let url_encode_fn = self.lua.create_function(move |_lua, s: String| {
             // 简单的 URL 百分比编码
             let encoded: String = s.bytes()
@@ -194,7 +202,7 @@ impl LuaEngine {
         })?;
         string_table.set("urlEncode", url_encode_fn)?;
 
-        // LLCOM 风格 API：apiSendUartData - 发送串口数据
+        // LLCOM 风格 API:apiSendUartData - 发送串口数据
         let device_id_clone = Arc::clone(&self.device_id);
         let api_send_uart = self.lua.create_function(move |_lua, data: String| {
             let device_id = lock_mutex(&device_id_clone);
@@ -209,7 +217,7 @@ impl LuaEngine {
         })?;
         globals.set("apiSendUartData", api_send_uart)?;
 
-        // LLCOM API: apiGetPath - 返回软件所在目录（正斜杠格式）
+        // LLCOM API: apiGetPath - 返回软件所在目录(正斜杠格式)
         let get_path_fn = self.lua.create_function(move |_lua, _: ()| {
             let path = std::env::current_exe()
                 .ok()
@@ -240,7 +248,7 @@ impl LuaEngine {
         let start_timer_fn = self.lua.create_function(move |_lua, (timer_id, ms): (u32, u64)| {
             let handle = RT.spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                // 定时器到期，调用 Lua 的 sys.tigger(timerId)
+                // 定时器到期,调用 Lua 的 sys.tigger(timerId)
                 fire_sys_timer(timer_id);
             });
             lock_mutex(&TIMER_TASKS).insert(timer_id, handle);
@@ -300,7 +308,7 @@ impl LuaEngine {
                 Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
                 _ => return Err(LuaError::RuntimeError("apiSend second arg must be string".to_string())),
             };
-            // 如果通道是"uart"，走串口发送
+            // 如果通道是"uart",走串口发送
             if channel == "uart" {
                 let device_id = lock_mutex(&device_id_clone2);
                 if device_id.is_empty() {
@@ -326,7 +334,7 @@ impl LuaEngine {
         globals.set("apiAscii2Utf8", ascii2utf8_fn)?;
 
         // LLCOM API: apiInputBox(prompt, default, title) -> string
-        // 同步阻塞：Lua 调用后挂起，等待 Dart 端提供输入
+        // 同步阻塞:Lua 调用后挂起,等待 Dart 端提供输入
         let input_box_fn = self.lua.create_function(move |_lua, args: MultiValue| {
             let args_vec: Vec<Value> = args.into_iter().collect();
             let prompt = match args_vec.get(0) {
@@ -359,7 +367,7 @@ impl LuaEngine {
                 (id, rx)
             };
 
-            // 阻塞等待 Dart 端响应（超时 60 秒）
+            // 阻塞等待 Dart 端响应(超时 60 秒)
             match rx.recv_timeout(std::time::Duration::from_secs(60)) {
                 Ok(result) => Ok(result),
                 Err(_) => {
@@ -419,9 +427,9 @@ impl LuaEngine {
         })?;
         globals.set("apiSerialGetDSR", get_dsr_fn)?;
 
-        // LLCOM API: apiQuickSendList(id) - 快速发送列表（占位）
+        // LLCOM API: apiQuickSendList(id) - 快速发送列表(占位)
         let quick_send_fn = self.lua.create_function(move |_lua, _id: u32| {
-            // 目前返回空字符串，待实现完整预设列表管理
+            // 目前返回空字符串,待实现完整预设列表管理
             Ok(String::new())
         })?;
         globals.set("apiQuickSendList", quick_send_fn)?;
@@ -433,7 +441,7 @@ impl LuaEngine {
         })?;
         globals.set("apiUtf8ToHex", utf8_to_hex_fn)?;
 
-        // 字符串扩展：toValue - 十六进制转数值
+        // 字符串扩展:toValue - 十六进制转数值
         let to_value_fn = self.lua.create_function(move |_lua, s: String| {
             let hex_clean: String = s.chars().filter(|c| !c.is_whitespace()).collect();
             match u64::from_str_radix(&hex_clean, 16) {
@@ -443,7 +451,7 @@ impl LuaEngine {
         })?;
         string_table.set("toValue", to_value_fn)?;
 
-        // 字符串扩展：formatNumberThousands - 千分位格式化
+        // 字符串扩展:formatNumberThousands - 千分位格式化
         let format_num_fn = self.lua.create_function(move |_lua, n: f64| {
             let formatted = format!("{}", n as i64)
                 .chars()
@@ -464,11 +472,11 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// 加载核心脚本（log 和 sys 和 head）
+    /// 加载核心脚本(log 和 sys 和 head)
     fn load_core_scripts(&self) -> LuaResult<()> {
         log::info!("[Lua] Loading core scripts...");
 
-        // 将 log.lua 注册到 package.preload，使 require("log") 可用
+        // 将 log.lua 注册到 package.preload,使 require("log") 可用
         let package_table: Table = self.lua.globals().get("package")?;
         let preload: Table = package_table.get("preload")?;
         log::info!("[Lua] package.preload table ready");
@@ -491,7 +499,7 @@ impl LuaEngine {
         preload.set("sys", sys_loader)?;
         log::info!("[Lua] sys module registered to preload");
 
-        // 执行 head.lua（它会 require log 和 sys）
+        // 执行 head.lua(它会 require log 和 sys)
         log::info!("[Lua] Executing HEAD_LUA...");
         self.lua.load(HEAD_LUA).exec()?;
         log::info!("[Lua] HEAD_LUA executed successfully");
@@ -499,17 +507,17 @@ impl LuaEngine {
         Ok(())
     }
 
-    /// 执行 Lua 脚本（crate 内部可见）
+    /// 执行 Lua 脚本(crate 内部可见)
     fn execute_script(&self, script: &str) -> LuaResult<()> {
         self.lua.load(script).exec()
     }
 
-    /// 评估 Lua 表达式（crate 内部可见）
+    /// 评估 Lua 表达式(crate 内部可见)
     fn eval(&self, code: &str) -> LuaResult<Value> {
         self.lua.load(code).eval()
     }
 
-    /// 触发指定通道的所有回调（crate 内部可见）
+    /// 触发指定通道的所有回调(crate 内部可见)
     fn trigger_callbacks(&self, channel: &str, data: &[u8]) {
         let callbacks = lock_mutex(&CALLBACKS);
         if let Some(funcs) = callbacks.get(channel) {
@@ -541,14 +549,14 @@ lazy_static! {
     static ref LUA_ENGINE: Arc<Mutex<Option<LuaEngine>>> = Arc::new(Mutex::new(None));
 }
 
-/// 安全获取 LUA_ENGINE 锁，遇到 PoisonError 时重建引擎
+/// 安全获取 LUA_ENGINE 锁,遇到 PoisonError 时重建引擎
 fn get_lua_engine() -> MutexGuard<'static, Option<LuaEngine>> {
     match LUA_ENGINE.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
             log::warn!("[Lua] LUA_ENGINE was poisoned, re-creating engine...");
             let mut guard = poisoned.into_inner();
-            // Poisoned 引擎状态不可靠，重建一个新引擎
+            // Poisoned 引擎状态不可靠,重建一个新引擎
             match LuaEngine::new() {
                 Ok(e) => {
                     *guard = Some(e);
@@ -579,7 +587,7 @@ pub fn init_lua_engine() -> Result<(), String> {
     }
 }
 
-/// FFI 接口：执行 Lua 脚本
+/// FFI 接口:执行 Lua 脚本
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_execute_script(script: String) -> bool {
     if let Err(e) = init_lua_engine() {
@@ -588,19 +596,25 @@ pub fn lua_execute_script(script: String) -> bool {
     }
     let engine = get_lua_engine();
     if let Some(ref e) = *engine {
-        match e.execute_script(&script) {
+        let result = match e.execute_script(&script) {
             Ok(_) => true,
             Err(err) => {
                 log::error!("Lua script error: {}", err);
                 false
             }
-        }
+        };
+
+        // 注意:不再等待异步任务完成,让它们在后台运行
+        // Flutter 可以通过 lua_get_logs() 轮询获取日志
+        // 定时器任务会在 RT 中异步执行,完成后触发回调
+
+        result
     } else {
         false
     }
 }
 
-/// FFI 接口：评估 Lua 表达式
+/// FFI 接口:评估 Lua 表达式
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_eval(expression: String) -> String {
     if let Err(e) = init_lua_engine() {
@@ -617,7 +631,7 @@ pub fn lua_eval(expression: String) -> String {
     }
 }
 
-/// FFI 接口：设置 Lua 引擎当前设备 ID
+/// FFI 接口:设置 Lua 引擎当前设备 ID
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_set_device_id(device_id: String) -> bool {
     let mut engine = get_lua_engine();
@@ -629,7 +643,7 @@ pub fn lua_set_device_id(device_id: String) -> bool {
     }
 }
 
-/// 触发指定通道的 Lua 回调（公共接口，供其他模块调用）
+/// 触发指定通道的 Lua 回调(公共接口,供其他模块调用)
 /// 通过 tiggerCB(-1, channel, data) 触发通道回调
 pub fn trigger_callback(channel: &str, data: &[u8]) {
     let engine = get_lua_engine();
@@ -656,7 +670,7 @@ pub fn trigger_callback(channel: &str, data: &[u8]) {
     }
 }
 
-/// FFI 接口：读取 Lua 日志缓冲区
+/// FFI 接口:读取 Lua 日志缓冲区
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_get_logs() -> Vec<String> {
     let engine = get_lua_engine();
@@ -667,7 +681,7 @@ pub fn lua_get_logs() -> Vec<String> {
     }
 }
 
-/// FFI 接口：清空 Lua 日志缓冲区
+/// FFI 接口:清空 Lua 日志缓冲区
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_clear_logs() {
     let engine = get_lua_engine();
@@ -676,7 +690,7 @@ pub fn lua_clear_logs() {
     }
 }
 
-/// FFI 接口：检查是否有 InputBox 请求
+/// FFI 接口:检查是否有 InputBox 请求
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_poll_input_box() -> Option<String> {
     let state = lock_mutex(&INPUT_BOX_STATE);
@@ -697,7 +711,7 @@ pub fn lua_poll_input_box() -> Option<String> {
     }
 }
 
-/// FFI 接口：响应 InputBox 请求
+/// FFI 接口:响应 InputBox 请求
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_respond_input_box(id: u64, value: String) -> bool {
     // 清除 pending
@@ -718,7 +732,7 @@ pub fn lua_respond_input_box(id: u64, value: String) -> bool {
     }
 }
 
-/// 脚本目录路径（exe 同路径下的 scripts 目录）
+/// 脚本目录路径(exe 同路径下的 scripts 目录)
 fn get_scripts_dir() -> std::path::PathBuf {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -727,7 +741,7 @@ fn get_scripts_dir() -> std::path::PathBuf {
     exe_dir.join("scripts")
 }
 
-/// FFI 接口：获取脚本列表
+/// FFI 接口:获取脚本列表
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_get_scripts_list() -> Vec<String> {
     let dir = get_scripts_dir();
@@ -753,7 +767,7 @@ pub fn lua_get_scripts_list() -> Vec<String> {
     scripts
 }
 
-/// FFI 接口：加载脚本内容
+/// FFI 接口:加载脚本内容
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_load_script(name: String) -> String {
     let dir = get_scripts_dir();
@@ -764,7 +778,7 @@ pub fn lua_load_script(name: String) -> String {
     })
 }
 
-/// FFI 接口：保存脚本内容
+/// FFI 接口:保存脚本内容
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_save_script(name: String, content: String) -> bool {
     let dir = get_scripts_dir();
@@ -778,7 +792,7 @@ pub fn lua_save_script(name: String, content: String) -> bool {
     std::fs::write(&path, content).is_ok()
 }
 
-/// FFI 接口：删除脚本
+/// FFI 接口:删除脚本
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_delete_script(name: String) -> bool {
     let dir = get_scripts_dir();
@@ -790,7 +804,7 @@ pub fn lua_delete_script(name: String) -> bool {
     }
 }
 
-/// FFI 接口：打开脚本目录
+/// FFI 接口:打开脚本目录
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_open_scripts_folder() -> bool {
     let dir = get_scripts_dir();
@@ -880,7 +894,7 @@ mod tests {
     #[test]
     fn test_string_split() {
         let engine = LuaEngine::new().unwrap();
-        // split 返回 Lua table，用 # 获取长度
+        // split 返回 Lua table,用 # 获取长度
         let value = engine.eval("#string.split('a,b,c', ',')").unwrap();
         let s = value.to_string().unwrap();
         assert!(s.contains("3"), "Expected 3 elements, got {}", s);

@@ -800,32 +800,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
     return null;
   }
 
-  // ── Signal controls ──
-  void _toggleDtr() {
-    if (_selectedDeviceId == null || !_connected || !_isSerialDevice) return;
-    _cs.dtrEnabled = !_cs.dtrEnabled;
-    serialSetDtr(deviceId: _selectedDeviceId!, level: _cs.dtrEnabled);
-    _saveSignalStates();
-    setState(() {});
-  }
-
-  void _toggleRts() {
-    if (_selectedDeviceId == null || !_connected || !_isSerialDevice) return;
-    _cs.rtsEnabled = !_cs.rtsEnabled;
-    serialSetRts(deviceId: _selectedDeviceId!, level: _cs.rtsEnabled);
-    _saveSignalStates();
-    setState(() {});
-  }
-
-  void _toggleBreak() {
-    if (_selectedDeviceId == null || !_connected || !_isSerialDevice) return;
-    _cs.breakEnabled = !_cs.breakEnabled;
-    if (_cs.breakEnabled) serialSetBreak(deviceId: _selectedDeviceId!);
-    else serialClearBreak(deviceId: _selectedDeviceId!);
-    _saveSignalStates();
-    setState(() {});
-  }
-
   // ── Send ──
   void _doSend() {
     if (_selectedDeviceId == null) return;
@@ -1032,26 +1006,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
     ));
   }
 
-  Widget _buildSignalButton({required String label, required bool active, required Color activeColor, required String tooltip, required VoidCallback onTap}) {
-    return Tooltip(message: tooltip, preferBelow: false, child: GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-        decoration: BoxDecoration(
-          color: active ? activeColor : AppTheme.surface,
-          borderRadius: BorderRadius.circular(4),
-          border: Border.all(color: active ? activeColor : AppTheme.textSecondary.withValues(alpha: 0.3), width: 1.5),
-          boxShadow: active ? [BoxShadow(color: activeColor.withValues(alpha: 0.3), blurRadius: 4)] : null,
-        ),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Container(width: 8, height: 8, decoration: BoxDecoration(shape: BoxShape.circle, color: active ? activeColor : AppTheme.textSecondary.withValues(alpha: 0.3))),
-          const SizedBox(width: 6),
-          Text(label, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, fontFamily: 'Consolas, monospace', color: active ? Colors.white : AppTheme.textSecondary)),
-        ]),
-      ),
-    ));
-  }
-
   // ── Flag to track if initial config load is complete ──
   bool _initialLoadComplete = false;
 
@@ -1138,22 +1092,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
             )),
           ]),
         ),
-
-        // Signal controls (serial only) - always show for serial device, even when disconnected
-        if (_isSerialDevice)
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            color: AppTheme.surfaceVariant,
-            child: Row(children: [
-              const Text('Signals:', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.bold)),
-              const SizedBox(width: 12),
-              _buildSignalButton(label: 'DTR', active: _cs.dtrEnabled,  activeColor: Colors.teal,   tooltip: 'Data Terminal Ready', onTap: _toggleDtr),
-              const SizedBox(width: 8),
-              _buildSignalButton(label: 'RTS', active: _cs.rtsEnabled,  activeColor: Colors.indigo,  tooltip: 'Request To Send',    onTap: _toggleRts),
-              const SizedBox(width: 8),
-              _buildSignalButton(label: 'BRK', active: _cs.breakEnabled, activeColor: Colors.red,    tooltip: 'Break Signal',       onTap: _toggleBreak),
-            ]),
-          ),
 
         // Toolbar
         Container(

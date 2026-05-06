@@ -93,6 +93,9 @@ abstract class RustLibApi extends BaseApi {
     required Parity parity,
     required FlowControl flowControl,
     required BigInt receiveTimeoutMs,
+    required bool dtrEnabled,
+    required bool rtsEnabled,
+    required bool breakEnabled,
   });
 
   DeviceInfo crateApiDeviceApiAddTcpDevice({
@@ -305,6 +308,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     required Parity parity,
     required FlowControl flowControl,
     required BigInt receiveTimeoutMs,
+    required bool dtrEnabled,
+    required bool rtsEnabled,
+    required bool breakEnabled,
   }) {
     return handler.executeSync(
       SyncTask(
@@ -319,6 +325,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           sse_encode_parity(parity, serializer);
           sse_encode_flow_control(flowControl, serializer);
           sse_encode_u_64(receiveTimeoutMs, serializer);
+          sse_encode_bool(dtrEnabled, serializer);
+          sse_encode_bool(rtsEnabled, serializer);
+          sse_encode_bool(breakEnabled, serializer);
           return pdeCallFfi(generalizedFrbRustBinding, serializer, funcId: 1)!;
         },
         codec: SseCodec(
@@ -336,6 +345,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           parity,
           flowControl,
           receiveTimeoutMs,
+          dtrEnabled,
+          rtsEnabled,
+          breakEnabled,
         ],
         apiImpl: this,
       ),
@@ -355,6 +367,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
           "parity",
           "flowControl",
           "receiveTimeoutMs",
+          "dtrEnabled",
+          "rtsEnabled",
+          "breakEnabled",
         ],
       );
 

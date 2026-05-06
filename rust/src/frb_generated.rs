@@ -80,6 +80,9 @@ fn wire__crate__api__device_api__add_serial_device_impl(
             let api_flow_control =
                 <crate::core::device::models::FlowControl>::sse_decode(&mut deserializer);
             let api_receive_timeout_ms = <u64>::sse_decode(&mut deserializer);
+            let api_dtr_enabled = <bool>::sse_decode(&mut deserializer);
+            let api_rts_enabled = <bool>::sse_decode(&mut deserializer);
+            let api_break_enabled = <bool>::sse_decode(&mut deserializer);
             deserializer.end();
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Result::<_, ()>::Ok(crate::api::device_api::add_serial_device(
@@ -92,6 +95,9 @@ fn wire__crate__api__device_api__add_serial_device_impl(
                     api_parity,
                     api_flow_control,
                     api_receive_timeout_ms,
+                    api_dtr_enabled,
+                    api_rts_enabled,
+                    api_break_enabled,
                 ))?;
                 Ok(output_ok)
             })())

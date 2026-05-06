@@ -144,6 +144,10 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
             final stopBits = parts.length > 3 ? _parseStopBits(parts[3]) : StopBits.one;
             final parity = parts.length > 4 ? _parseParity(parts[4]) : Parity.none;
             final flowControl = parts.length > 5 ? _parseFlowControl(parts[5]) : FlowControl.none;
+            // 解析硬件流控制设置
+            final dtrEnabled = parts.length > 7 && parts[7] == '1';
+            final rtsEnabled = parts.length > 8 && parts[8] == '1';
+            final breakEnabled = parts.length > 9 && parts[9] == '1';
             addSerialDevice(
               name: name,
               port: port,
@@ -154,6 +158,9 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
               parity: parity,
               flowControl: flowControl,
               receiveTimeoutMs: BigInt.from(100),
+              dtrEnabled: dtrEnabled,
+              rtsEnabled: rtsEnabled,
+              breakEnabled: breakEnabled,
             );
             saveDevices(); // 持久化新设备
           } else if (connType == ConnectionType.tcp) {
@@ -544,6 +551,9 @@ class _DeviceDialogState extends State<_DeviceDialog> {
   late StopBits _selectedStopBits;
   late Parity _selectedParity;
   late FlowControl _selectedFlowControl;
+  late bool _dtrEnabled;
+  late bool _rtsEnabled;
+  late bool _breakEnabled;
 
   // 对话框自己管理端口列表和扫描状态
   List<PortInfo> _ports = [];
@@ -579,6 +589,10 @@ class _DeviceDialogState extends State<_DeviceDialog> {
         if (parts.length > 3) _selectedStopBits = _parseStopBits(parts[3]);
         if (parts.length > 4) _selectedParity = _parseParity(parts[4]);
         if (parts.length > 5) _selectedFlowControl = _parseFlowControl(parts[5]);
+        // 解析硬件流控制设置 (dtr:rts:bk)
+        _dtrEnabled = parts.length > 7 && parts[7] == '1';
+        _rtsEnabled = parts.length > 8 && parts[8] == '1';
+        _breakEnabled = parts.length > 9 && parts[9] == '1';
         if (!_baudRateOptions.contains(_selectedBaudRate)) {
           _customBaudRate = true;
           _customBaudRateController.text = _selectedBaudRate.toString();
@@ -599,6 +613,9 @@ class _DeviceDialogState extends State<_DeviceDialog> {
       _selectedStopBits = StopBits.one;
       _selectedParity = Parity.none;
       _selectedFlowControl = FlowControl.none;
+      _dtrEnabled = false;
+      _rtsEnabled = false;
+      _breakEnabled = false;
       _protocol = Protocol.scpi; // 默认 SCPI 协议
     }
   }
@@ -617,7 +634,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
           : _selectedParity == Parity.even ? 'E' : 'N';
       final fc = _selectedFlowControl == FlowControl.hardware ? 'H'
           : _selectedFlowControl == FlowControl.software ? 'S' : 'N';
-      return '$_selectedPort:$baud:$db:$sb:$pr:$fc';
+      return '$_selectedPort:$baud:$db:$sb:$pr:$fc:100:${_dtrEnabled ? '1' : '0'}:${_rtsEnabled ? '1' : '0'}:${_breakEnabled ? '1' : '0'}';
     } else {
       return '${_hostController.text}:${_portController.text}';
     }
@@ -884,6 +901,48 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                           DropdownMenuItem(value: FlowControl.software, child: Text('Software (XON/XOFF)')),
                         ],
                         onChanged: (v) => setState(() => _selectedFlowControl = v!),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              
+              // 硬件流控制信号配置 (DTR/RTS/Break)
+              if (_connType == ConnectionType.serial) ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: CheckboxListTile(
+                        title: const Text('DTR', style: TextStyle(fontSize: 13)),
+                        subtitle: const Text('Data Terminal Ready', style: TextStyle(fontSize: 10)),
+                        value: _dtrEnabled,
+                        onChanged: (v) => setState(() => _dtrEnabled = v ?? false),
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                    Expanded(
+                      child: CheckboxListTile(
+                        title: const Text('RTS', style: TextStyle(fontSize: 13)),
+                        subtitle: const Text('Request To Send', style: TextStyle(fontSize: 10)),
+                        value: _rtsEnabled,
+                        onChanged: (v) => setState(() => _rtsEnabled = v ?? false),
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                    Expanded(
+                      child: CheckboxListTile(
+                        title: const Text('BREAK', style: TextStyle(fontSize: 13)),
+                        subtitle: const Text('Break Signal', style: TextStyle(fontSize: 10)),
+                        value: _breakEnabled,
+                        onChanged: (v) => setState(() => _breakEnabled = v ?? false),
+                        dense: true,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        contentPadding: EdgeInsets.zero,
                       ),
                     ),
                   ],

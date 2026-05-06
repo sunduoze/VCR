@@ -14,19 +14,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 Future<void> initLuaEngine() =>
     RustLib.instance.api.crateApiLuaApiInitLuaEngine();
 
-/// FFI 接口：执行 Lua 脚本
+/// FFI 接口:执行 Lua 脚本
 bool luaExecuteScript({required String script}) =>
     RustLib.instance.api.crateApiLuaApiLuaExecuteScript(script: script);
 
-/// FFI 接口：评估 Lua 表达式
+/// FFI 接口:评估 Lua 表达式
 String luaEval({required String expression}) =>
     RustLib.instance.api.crateApiLuaApiLuaEval(expression: expression);
 
-/// FFI 接口：设置 Lua 引擎当前设备 ID
+/// FFI 接口:设置 Lua 引擎当前设备 ID
 bool luaSetDeviceId({required String deviceId}) =>
     RustLib.instance.api.crateApiLuaApiLuaSetDeviceId(deviceId: deviceId);
 
-/// 触发指定通道的 Lua 回调（公共接口，供其他模块调用）
+/// 触发指定通道的 Lua 回调(公共接口,供其他模块调用)
 /// 通过 tiggerCB(-1, channel, data) 触发通道回调
 Future<void> triggerCallback({
   required String channel,
@@ -36,38 +36,38 @@ Future<void> triggerCallback({
   data: data,
 );
 
-/// FFI 接口：读取 Lua 日志缓冲区
+/// FFI 接口:读取 Lua 日志缓冲区
 List<String> luaGetLogs() => RustLib.instance.api.crateApiLuaApiLuaGetLogs();
 
-/// FFI 接口：清空 Lua 日志缓冲区
+/// FFI 接口:清空 Lua 日志缓冲区
 void luaClearLogs() => RustLib.instance.api.crateApiLuaApiLuaClearLogs();
 
-/// FFI 接口：检查是否有 InputBox 请求
+/// FFI 接口:检查是否有 InputBox 请求
 String? luaPollInputBox() =>
     RustLib.instance.api.crateApiLuaApiLuaPollInputBox();
 
-/// FFI 接口：响应 InputBox 请求
+/// FFI 接口:响应 InputBox 请求
 bool luaRespondInputBox({required BigInt id, required String value}) =>
     RustLib.instance.api.crateApiLuaApiLuaRespondInputBox(id: id, value: value);
 
-/// FFI 接口：获取脚本列表
+/// FFI 接口:获取脚本列表
 List<String> luaGetScriptsList() =>
     RustLib.instance.api.crateApiLuaApiLuaGetScriptsList();
 
-/// FFI 接口：加载脚本内容
+/// FFI 接口:加载脚本内容
 String luaLoadScript({required String name}) =>
     RustLib.instance.api.crateApiLuaApiLuaLoadScript(name: name);
 
-/// FFI 接口：保存脚本内容
+/// FFI 接口:保存脚本内容
 bool luaSaveScript({required String name, required String content}) => RustLib
     .instance
     .api
     .crateApiLuaApiLuaSaveScript(name: name, content: content);
 
-/// FFI 接口：删除脚本
+/// FFI 接口:删除脚本
 bool luaDeleteScript({required String name}) =>
     RustLib.instance.api.crateApiLuaApiLuaDeleteScript(name: name);
 
-/// FFI 接口：打开脚本目录
+/// FFI 接口:打开脚本目录
 bool luaOpenScriptsFolder() =>
     RustLib.instance.api.crateApiLuaApiLuaOpenScriptsFolder();

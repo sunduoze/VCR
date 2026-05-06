@@ -54,7 +54,7 @@ pub fn get_device(device_id: String) -> Option<DeviceInfo> {
 // ============================================================================
 
 /// 添加串口设备
-/// address 格式: port:baudRate:dataBits:stopBits:parity:flowControl:receiveTimeoutMs
+/// address 格式: port:baudRate:dataBits:stopBits:parity:flowControl:receiveTimeoutMs:dtr:rts:bk
 #[flutter_rust_bridge::frb(sync)]
 pub fn add_serial_device(
     name: String,
@@ -66,6 +66,9 @@ pub fn add_serial_device(
     parity: Parity,
     flow_control: FlowControl,
     receive_timeout_ms: u64,
+    dtr_enabled: bool,
+    rts_enabled: bool,
+    break_enabled: bool,
 ) -> DeviceInfo {
     let db = data_bits;
     let sb = stop_bits;
@@ -73,15 +76,18 @@ pub fn add_serial_device(
     let fc = flow_control;
     let proto = protocol;
     
-    // 构建地址字符串
+    // 构建地址字符串 (扩展格式包含 dtr:rts:bk)
     let address = format!(
-        "{}:{}:{}:{}:{}:{}:{}",
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         port, baud_rate,
         match db { DataBits::Five => "5", DataBits::Six => "6", DataBits::Seven => "7", DataBits::Eight => "8" },
         match sb { StopBits::One => "1", StopBits::Two => "2" },
         match par { Parity::None => "N", Parity::Odd => "O", Parity::Even => "E" },
         match fc { FlowControl::None => "N", FlowControl::Hardware => "H", FlowControl::Software => "S" },
-        receive_timeout_ms
+        receive_timeout_ms,
+        if dtr_enabled { "1" } else { "0" },
+        if rts_enabled { "1" } else { "0" },
+        if break_enabled { "1" } else { "0" }
     );
 
     let config = DeviceConfig {
@@ -189,6 +195,17 @@ pub async fn connect_device(device_id: String) -> bool {
         Ok(_) => {
             DEBUG.mark_connected(&device_id);
             start_receive_loop_if_needed(&device_id);
+            
+            // 连接成功后应用保存的硬件流控制设置 (从设备地址中解析)
+            if let Some(device) = REGISTRY.get(&device_id) {
+                let parts: Vec<&str> = device.address.split(':').collect();
+                if parts.len() >= 10 {
+                    if parts[7] == "1" { let _ = SESSIONS.set_dtr(&device_id, true); }
+                    if parts[8] == "1" { let _ = SESSIONS.set_rts(&device_id, true); }
+                    if parts[9] == "1" { let _ = SESSIONS.set_break(&device_id); }
+                }
+            }
+            
             true
         }
         Err(e) => {

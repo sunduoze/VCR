@@ -23,7 +23,7 @@ DeviceInfo? getDevice({required String deviceId}) =>
     RustLib.instance.api.crateApiDeviceApiGetDevice(deviceId: deviceId);
 
 /// 添加串口设备
-/// address 格式: port:baudRate:dataBits:stopBits:parity:flowControl:receiveTimeoutMs
+/// address 格式: port:baudRate:dataBits:stopBits:parity:flowControl:receiveTimeoutMs:dtr:rts:bk
 DeviceInfo addSerialDevice({
   required String name,
   required String port,
@@ -34,6 +34,9 @@ DeviceInfo addSerialDevice({
   required Parity parity,
   required FlowControl flowControl,
   required BigInt receiveTimeoutMs,
+  required bool dtrEnabled,
+  required bool rtsEnabled,
+  required bool breakEnabled,
 }) => RustLib.instance.api.crateApiDeviceApiAddSerialDevice(
   name: name,
   port: port,
@@ -44,6 +47,9 @@ DeviceInfo addSerialDevice({
   parity: parity,
   flowControl: flowControl,
   receiveTimeoutMs: receiveTimeoutMs,
+  dtrEnabled: dtrEnabled,
+  rtsEnabled: rtsEnabled,
+  breakEnabled: breakEnabled,
 );
 
 /// 添加 TCP 设备

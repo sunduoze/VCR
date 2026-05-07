@@ -670,12 +670,15 @@ pub fn trigger_callback(channel: &str, data: &[u8]) {
     }
 }
 
-/// FFI 接口:读取 Lua 日志缓冲区
+/// FFI 接口:读取 Lua 日志缓冲区(同时清空,避免重复消费)
 #[flutter_rust_bridge::frb(sync)]
 pub fn lua_get_logs() -> Vec<String> {
     let engine = get_lua_engine();
     if let Some(ref e) = *engine {
-        lock_mutex(&e.log_buffer).clone()
+        let mut buf = lock_mutex(&e.log_buffer);
+        let logs = buf.clone();
+        buf.clear();
+        logs
     } else {
         Vec::new()
     }

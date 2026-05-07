@@ -296,24 +296,38 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
   }
 
   Future<void> _restoreLastSelectedDevice() async {
+    // DEBUG
+    final args = ModalRoute.of(context)?.settings.arguments;
+    debugPrint('[DEBUG] _restoreLastSelectedDevice called');
+    debugPrint('[DEBUG]   widget.deviceId = ${widget.deviceId}');
+    debugPrint('[DEBUG]   route args = $args');
+    
     final devices = listDevices();
+    debugPrint('[DEBUG]   devices.length = ${devices.length}');
+    debugPrint('[DEBUG]   devices[0].id = ${devices.isNotEmpty ? devices.first.id : "(empty)"}');
     
     // Determine which device to select
     String? targetDeviceId;
     if (widget.deviceId != null && devices.any((d) => d.id == widget.deviceId)) {
+      // Navigation from device_list_screen: use the passed-in device ID
       targetDeviceId = widget.deviceId;
+      debugPrint('[DEBUG]   Using widget.deviceId: $targetDeviceId');
     } else {
-      // Try to restore from saved config
+      // Normal tab switch: try to restore from saved config
       final savedDeviceId = await _getLastSelectedDeviceId();
+      debugPrint('[DEBUG]   savedDeviceId from config = $savedDeviceId');
       if (savedDeviceId != null && devices.any((d) => d.id == savedDeviceId)) {
         targetDeviceId = savedDeviceId;
+        debugPrint('[DEBUG]   Using savedDeviceId: $targetDeviceId');
       }
     }
     
     // Fall back to first device if needed
     targetDeviceId ??= devices.isNotEmpty ? devices.first.id : null;
+    debugPrint('[DEBUG]   Final targetDeviceId = $targetDeviceId');
     
     if (targetDeviceId != null) {
+      debugPrint('[DEBUG]   Calling _selectDevice($targetDeviceId)');
       await _selectDevice(targetDeviceId, loadFromRust: true);
     }
   }

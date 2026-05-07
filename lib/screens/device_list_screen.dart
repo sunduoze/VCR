@@ -201,6 +201,15 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _saveDeviceState();
   }
 
+  // 从列表点击设备 → 直接跳转到 Console 并自动选中该设备
+  void _navigateToConsole(DeviceInfo device) {
+    Navigator.pushNamed(
+      context,
+      AppRoutes.debugConsole,
+      arguments: device.id,
+    );
+  }
+
   Future<void> _navigateToDetail(DeviceInfo device) async {
     final result = await Navigator.pushNamed(
       context,
@@ -258,7 +267,8 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                   device: _devices[index],
                   onEdit: () => _showEditDeviceDialog(_devices[index]),
                   onRemove: () => _removeDevice(_devices[index].id),
-                  onTap: () => _navigateToDetail(_devices[index]),
+                  onTap: () => _navigateToConsole(_devices[index]),
+                  onLongPress: () => _navigateToDetail(_devices[index]),
                 ),
               ),
             ),
@@ -277,7 +287,10 @@ class _DeviceCard extends StatelessWidget {
     required this.onEdit,
     required this.onRemove,
     required this.onTap,
-  });
+    VoidCallback? onLongPress,
+  }) : _onLongPress = onLongPress;
+
+  final VoidCallback? _onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -285,6 +298,7 @@ class _DeviceCard extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 12),
       child: InkWell(
         onTap: onTap,
+        onLongPress: _onLongPress,
         borderRadius: BorderRadius.circular(8),
         child: Padding(
           padding: const EdgeInsets.all(16),

@@ -2,6 +2,7 @@
 //! 提供 LLCOM 风格的 Lua 脚本功能
 
 use mlua::{Lua, Table, Result as LuaResult, Error as LuaError, Value, MultiValue, Function};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::collections::HashMap;
 use lazy_static::lazy_static;
@@ -245,13 +246,20 @@ impl LuaEngine {
         globals.set("apiUnsetCb", unset_cb_fn)?;
 
         // LLCOM API: apiStartTimer(timerId, ms) -> 1 on success
+        // Timer body is wrapped in catch_unwind so Lua panic in callback won't crash the process
         let start_timer_fn = self.lua.create_function(move |_lua, (timer_id, ms): (u32, u64)| {
+            let timer_id_inner = timer_id;
             let handle = RT.spawn(async move {
+                // sleep is infallible; the inner block catches panics from Lua callbacks
                 tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                // 定时器到期,调用 Lua 的 sys.tigger(timerId)
-                fire_sys_timer(timer_id);
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    fire_sys_timer(timer_id_inner);
+                }));
+                if result.is_err() {
+                    log::error!("[Lua] Timer {} callback panicked (ignored)", timer_id_inner);
+                }
             });
-            lock_mutex(&TIMER_TASKS).insert(timer_id, handle);
+            TIMER_TASKS.lock().unwrap().insert(timer_id, handle);
             Ok(1)
         })?;
         globals.set("apiStartTimer", start_timer_fn)?;
@@ -645,7 +653,17 @@ pub fn lua_set_device_id(device_id: String) -> bool {
 
 /// 触发指定通道的 Lua 回调(公共接口,供其他模块调用)
 /// 通过 tiggerCB(-1, channel, data) 触发通道回调
+/// 整个回调链都包裹在 AssertUnwindSafe 中,即使 Lua 侧 panic 也不会崩溃
 pub fn trigger_callback(channel: &str, data: &[u8]) {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        trigger_callback_inner(channel, data);
+    }));
+    if result.is_err() {
+        log::error!("[Lua] trigger_callback panicked for channel '{}' (ignored)", channel);
+    }
+}
+
+fn trigger_callback_inner(channel: &str, data: &[u8]) {
     let engine = get_lua_engine();
     if let Some(ref e) = *engine {
         let globals = e.lua.globals();
@@ -835,6 +853,7 @@ pub fn lua_open_scripts_folder() -> bool {
 }
 
 /// 定时器到期时调用 Lua 的 tiggerCB(timerId)
+/// panic-safe wrapper; calls inner function inside catch_unwind
 fn fire_sys_timer(timer_id: u32) {
     log::info!("[fire_sys_timer] timer_id={} fired", timer_id);
     let engine = get_lua_engine();

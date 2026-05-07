@@ -64,7 +64,6 @@ pub fn debug_send_hex(device_id: String, hex_string: String) -> bool {
     debug_send_bytes(device_id, data)
 }
 
-/// 手动接收（备用，主要靠后台 receive loop 自动记录）
 #[flutter_rust_bridge::frb(sync)]
 pub fn debug_receive(device_id: String) -> Option<Vec<u8>> {
     match block_on(SESSIONS.receive(&device_id)) {
@@ -85,13 +84,11 @@ pub fn debug_get_log(device_id: String) -> Vec<DebugLogEntry> {
     DEBUG.get_log(&device_id)
 }
 
-/// 获取日志（带缓冲区大小限制）
 #[flutter_rust_bridge::frb(sync)]
 pub fn debug_get_log_with_limit(device_id: String, max_size: i32) -> Vec<DebugLogEntry> {
     DEBUG.get_log_with_limit(&device_id, max_size as usize)
 }
 
-/// 设置缓冲区大小
 #[flutter_rust_bridge::frb(sync)]
 pub fn debug_set_buffer_size(device_id: String, max_size: i32) {
     DEBUG.set_max_size(&device_id, max_size as usize);
@@ -104,7 +101,6 @@ pub fn debug_clear_log(device_id: String) -> bool {
 
 #[flutter_rust_bridge::frb(sync)]
 pub fn debug_is_connected(device_id: String) -> bool {
-    // 使用同步版本避免 block_on 死锁
     SESSIONS.is_connected_sync(&device_id)
 }
 
@@ -113,7 +109,6 @@ pub fn debug_get_active_sessions() -> Vec<String> {
     DEBUG.active_sessions()
 }
 
-/// 返回已连接设备的 (id, name) 列表，供 Lua UI 使用
 #[flutter_rust_bridge::frb(sync)]
 pub fn debug_get_active_device_names() -> Vec<(String, String)> {
     DEBUG
@@ -130,7 +125,7 @@ pub fn debug_get_active_device_names() -> Vec<(String, String)> {
 }
 
 // ============================================================================
-// 后台接收循环
+// 后台接收循环（Lua/CSV/Plot 步骤 panic 安全隔离）
 // ============================================================================
 
 /// 启动后台接收循环（供 device_api 的 connectDevice 也调用）
@@ -150,48 +145,61 @@ fn spawn_receive_loop(device_id: String) {
     let id = device_id.clone();
     let handle = RT.spawn(async move {
         loop {
-            match SESSIONS.receive(&id).await {
-                Ok(data) if !data.is_empty() => {
-                    DEBUG.log_rx(&id, &data);
-                    
-                    // 触发 Lua 回调（"uart" 通道）
-                    trigger_callback("uart", &data);
-                    
-                    // 尝试解析 CSV 协议并推送到 Plot
-                    if let Ok(text) = String::from_utf8(data.clone()) {
-                        let result = parse_csv_line(&text);
-                        if result.success && !result.values.is_empty() {
-                            let timestamp_ms = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .map(|d| d.as_secs_f64() * 1000.0)
-                                .unwrap_or(0.0);
-                            PLOT_DATA.push_batch(
-                                &id,
-                                timestamp_ms,
-                                result.prefix.as_deref(),
-                                &result.values,
-                            );
-                        }
-                    }
-                }
-                Ok(_) => {
-                    // 空数据（超时），直接下一轮
-                }
-                Err(TransportError::Timeout) => {
-                    // 超时是正常情况，直接下一轮
-                }
-                Err(_e) => {
-                    DEBUG.log_error(&id, "Receive loop: device disconnected");
+            // Phase 1: receive (tokio I/O — no panic risk here)
+            let data: Result<Vec<u8>, TransportError> = match SESSIONS.receive(&id).await {
+                Ok(data) if !data.is_empty() => Ok(data),
+                Ok(_) => continue,    // empty timeout — retry
+                Err(TransportError::Timeout) => continue,
+                Err(e) => {
+                    let _ = std::panic::catch_unwind(|| {
+                        DEBUG.log_error(&id, &format!("Device disconnected: {:?}", e));
+                    });
                     break;
+                }
+            };
+
+            let data = match data {
+                Ok(d) => d,
+                Err(_) => break,
+            };
+
+            // Log RX always (no panic risk)
+            DEBUG.log_rx(&id, &data);
+
+            // Phase 2: Lua callback — wrapped in catch_unwind
+            // Lua execution can panic on bad script / stack overflow / etc.
+            let cb_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                trigger_callback("uart", &data);
+            })).is_ok();
+            if !cb_ok {
+                let _ = std::panic::catch_unwind(|| {
+                    DEBUG.log_error(&id, "Lua callback panicked (ignored)");
+                });
+            }
+
+            // Phase 3: CSV parse + Plot push — wrapped in catch_unwind
+            // parse_csv_line can panic on malformed input
+            if let Ok(text) = String::from_utf8(data) {
+                let parse_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let result = parse_csv_line(&text);
+                    if result.success && !result.values.is_empty() {
+                        let timestamp_ms = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64() * 1000.0)
+                            .unwrap_or(0.0);
+                        PLOT_DATA.push_batch(&id, timestamp_ms, result.prefix.as_deref(), &result.values);
+                    }
+                })).is_ok();
+                if !parse_ok {
+                    let _ = std::panic::catch_unwind(|| {
+                        DEBUG.log_error(&id, "CSV/Plot parse panicked (ignored)");
+                    });
                 }
             }
         }
     });
 
-    RECEIVE_TASKS
-        .lock()
-        .unwrap()
-        .insert(device_id, handle);
+    RECEIVE_TASKS.lock().unwrap().insert(device_id, handle);
 }
 
 pub fn stop_receive_loop(device_id: &str) {

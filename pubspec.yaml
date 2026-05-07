@@ -16,6 +16,8 @@ dependencies:
     path: rust_builder
   file_picker: ^8.0.0
   gbk_codec: ^0.4.0
+  flutter_highlight: ^0.7.0
+  highlight: ^0.7.0
 
 dev_dependencies:
   flutter_test:

@@ -2,6 +2,215 @@ import 'package:flutter/material.dart';
 import 'package:vcr/src/rust/api/lua_api.dart';
 import 'package:vcr/src/rust/api/debug_api.dart';
 
+// Lua syntax highlighter
+class _LuaSyntaxHighlighter {
+  static const _keywords = [
+    'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
+    'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or',
+    'repeat', 'return', 'then', 'true', 'until', 'while',
+  ];
+  static const _builtins = [
+    'print', 'require', 'ipairs', 'pairs', 'pcall', 'type', 'tostring', 'tonumber',
+    'string', 'table', 'math', 'os', 'debug',
+    'sys', 'api', 'log',
+  ];
+  static const _keywordColor = Color(0xFFC678DD);     // purple
+  static const _builtinColor = Color(0xFFE5C07B);     // yellow
+  static const _stringColor  = Color(0xFF98C379);     // green
+  static const _commentColor = Color(0xFF5C6370);     // gray
+  static const _numberColor  = Color(0xFFD19A66);     // orange
+
+  static TextSpan highlight(String text) {
+    final spans = <TextSpan>[];
+    final buffer = StringBuffer();
+    bool inString = false;
+    String? stringChar;
+    int i = 0;
+
+    void flush([Color? color]) {
+      if (buffer.isEmpty) return;
+      spans.add(TextSpan(text: buffer.toString(), style: TextStyle(color: color ?? const Color(0xFFABB2BF))));
+      buffer.clear();
+    }
+
+    for (;;) {
+      if (i >= text.length) { flush(); break; }
+      final ch = text[i];
+
+      // comment
+      if (!inString && ch == '-' && i + 1 < text.length && text[i + 1] == '-') {
+        flush();
+        int start = i;
+        while (i < text.length && text[i] != '\n') i++;
+        spans.add(TextSpan(text: text.substring(start, i), style: const TextStyle(color: _commentColor)));
+        continue;
+      }
+
+      // string start/end
+      if (!inString && (ch == '"' || ch == "'")) {
+        flush();
+        inString = true;
+        stringChar = ch;
+        buffer.write(ch);
+        i++;
+        continue;
+      }
+
+      if (inString) {
+        buffer.write(ch);
+        if (ch == '\\' && i + 1 < text.length) { buffer.write(text[++i]); }
+        else if (ch == stringChar) { inString = false; }
+        i++;
+        continue;
+      }
+
+      // identifier
+      if (RegExp(r'[a-zA-Z_]').hasMatch(ch)) {
+        flush();
+        int start = i;
+        while (i < text.length && RegExp(r'[a-zA-Z0-9_]').hasMatch(text[i])) i++;
+        final word = text.substring(start, i);
+        Color? color;
+        if (_keywords.contains(word)) color = _keywordColor;
+        else if (_builtins.contains(word) || word.startsWith('api') || word.startsWith('sys') || word.startsWith('log')) color = _builtinColor;
+        spans.add(TextSpan(text: word, style: TextStyle(color: color ?? const Color(0xFFABB2BF))));
+        continue;
+      }
+
+      // number
+      if (RegExp(r'[0-9]').hasMatch(ch)) {
+        flush();
+        int start = i;
+        while (i < text.length && RegExp(r'[0-9.xX]').hasMatch(text[i])) i++;
+        spans.add(TextSpan(text: text.substring(start, i), style: const TextStyle(color: _numberColor)));
+        continue;
+      }
+
+      buffer.write(ch);
+      i++;
+    }
+
+    return TextSpan(children: spans);
+  }
+}
+
+// Syntax-highlighted text controller
+class _HighlightedTextEditingController extends TextEditingController {
+  _HighlightedTextEditingController(String text) : super(text: text);
+
+  @override
+  TextSpan buildTextSpan({required BuildContext context, required TextRange buildEditableSpan, TextStyle? style, required bool withComposing}) {
+    return TextSpan(style: style?.copyWith(fontFamily: 'monospace', fontSize: 14, height: 1.5, color: const Color(0xFFABB2BF)) ?? const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.5), children: [_LuaSyntaxHighlighter.highlight(text)]);
+  }
+}
+
+// Line-numbered + syntax-highlighted editor
+class _LineNumberEditor extends StatefulWidget {
+  final TextEditingController scriptController;
+  final ValueChanged<String> onChanged;
+
+  const _LineNumberEditor({ super.key, required this.scriptController, required this.onChanged });
+
+  @override
+  State<_LineNumberEditor> createState() => _LineNumberEditorState();
+}
+
+class _LineNumberEditorState extends State<_LineNumberEditor> {
+  late _HighlightedTextEditingController _controller;
+  final ScrollController _scrollController = ScrollController();
+  final FocusNode _focusNode = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = _HighlightedTextEditingController(widget.scriptController.text);
+    widget.scriptController.addListener(_onExternalChange);
+    _controller.addListener(_onInternalChange);
+  }
+
+  void _onExternalChange() {
+    if (_controller.text != widget.scriptController.text) {
+      final sel = _controller.selection;
+      _controller.text = widget.scriptController.text;
+      if (sel.isValid && sel.start <= _controller.text.length && sel.end <= _controller.text.length) {
+        _controller.selection = sel;
+      }
+      setState(() {});
+    }
+  }
+
+  void _onInternalChange() {
+    if (widget.scriptController.text != _controller.text) {
+      widget.scriptController.text = _controller.text;
+    }
+    widget.onChanged(_controller.text);
+  }
+
+  @override
+  void dispose() {
+    widget.scriptController.removeListener(_onExternalChange);
+    _controller.removeListener(_onInternalChange);
+    _controller.dispose();
+    _scrollController.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  int get _lineCount => _controller.text.isEmpty ? 1 : '\n'.allMatches(_controller.text).length + 1;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(color: const Color(0xFF282C34), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.grey)),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Line numbers
+          SizedBox(
+            width: 50,
+            child: Container(
+              color: const Color(0xFF1E2127),
+              child: ListView.builder(
+                controller: _scrollController,
+                itemCount: _lineCount,
+                itemBuilder: (context, idx) => SizedBox(
+                  height: 21,
+                  child: Align(
+                    alignment: Alignment.centerRight,
+                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text('${idx + 1}', style: const TextStyle(fontFamily: 'monospace', fontSize: 14, color: Color(0xFF5C6370)))),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Divider
+          Container(width: 1, color: const Color(0xFF3E4451)),
+          // Editor
+          Expanded(
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (n) {
+                if (n is ScrollUpdateNotification) {
+                  _scrollController.jumpTo(n.metrics.pixels);
+                }
+                return false;
+              },
+              child: TextField(
+                controller: _controller,
+                focusNode: _focusNode,
+                maxLines: null,
+                keyboardType: TextInputType.multiline,
+                decoration: const InputDecoration(border: InputBorder.none, isDense: true, contentPadding: EdgeInsets.all(8)),
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.5, color: Colors.transparent),
+                cursorColor: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class LuaScriptScreen extends StatefulWidget {
   const LuaScriptScreen({super.key});
 
@@ -263,6 +472,7 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
     }
   }
 
+
   // 轮询日志的后台任务
   Future<void> _pollLogs(int durationMs) async {
     const pollInterval = 200; // 每200ms检查一次
@@ -448,21 +658,12 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
             ],
           ),
           const SizedBox(height: 8),
-          // Script editor
+          // Script editor with line numbers + syntax highlighting
           Expanded(
             flex: 3,
-            child: TextField(
-              controller: _scriptController,
-              maxLines: null,
-              expands: true,
-              decoration: InputDecoration(
-                labelText: _currentScriptName != null
-                    ? 'Lua Script: ${_currentScriptName}.lua'
-                    : 'Lua Script',
-                border: const OutlineInputBorder(),
-                alignLabelWithHint: true,
-              ),
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+            child: _LineNumberEditor(
+              scriptController: _scriptController,
+              onChanged: (text) => setState(() {}),
             ),
           ),
           const SizedBox(height: 8),

@@ -461,31 +461,26 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         .map((e) => e.key)
         .toList();
     if (yAxisChannels.isEmpty) return -1;
-    const slotW = 50.0;
+    const hitHalfW = 30.0; // Half of the hit-test width for each axis slot
 
-    // Check left slots: plotLeft - (slot+1)*45
-    final leftSlotCount = _leftSlotCount();
-    for (int slot = 0; slot < leftSlotCount; slot++) {
-      final leftX = plotLeft - (slot + 1) * 45.0;
-      if ((cursorX - leftX).abs() < slotW) {
-        final leftIndices = <int>[];
-        for (int i = 0; i < yAxisChannels.length; i++) {
-          if (i % 2 == 0) leftIndices.add(yAxisChannels[i]);
-        }
-        if (slot < leftIndices.length) return leftIndices[slot];
+    // Iterate each visual axis slot as rendered in _paintInternal.
+    // ci = 0,1,2,3 → left,right,left,right
+    // left slot N x-position: plotLeft - N*45 - 2  (x of the colored axis line)
+    // right slot N x-position: plotLeft + plotW + N*45 + 2
+    for (int ci = 0; ci < yAxisChannels.length; ci++) {
+      final isLeft = ci % 2 == 0;
+      final slotIdx = ci ~/ 2;
+      double axisX;
+      if (isLeft) {
+        // x of left axis line N: plotLeft - N*45 - 2
+        axisX = plotLeft - slotIdx * 45.0 - 2.0;
+      } else {
+        // x of right axis line N: plotLeft + plotW + N*45 + 2
+        axisX = plotLeft + plotW + slotIdx * 45.0 + 2.0;
       }
-    }
-
-    // Check right slots: plotLeft + plotW + (slot+1)*45
-    final rightSlotCount = _rightSlotCount();
-    for (int slot = 0; slot < rightSlotCount; slot++) {
-      final rightX = plotLeft + plotW + (slot + 1) * 45.0;
-      if ((cursorX - rightX).abs() < slotW) {
-        final rightIndices = <int>[];
-        for (int i = 0; i < yAxisChannels.length; i++) {
-          if (i % 2 == 1) rightIndices.add(yAxisChannels[i]);
-        }
-        if (slot < rightIndices.length) return rightIndices[slot];
+      // Use the colored axis line as the hit target (± hitHalfW on each side)
+      if ((cursorX - axisX).abs() < hitHalfW) {
+        return yAxisChannels[ci];
       }
     }
     return -1;

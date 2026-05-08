@@ -152,7 +152,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   
   // ── Data ──
   List<PlotChannel> _channels = [];
-  final int _maxPoints = 10000;
+  final int _maxPoints = 100000;
 
   // ── Axis config ──
   bool _autoScaleX = true;
@@ -199,7 +199,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   double _panelWidth = 220.0;
 
   // ── Y axis share ──
-  bool _shareYAxis = true; // Share global Y axis for all channels
+  bool _shareYAxis = false; // Each channel uses its own Y range
 
   // ── Anti-aliasing ──
   AntiAliasingLevel _aaLevel = AntiAliasingLevel.off;
@@ -241,48 +241,64 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   void _initDemoChannels() {
     final devices = listDevices();
+    final deviceName = devices.isNotEmpty ? devices.first.name : 'Demo';
     _channels = [
       PlotChannel(
-        deviceId: 'demo_volt',
-        deviceName: devices.isNotEmpty ? devices.first.name : 'Demo',
-        channelName: 'Voltage',
-        color: _channelColors[0],
-        decimals: 3,
-        lineStyle: LineStyle.line,
+        deviceId: 'demo_ch1', deviceName: deviceName, channelName: 'Voltage',
+        color: _channelColors[0], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
-        deviceId: 'demo_curr',
-        deviceName: devices.isNotEmpty ? devices.first.name : 'Demo',
-        channelName: 'Current',
-        color: _channelColors[1],
-        decimals: 2,
-        lineStyle: LineStyle.dotLine,
+        deviceId: 'demo_ch2', deviceName: deviceName, channelName: 'Current',
+        color: _channelColors[1], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
-        deviceId: 'demo_power',
-        deviceName: devices.isNotEmpty ? devices.first.name : 'Demo',
-        channelName: 'Power',
-        color: _channelColors[2],
-        decimals: 1,
-        lineStyle: LineStyle.filled,
+        deviceId: 'demo_ch3', deviceName: deviceName, channelName: 'Power',
+        color: _channelColors[2], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch4', deviceName: deviceName, channelName: 'Temp',
+        color: _channelColors[3], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch5', deviceName: deviceName, channelName: 'Pressure',
+        color: _channelColors[4], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch6', deviceName: deviceName, channelName: 'Flow',
+        color: _channelColors[5], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch7', deviceName: deviceName, channelName: 'Torque',
+        color: _channelColors[6], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch8', deviceName: deviceName, channelName: 'RPM',
+        color: _channelColors[7], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
     ];
   }
 
   void _startDemoData() {
     _demoTimer?.cancel();
-    _demoTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+    _demoTimer = Timer.periodic(const Duration(milliseconds: 5), (_) {
       if (!mounted || !_isPlaying) return;
-      _demoPhase += 0.05;
+      _demoPhase += 0.005;
       final t = _demoPhase;
       setState(() {
         for (int i = 0; i < _channels.length; i++) {
+          final rng = Random();
+          final noise = 0.05 * (rng.nextDouble() - 0.5);
           double val;
           switch (i) {
-            case 0: val = 3.3 * sin(2 * pi * 0.5 * t) + 0.1 * (Random().nextDouble() - 0.5); break;
-            case 1: val = 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + 0.05 * (Random().nextDouble() - 0.5); break;
-            case 2: val = 3.3 * sin(2 * pi * 0.5 * t) * 2.0 * sin(2 * pi * 0.3 * t + pi / 4); break;
-            default: val = sin(t);
+            case 0: val = 3.3 * sin(2 * pi * 0.5 * t) + noise; break;
+            case 1: val = 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
+            case 2: val = 3.3 * sin(2 * pi * 0.5 * t) * 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
+            case 3: val = 25.0 + 10.0 * sin(2 * pi * 0.1 * t) + 3.0 * sin(2 * pi * 1.3 * t) + noise; break;
+            case 4: val = 101.3 + 5.0 * sin(2 * pi * 0.07 * t + pi / 3) + 2.0 * cos(2 * pi * 0.8 * t) + noise; break;
+            case 5: val = 5.0 + 2.0 * sin(2 * pi * 0.2 * t) + 1.0 * sin(2 * pi * 1.5 * t + pi / 6) + noise; break;
+            case 6: val = 50.0 * sin(2 * pi * 0.15 * t) + 20.0 * cos(2 * pi * 0.9 * t) + noise; break;
+            case 7: val = 3000.0 + 1500.0 * sin(2 * pi * 0.25 * t + pi / 2) + 500.0 * sin(2 * pi * 2.0 * t) + noise * 100; break;
+            default: val = sin(t) + noise; break;
           }
           _channels[i].data.add(_DataPoint(t, val));
           _channels[i].currentValue = val;
@@ -298,7 +314,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final latestX = _channels.isNotEmpty && _channels.first.data.isNotEmpty
               ? _channels.first.data.last.x
               : t;
-          _scrollMinTime = latestX - _scrollWindowWidth;
+          _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
           _xMin = _scrollMinTime;
           _xMax = latestX;
         } else {
@@ -365,7 +381,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             for (final ch in visibleChs) {
               if (ch.data.last.x > latestX) latestX = ch.data.last.x;
             }
-            _scrollMinTime = latestX - _scrollWindowWidth;
+            _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
             _xMin = _scrollMinTime;
             _xMax = latestX;
           } else {
@@ -807,7 +823,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   // Reset window to show latest data
                   if (_channels.isNotEmpty && _channels.first.data.isNotEmpty) {
                     final latest = _channels.first.data.last.x;
-                    _scrollMinTime = latest - _scrollWindowWidth;
+                    _scrollMinTime = (latest - _scrollWindowWidth).clamp(0.0, latest);
                     _xMin = _scrollMinTime;
                     _xMax = latest;
                   }
@@ -1150,9 +1166,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         // X-axis scroll: zoom X only
                         _autoScaleX = false;
                         final center = (_xMin + _xMax) / 2;
-                        final range = _xMax - _xMin;
-                        _xMin = center - range / 2 * factor;
-                        _xMax = center + range / 2 * factor;
+                        final range = (_xMax - _xMin) * factor;
+                        // Clamp: zoom out max 3× data range, zoom in min _minVisibleRange
+                        final (dataXMin2, dataXMax2) = _getDataXRange();
+                        final maxRange = (dataXMax2 - dataXMin2) * 3.0;
+                        final clampedRange = range.clamp(_minVisibleRange, maxRange.isFinite && maxRange > 0 ? maxRange : range);
+                        _xMin = center - clampedRange / 2;
+                        _xMax = center + clampedRange / 2;
                       } else if (targetCh >= 0 && !_shareYAxis) {
                         // Per-channel Y zoom (near specific channel's Y axis) — only when NOT sharing Y axis
                         final ch = _channels[targetCh];
@@ -1174,9 +1194,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         _autoScaleX = false;
                         _autoScaleY = false;
                         final xCenter = (_xMin + _xMax) / 2;
-                        final xRange = _xMax - _xMin;
-                        _xMin = xCenter - xRange / 2 * factor;
-                        _xMax = xCenter + xRange / 2 * factor;
+                        final xRange = (_xMax - _xMin) * factor;
+                        // Clamp X zoom range same as X-axis-only zoom
+                        final (dataXMin2, dataXMax2) = _getDataXRange();
+                        final maxXRange = (dataXMax2 - dataXMin2) * 3.0;
+                        final clampedXRange = xRange.clamp(_minVisibleRange, maxXRange.isFinite && maxXRange > 0 ? maxXRange : xRange);
+                        _xMin = xCenter - clampedXRange / 2;
+                        _xMax = xCenter + clampedXRange / 2;
                         final yCenter = (_yMin + _yMax) / 2;
                         final yRange = _yMax - _yMin;
                         _yMin = yCenter - yRange / 2 * factor;
@@ -1218,21 +1242,39 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (totalRange <= 0) return const SizedBox.shrink();
 
     final scrollbarHeight = 36.0;
-    final plotLeft = 0.0; // Full width mode
-    final plotRight = 0.0;
+    final trackPadding = 16.0; // Padding on each side so handles are always visible
+    final plotLeft = trackPadding;
+    final plotRight = trackPadding;
     final trackWidth = constraints.maxWidth - plotLeft - plotRight;
     if (trackWidth <= 0) return const SizedBox.shrink();
 
     // Current visible window position and size
-    final visibleMin = _xMin;
-    final visibleMax = _xMax;
-    final visibleRange = visibleMax - visibleMin;
-    if (visibleRange <= 0) return const SizedBox.shrink();
+    // Clamp visible range to data range for scrollbar display
+    final visibleMin = _xMin.clamp(dataXMin, dataXMax);
+    final visibleMax = _xMax.clamp(dataXMin, dataXMax);
+    if (visibleMin >= visibleMax) return const SizedBox.shrink();
 
-    final thumbLeft = plotLeft + ((visibleMin - dataXMin) / totalRange) * trackWidth;
-    final thumbRight = plotLeft + ((visibleMax - dataXMin) / totalRange) * trackWidth;
-    final thumbWidth = thumbRight - thumbLeft;
-    if (thumbWidth < 20) return const SizedBox.shrink();
+    var thumbLeft = plotLeft + ((visibleMin - dataXMin) / totalRange) * trackWidth;
+    var thumbRight = plotLeft + ((visibleMax - dataXMin) / totalRange) * trackWidth;
+    var thumbWidth = thumbRight - thumbLeft;
+
+    // If visible window exceeds data range (zoomed out past data),
+    // the thumb would be wider than track — clamp it
+    if (thumbWidth > trackWidth) {
+      thumbLeft = plotLeft;
+      thumbRight = plotLeft + trackWidth;
+      thumbWidth = trackWidth;
+    }
+    // Ensure minimum thumb width so it's always interactable
+    if (thumbWidth < 20) {
+      final center = (thumbLeft + thumbRight) / 2;
+      thumbLeft = (center - 10).clamp(plotLeft, plotLeft + trackWidth - 20);
+      thumbRight = thumbLeft + 20;
+      thumbWidth = 20.0;
+    }
+    // Final clamp: never let thumb extend beyond track bounds
+    thumbLeft = thumbLeft.clamp(plotLeft, plotLeft + trackWidth - 20);
+    thumbRight = thumbRight.clamp(plotLeft + 20, plotLeft + trackWidth);
 
     return SizedBox(
       height: scrollbarHeight,
@@ -1291,11 +1333,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       final range = _scrollbarDragStartXMax - _scrollbarDragStartXMin;
                       final newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
                       final newMax = newMin + range;
-                      if (newMin >= dataXMin && newMax <= dataXMax) {
-                        _xMin = newMin;
-                        _xMax = newMax;
-                        setState(() {});
+                      _xMin = newMin;
+                      _xMax = newMax;
+                      if (_scrollMode) {
+                        _scrollMinTime = newMin.clamp(0.0, double.maxFinite);
+                        _scrollWindowWidth = range;
+                      } else {
+                        _autoScaleX = false;
                       }
+                      setState(() {});
                     },
                     onHorizontalDragEnd: (d) {
                       _scrollbarDrag = _ScrollbarDrag.none;
@@ -1308,72 +1354,95 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     ),
                   ),
                 ),
-                // Left edge handle
+                // Left edge handle — always inside thumb left edge, white on blue
                 Positioned(
-                  left: thumbLeft - 4,
-                  width: 8,
-                  top: 0,
-                  bottom: 0,
-                  child: GestureDetector(
-                    onHorizontalDragStart: (d) {
-                      _scrollbarDrag = _ScrollbarDrag.leftEdge;
-                      _scrollbarDragStartX = d.globalPosition.dx;
-                      _scrollbarDragStartXMin = _xMin;
-                      _scrollbarDragStartXMax = _xMax;
-                    },
-                    onHorizontalDragUpdate: (d) {
-                      if (_scrollbarDrag != _ScrollbarDrag.leftEdge) return;
-                      final dx = d.globalPosition.dx - _scrollbarDragStartX;
-                      final dxRatio = dx / trackWidth;
-                      final newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
-                      final minVisible = dataXMin + _minVisibleRange;
-                      if (newMin < minVisible) return;
-                      if (newMin >= _scrollbarDragStartXMax - _minVisibleRange) return;
-                      _xMin = newMin;
-                      setState(() {});
-                    },
-                    onHorizontalDragEnd: (d) {
-                      _scrollbarDrag = _ScrollbarDrag.none;
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.blue,
-                        borderRadius: BorderRadius.circular(4),
+                  left: thumbLeft,
+                  width: thumbWidth > 40 ? 12.0 : (thumbWidth / 3).clamp(6.0, 12.0),
+                  top: 2,
+                  bottom: 2,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      onHorizontalDragStart: (d) {
+                        _scrollbarDrag = _ScrollbarDrag.leftEdge;
+                        _scrollbarDragStartX = d.globalPosition.dx;
+                        _scrollbarDragStartXMin = _xMin;
+                        _scrollbarDragStartXMax = _xMax;
+                      },
+                      onHorizontalDragUpdate: (d) {
+                        if (_scrollbarDrag != _ScrollbarDrag.leftEdge) return;
+                        final dx = d.globalPosition.dx - _scrollbarDragStartX;
+                        final dxRatio = dx / trackWidth;
+                        var newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
+                        if (newMin >= _scrollbarDragStartXMax - _minVisibleRange) {
+                          newMin = _scrollbarDragStartXMax - _minVisibleRange;
+                        }
+                        _xMin = newMin;
+                        if (_scrollMode) {
+                          _scrollMinTime = newMin.clamp(0.0, double.maxFinite);
+                          _scrollWindowWidth = _scrollbarDragStartXMax - newMin;
+                        } else {
+                          _autoScaleX = false;
+                        }
+                        setState(() {});
+                      },
+                      onHorizontalDragEnd: (d) {
+                        _scrollbarDrag = _ScrollbarDrag.none;
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withAlpha(220),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        child: Center(
+                          child: Icon(Icons.chevron_left, size: 10, color: Colors.black87),
+                        ),
                       ),
                     ),
                   ),
                 ),
-                // Right edge handle
+                // Right edge handle — always inside thumb right edge, white on blue
                 Positioned(
-                  left: thumbRight - 4,
-                  width: 8,
-                  top: 0,
-                  bottom: 0,
-                  child: GestureDetector(
-                    onHorizontalDragStart: (d) {
-                      _scrollbarDrag = _ScrollbarDrag.rightEdge;
-                      _scrollbarDragStartX = d.globalPosition.dx;
-                      _scrollbarDragStartXMin = _xMin;
-                      _scrollbarDragStartXMax = _xMax;
-                    },
-                    onHorizontalDragUpdate: (d) {
-                      if (_scrollbarDrag != _ScrollbarDrag.rightEdge) return;
-                      final dx = d.globalPosition.dx - _scrollbarDragStartX;
-                      final dxRatio = dx / trackWidth;
-                      final newMax = _scrollbarDragStartXMax + dxRatio * totalRange;
-                      final maxVisible = dataXMax - _minVisibleRange;
-                      if (newMax > maxVisible) return;
-                      if (newMax <= _scrollbarDragStartXMin + _minVisibleRange) return;
-                      _xMax = newMax;
-                      setState(() {});
-                    },
-                    onHorizontalDragEnd: (d) {
-                      _scrollbarDrag = _ScrollbarDrag.none;
-                    },
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.blue,
-                        borderRadius: BorderRadius.circular(4),
+                  left: thumbRight - (thumbWidth > 40 ? 12.0 : (thumbWidth / 3).clamp(6.0, 12.0)),
+                  width: thumbWidth > 40 ? 12.0 : (thumbWidth / 3).clamp(6.0, 12.0),
+                  top: 2,
+                  bottom: 2,
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.resizeColumn,
+                    child: GestureDetector(
+                      onHorizontalDragStart: (d) {
+                        _scrollbarDrag = _ScrollbarDrag.rightEdge;
+                        _scrollbarDragStartX = d.globalPosition.dx;
+                        _scrollbarDragStartXMin = _xMin;
+                        _scrollbarDragStartXMax = _xMax;
+                      },
+                      onHorizontalDragUpdate: (d) {
+                        if (_scrollbarDrag != _ScrollbarDrag.rightEdge) return;
+                        final dx = d.globalPosition.dx - _scrollbarDragStartX;
+                        final dxRatio = dx / trackWidth;
+                        var newMax = _scrollbarDragStartXMax + dxRatio * totalRange;
+                        if (newMax <= _scrollbarDragStartXMin + _minVisibleRange) {
+                          newMax = _scrollbarDragStartXMin + _minVisibleRange;
+                        }
+                        _xMax = newMax;
+                        if (_scrollMode) {
+                          _scrollWindowWidth = newMax - _scrollbarDragStartXMin;
+                        } else {
+                          _autoScaleX = false;
+                        }
+                        setState(() {});
+                      },
+                      onHorizontalDragEnd: (d) {
+                        _scrollbarDrag = _ScrollbarDrag.none;
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withAlpha(220),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                        child: Center(
+                          child: Icon(Icons.chevron_right, size: 10, color: Colors.black87),
+                        ),
                       ),
                     ),
                   ),
@@ -1772,15 +1841,14 @@ class _MinimapPainter extends CustomPainter {
     final rangeX = dataXMax - dataXMin;
     if (rangeX <= 0) return;
 
-    final yMin = shareYAxis ? globalYMin : double.infinity;
-    final yMax = shareYAxis ? globalYMax : double.negativeInfinity;
-    final effectiveYMin = shareYAxis ? yMin : _calcChannelYMin(channels);
-    final effectiveYMax = shareYAxis ? yMax : _calcChannelYMax(channels);
-    final rangeY = effectiveYMax - effectiveYMin;
-    if (rangeY <= 0) return;
-
     for (final ch in channels) {
       if (!ch.visible || ch.data.isEmpty) continue;
+      // Each channel uses its own Y range so all are visible in the minimap
+      final chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
+      final chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
+      final rangeY = chYMax - chYMin;
+      if (rangeY <= 0) continue;
+
       final paint = Paint()
         ..color = ch.color.withAlpha(150)
         ..strokeWidth = 1.0
@@ -1788,9 +1856,12 @@ class _MinimapPainter extends CustomPainter {
 
       final path = Path();
       var started = false;
-      for (final pt in ch.data) {
+      // Downsample for minimap performance: max ~500 points per channel
+      final step = (ch.data.length / 500).ceil().clamp(1, ch.data.length);
+      for (int i = 0; i < ch.data.length; i += step) {
+        final pt = ch.data[i];
         final x = ((pt.x - dataXMin) / rangeX) * size.width;
-        final y = size.height - ((pt.y - effectiveYMin) / rangeY) * size.height;
+        final y = size.height - ((pt.y - chYMin) / rangeY) * size.height;
         if (!started) {
           path.moveTo(x, y);
           started = true;
@@ -2149,14 +2220,35 @@ class _PlotPainter extends CustomPainter {
   }
 
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
-    final data = ch.data;
-    if (data.isEmpty) return;
+    final allData = ch.data;
+    if (allData.isEmpty) return;
 
     // Use per-channel Y transform
     double yTransform(double y) {
       if (chYMax == chYMin) return h / 2;
       return h - (y - chYMin) / (chYMax - chYMin) * h;
     }
+
+    // Viewport clip: only pass data points within visible X range + 1 point margin
+    final xRange = xMax - xMin;
+    final margin = xRange * 0.01; // 1% margin on each side
+    int startIdx = 0;
+    int endIdx = allData.length - 1;
+    // Binary search for start
+    int lo = 0, hi = allData.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi) ~/ 2;
+      if (allData[mid].x < xMin - margin) lo = mid + 1; else hi = mid;
+    }
+    startIdx = lo > 0 ? lo - 1 : 0; // include 1 point before for line continuity
+    // Binary search for end
+    lo = startIdx; hi = allData.length - 1;
+    while (lo < hi) {
+      final mid = (lo + hi + 1) ~/ 2;
+      if (allData[mid].x > xMax + margin) hi = mid - 1; else lo = mid;
+    }
+    endIdx = lo < allData.length - 1 ? lo + 1 : allData.length - 1; // include 1 point after
+    final data = allData.sublist(startIdx, endIdx + 1);
 
     switch (ch.lineStyle) {
       case LineStyle.dot:

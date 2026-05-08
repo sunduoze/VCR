@@ -132,6 +132,12 @@ class _DataPoint {
   _DataPoint(this.x, this.y);
 }
 
+/// Scrollbar drag mode
+enum _ScrollbarDrag { none, thumb, leftEdge, rightEdge }
+
+/// Min visible X range (prevents zooming to zero)
+const _minVisibleRange = 0.01;
+
 class PlotScreen extends StatefulWidget {
   const PlotScreen({super.key});
 
@@ -161,6 +167,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _scrollMode = false;         // true = oscilloscope sweep mode
   double _scrollWindowWidth = 10.0;  // visible X range in seconds
   double _scrollMinTime = 0.0;       // left edge of visible window
+
+  // ── Scrollbar drag state ──
+  _ScrollbarDrag _scrollbarDrag = _ScrollbarDrag.none;
+  double _scrollbarDragStartX = 0;
+  double _scrollbarDragStartXMin = 0;
+  double _scrollbarDragStartXMax = 10;
 
   // ── Protocol parser ──
   bool _autoAddChannels = true; // Auto-add channels from received data
@@ -452,6 +464,19 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   double _plotRight() => 10.0 + _rightSlotCount() * 45.0;
   double _plotTop() => 10;
   double _plotBottom() => 40;
+
+  /// Get total X data range (earliest → latest across all visible channels)
+  (double, double) _getDataXRange() {
+    double minVal = double.infinity;
+    double maxVal = double.negativeInfinity;
+    for (final ch in _channels) {
+      if (!ch.visible || ch.data.isEmpty) continue;
+      minVal = min(minVal, ch.data.first.x);
+      maxVal = max(maxVal, ch.data.last.x);
+    }
+    if (minVal.isInfinite) return (0.0, 10.0);
+    return (minVal, maxVal);
+  }
 
   /// Find which channel's Y-axis is closest to cursor X position.
   /// Returns -1 if none.
@@ -938,7 +963,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         children: [
           // Main plot area
           Expanded(
-            child: _buildPlotArea(),
+            child: LayoutBuilder(
+              builder: (context, constraints) => Column(
+                children: [
+                  Expanded(child: _buildPlotArea()),
+                  _buildWaveformScrollbar(constraints),
+                ],
+              ),
+            ),
           ),
           // Resize handle
           GestureDetector(
@@ -1171,6 +1203,185 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// Build waveform scrollbar with minimap preview
+  Widget _buildWaveformScrollbar(BoxConstraints constraints) {
+    final (dataXMin, dataXMax) = _getDataXRange();
+    if (dataXMin.isNaN || dataXMax.isNaN || dataXMin.isInfinite || dataXMax.isInfinite) {
+      return const SizedBox.shrink();
+    }
+    
+    final totalRange = dataXMax - dataXMin;
+    if (totalRange <= 0) return const SizedBox.shrink();
+
+    final scrollbarHeight = 36.0;
+    final plotLeft = 0.0; // Full width mode
+    final plotRight = 0.0;
+    final trackWidth = constraints.maxWidth - plotLeft - plotRight;
+    if (trackWidth <= 0) return const SizedBox.shrink();
+
+    // Current visible window position and size
+    final visibleMin = _xMin;
+    final visibleMax = _xMax;
+    final visibleRange = visibleMax - visibleMin;
+    if (visibleRange <= 0) return const SizedBox.shrink();
+
+    final thumbLeft = plotLeft + ((visibleMin - dataXMin) / totalRange) * trackWidth;
+    final thumbRight = plotLeft + ((visibleMax - dataXMin) / totalRange) * trackWidth;
+    final thumbWidth = thumbRight - thumbLeft;
+    if (thumbWidth < 20) return const SizedBox.shrink();
+
+    return SizedBox(
+      height: scrollbarHeight,
+      child: Row(
+        children: [
+          Expanded(
+            child: Stack(
+              children: [
+                // Track background
+                Positioned(
+                  left: plotLeft,
+                  right: plotRight,
+                  top: 0,
+                  bottom: 0,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey[900],
+                      border: Border.all(color: Colors.grey[700]!, width: 1),
+                    ),
+                  ),
+                ),
+                // Minimap preview
+                Positioned(
+                  left: plotLeft,
+                  width: trackWidth,
+                  top: 0,
+                  bottom: 0,
+                  child: CustomPaint(
+                    painter: _MinimapPainter(
+                      channels: _channels,
+                      dataXMin: dataXMin,
+                      dataXMax: dataXMax,
+                      shareYAxis: _shareYAxis,
+                      globalYMin: _yMin,
+                      globalYMax: _yMax,
+                    ),
+                  ),
+                ),
+                // Thumb
+                Positioned(
+                  left: thumbLeft,
+                  width: thumbWidth,
+                  top: 0,
+                  bottom: 0,
+                  child: GestureDetector(
+                    onHorizontalDragStart: (d) {
+                      _scrollbarDrag = _ScrollbarDrag.thumb;
+                      _scrollbarDragStartX = d.globalPosition.dx;
+                      _scrollbarDragStartXMin = _xMin;
+                      _scrollbarDragStartXMax = _xMax;
+                    },
+                    onHorizontalDragUpdate: (d) {
+                      if (_scrollbarDrag != _ScrollbarDrag.thumb) return;
+                      final dx = d.globalPosition.dx - _scrollbarDragStartX;
+                      final dxRatio = dx / trackWidth;
+                      final range = _scrollbarDragStartXMax - _scrollbarDragStartXMin;
+                      final newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
+                      final newMax = newMin + range;
+                      if (newMin >= dataXMin && newMax <= dataXMax) {
+                        _xMin = newMin;
+                        _xMax = newMax;
+                        setState(() {});
+                      }
+                    },
+                    onHorizontalDragEnd: (d) {
+                      _scrollbarDrag = _ScrollbarDrag.none;
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withAlpha(180),
+                        border: Border.all(color: Colors.blue, width: 2),
+                      ),
+                    ),
+                  ),
+                ),
+                // Left edge handle
+                Positioned(
+                  left: thumbLeft - 4,
+                  width: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: GestureDetector(
+                    onHorizontalDragStart: (d) {
+                      _scrollbarDrag = _ScrollbarDrag.leftEdge;
+                      _scrollbarDragStartX = d.globalPosition.dx;
+                      _scrollbarDragStartXMin = _xMin;
+                      _scrollbarDragStartXMax = _xMax;
+                    },
+                    onHorizontalDragUpdate: (d) {
+                      if (_scrollbarDrag != _ScrollbarDrag.leftEdge) return;
+                      final dx = d.globalPosition.dx - _scrollbarDragStartX;
+                      final dxRatio = dx / trackWidth;
+                      final newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
+                      final minVisible = dataXMin + _minVisibleRange;
+                      if (newMin < minVisible) return;
+                      if (newMin >= _scrollbarDragStartXMax - _minVisibleRange) return;
+                      _xMin = newMin;
+                      setState(() {});
+                    },
+                    onHorizontalDragEnd: (d) {
+                      _scrollbarDrag = _ScrollbarDrag.none;
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.blue,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ),
+                ),
+                // Right edge handle
+                Positioned(
+                  left: thumbRight - 4,
+                  width: 8,
+                  top: 0,
+                  bottom: 0,
+                  child: GestureDetector(
+                    onHorizontalDragStart: (d) {
+                      _scrollbarDrag = _ScrollbarDrag.rightEdge;
+                      _scrollbarDragStartX = d.globalPosition.dx;
+                      _scrollbarDragStartXMin = _xMin;
+                      _scrollbarDragStartXMax = _xMax;
+                    },
+                    onHorizontalDragUpdate: (d) {
+                      if (_scrollbarDrag != _ScrollbarDrag.rightEdge) return;
+                      final dx = d.globalPosition.dx - _scrollbarDragStartX;
+                      final dxRatio = dx / trackWidth;
+                      final newMax = _scrollbarDragStartXMax + dxRatio * totalRange;
+                      final maxVisible = dataXMax - _minVisibleRange;
+                      if (newMax > maxVisible) return;
+                      if (newMax <= _scrollbarDragStartXMin + _minVisibleRange) return;
+                      _xMax = newMax;
+                      setState(() {});
+                    },
+                    onHorizontalDragEnd: (d) {
+                      _scrollbarDrag = _ScrollbarDrag.none;
+                    },
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.blue,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1540,6 +1751,88 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 // ============================================================================
 // Custom Painter — the actual waveform rendering
 // ============================================================================
+
+class _MinimapPainter extends CustomPainter {
+  final List<PlotChannel> channels;
+  final double dataXMin, dataXMax;
+  final bool shareYAxis;
+  final double globalYMin, globalYMax;
+
+  _MinimapPainter({
+    required this.channels,
+    required this.dataXMin,
+    required this.dataXMax,
+    required this.shareYAxis,
+    required this.globalYMin,
+    required this.globalYMax,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rangeX = dataXMax - dataXMin;
+    if (rangeX <= 0) return;
+
+    final yMin = shareYAxis ? globalYMin : double.infinity;
+    final yMax = shareYAxis ? globalYMax : double.negativeInfinity;
+    final effectiveYMin = shareYAxis ? yMin : _calcChannelYMin(channels);
+    final effectiveYMax = shareYAxis ? yMax : _calcChannelYMax(channels);
+    final rangeY = effectiveYMax - effectiveYMin;
+    if (rangeY <= 0) return;
+
+    for (final ch in channels) {
+      if (!ch.visible || ch.data.isEmpty) continue;
+      final paint = Paint()
+        ..color = ch.color.withAlpha(150)
+        ..strokeWidth = 1.0
+        ..style = PaintingStyle.stroke;
+
+      final path = Path();
+      var started = false;
+      for (final pt in ch.data) {
+        final x = ((pt.x - dataXMin) / rangeX) * size.width;
+        final y = size.height - ((pt.y - effectiveYMin) / rangeY) * size.height;
+        if (!started) {
+          path.moveTo(x, y);
+          started = true;
+        } else {
+          path.lineTo(x, y);
+        }
+      }
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  double _calcChannelYMin(List<PlotChannel> chs) {
+    double minVal = double.infinity;
+    for (final ch in chs) {
+      if (!ch.visible || ch.data.isEmpty) continue;
+      for (final pt in ch.data) {
+        if (pt.y < minVal) minVal = pt.y;
+      }
+    }
+    return minVal.isInfinite ? 0.0 : minVal;
+  }
+
+  double _calcChannelYMax(List<PlotChannel> chs) {
+    double maxVal = double.negativeInfinity;
+    for (final ch in chs) {
+      if (!ch.visible || ch.data.isEmpty) continue;
+      for (final pt in ch.data) {
+        if (pt.y > maxVal) maxVal = pt.y;
+      }
+    }
+    return maxVal.isInfinite ? 1.0 : maxVal;
+  }
+
+  @override
+  bool shouldRepaint(covariant _MinimapPainter old) {
+    return dataXMin != old.dataXMin ||
+        dataXMax != old.dataXMax ||
+        shareYAxis != old.shareYAxis ||
+        globalYMin != old.globalYMin ||
+        globalYMax != old.globalYMax;
+  }
+}
 
 class _PlotPainter extends CustomPainter {
   final List<PlotChannel> channels;

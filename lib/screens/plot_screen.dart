@@ -152,7 +152,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   
   // ── Data ──
   List<PlotChannel> _channels = [];
-  final int _maxPoints = 100000;
+  final int _maxPoints = 20000;  // 降低最大点数，减少内存占用
 
   // ── Axis config ──
   bool _autoScaleX = true;
@@ -278,50 +278,63 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     ];
   }
 
+  // 帧率控制：防止setState调用过于频繁
+  DateTime _lastDemoUpdate = DateTime.now();
+  
   void _startDemoData() {
     _demoTimer?.cancel();
-    _demoTimer = Timer.periodic(const Duration(milliseconds: 5), (_) {
+    _demoTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {  // 降低到约60fps (16ms)
       if (!mounted || !_isPlaying) return;
-      _demoPhase += 0.005;
+      _demoPhase += 0.016;  // 对应16ms的时间步长
       final t = _demoPhase;
-      setState(() {
-        for (int i = 0; i < _channels.length; i++) {
-          final rng = Random();
-          final noise = 0.05 * (rng.nextDouble() - 0.5);
-          double val;
-          switch (i) {
-            case 0: val = 3.3 * sin(2 * pi * 0.5 * t) + noise; break;
-            case 1: val = 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
-            case 2: val = 3.3 * sin(2 * pi * 0.5 * t) * 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
-            case 3: val = 25.0 + 10.0 * sin(2 * pi * 0.1 * t) + 3.0 * sin(2 * pi * 1.3 * t) + noise; break;
-            case 4: val = 101.3 + 5.0 * sin(2 * pi * 0.07 * t + pi / 3) + 2.0 * cos(2 * pi * 0.8 * t) + noise; break;
-            case 5: val = 5.0 + 2.0 * sin(2 * pi * 0.2 * t) + 1.0 * sin(2 * pi * 1.5 * t + pi / 6) + noise; break;
-            case 6: val = 50.0 * sin(2 * pi * 0.15 * t) + 20.0 * cos(2 * pi * 0.9 * t) + noise; break;
-            case 7: val = 3000.0 + 1500.0 * sin(2 * pi * 0.25 * t + pi / 2) + 500.0 * sin(2 * pi * 2.0 * t) + noise * 100; break;
-            default: val = sin(t) + noise; break;
-          }
-          _channels[i].data.add(_DataPoint(t, val));
-          _channels[i].currentValue = val;
-          // Trim old data to prevent unbounded memory growth
-          if (_channels[i].data.length > _maxPoints * 2) {
-            _channels[i].data = _channels[i].data.sublist(_channels[i].data.length - _maxPoints);
-          }
+      
+      // 限制UI更新频率：每50ms最多更新一次界面（约20fps）
+      final now = DateTime.now();
+      final shouldUpdateUI = now.difference(_lastDemoUpdate).inMilliseconds >= 50;
+      
+      // 始终更新数据，但可选是否更新UI
+      for (int i = 0; i < _channels.length; i++) {
+        final rng = Random();
+        final noise = 0.05 * (rng.nextDouble() - 0.5);
+        double val;
+        switch (i) {
+          case 0: val = 3.3 * sin(2 * pi * 0.5 * t) + noise; break;
+          case 1: val = 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
+          case 2: val = 3.3 * sin(2 * pi * 0.5 * t) * 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
+          case 3: val = 25.0 + 10.0 * sin(2 * pi * 0.1 * t) + 3.0 * sin(2 * pi * 1.3 * t) + noise; break;
+          case 4: val = 101.3 + 5.0 * sin(2 * pi * 0.07 * t + pi / 3) + 2.0 * cos(2 * pi * 0.8 * t) + noise; break;
+          case 5: val = 5.0 + 2.0 * sin(2 * pi * 0.2 * t) + 1.0 * sin(2 * pi * 1.5 * t + pi / 6) + noise; break;
+          case 6: val = 50.0 * sin(2 * pi * 0.15 * t) + 20.0 * cos(2 * pi * 0.9 * t) + noise; break;
+          case 7: val = 3000.0 + 1500.0 * sin(2 * pi * 0.25 * t + pi / 2) + 500.0 * sin(2 * pi * 2.0 * t) + noise * 100; break;
+          default: val = sin(t) + noise; break;
         }
-        _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
+        _channels[i].data.add(_DataPoint(t, val));
+        _channels[i].currentValue = val;
+        // Trim old data to prevent unbounded memory growth
+        if (_channels[i].data.length > _maxPoints * 2) {
+          _channels[i].data = _channels[i].data.sublist(_channels[i].data.length - _maxPoints);
+        }
+      }
+      _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
 
-        if (_scrollMode) {
-          // Oscilloscope mode: auto-scroll window to latest data
-          final latestX = _channels.isNotEmpty && _channels.first.data.isNotEmpty
-              ? _channels.first.data.last.x
-              : t;
-          _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
-          _xMin = _scrollMinTime;
-          _xMax = latestX;
-        } else {
-          if (_autoScaleX) _fitXAxis();
-          if (_autoScaleY) _fitYAxis();
-        }
-      });
+      if (_scrollMode) {
+        // Oscilloscope mode: auto-scroll window to latest data
+        final latestX = _channels.isNotEmpty && _channels.first.data.isNotEmpty
+            ? _channels.first.data.last.x
+            : t;
+        _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
+        _xMin = _scrollMinTime;
+        _xMax = latestX;
+      } else {
+        if (_autoScaleX) _fitXAxis();
+        if (_autoScaleY) _fitYAxis();
+      }
+      
+      // 根据帧率控制决定是否更新UI
+      if (shouldUpdateUI) {
+        _lastDemoUpdate = now;
+        setState(() {});
+      }
     });
   }
 
@@ -614,6 +627,23 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   // ── CSV Export/Import ──
+
+  void _clearData() {
+    setState(() {
+      for (final ch in _channels) {
+        ch.data.clear();
+        ch.currentValue = 0.0;
+      }
+      _totalPoints = 0;
+      if (_scrollMode) {
+        _scrollMinTime = 0;
+      }
+      _autoScaleX = true;
+      _autoScaleY = true;
+      _fitXAxis();
+      _fitYAxis();
+    });
+  }
 
   Future<void> _exportCsv() async {
     final path = await FilePicker.platform.saveFile(
@@ -918,6 +948,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             icon: const Icon(Icons.file_upload),
             onPressed: _importCsv,
             tooltip: 'Import CSV',
+          ),
+          // Clear data
+          IconButton(
+            icon: const Icon(Icons.delete_sweep),
+            onPressed: _clearData,
+            tooltip: 'Clear Data',
           ),
           // Scroll mode (oscilloscope sweep) toggle + settings
           IconButton(
@@ -2248,7 +2284,14 @@ class _PlotPainter extends CustomPainter {
       if (allData[mid].x > xMax + margin) hi = mid - 1; else lo = mid;
     }
     endIdx = lo < allData.length - 1 ? lo + 1 : allData.length - 1; // include 1 point after
-    final data = allData.sublist(startIdx, endIdx + 1);
+    var data = allData.sublist(startIdx, endIdx + 1);
+
+    // 🚀 性能优化：数据抽取（Decimation）
+    // 当数据点数量超过屏幕像素宽度时，进行抽取以减少渲染点数
+    // 每个像素列最多保留1个点
+    if (data.length > w * 1) {  // 如果数据点数超过屏幕宽度
+      data = _decimateData(data, w, ox, xMin, xMax);
+    }
 
     switch (ch.lineStyle) {
       case LineStyle.dot:
@@ -2266,12 +2309,51 @@ class _PlotPainter extends CustomPainter {
     }
   }
 
+  // 数据抽取：将大量数据点减少到适合屏幕显示的密度
+  // 🚀 性能优化：每个像素bucket只保留1个最有代表性的点
+  List<_DataPoint> _decimateData(List<_DataPoint> data, double w, double ox, double xMinData, double xMaxData) {
+    if (data.length <= w) return data;  // 不需要抽取
+
+    final bucketCount = w.toInt();  // 每个像素一个bucket
+    final bucketSize = data.length ~/ bucketCount;
+    final result = <_DataPoint>[];
+    
+    // 每个bucket只保留1个最有代表性的点（波峰或波谷）
+    for (int i = 0; i < bucketCount && i * bucketSize < data.length; i++) {
+      final start = i * bucketSize;
+      final end = (i + 1) * bucketSize;
+      
+      if (start >= data.length) break;
+      
+      // 在bucket中找min和max
+      var minPt = data[start];
+      var maxPt = data[start];
+      
+      for (int j = start + 1; j < end && j < data.length; j++) {
+        if (data[j].y < minPt.y) minPt = data[j];
+        if (data[j].y > maxPt.y) maxPt = data[j];
+      }
+      
+      // 只保留绝对值更大的点（更有视觉代表性）
+      result.add(minPt.y.abs() >= maxPt.y.abs() ? minPt : maxPt);
+    }
+    
+    return result;
+  }
+
   void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
-    final paint = Paint()..color = ch.color;
+    if (data.isEmpty) return;
+    
+    // 🚀 性能优化：使用Path批量绘制，减少draw call次数
+    final paint = Paint()
+      ..color = ch.color
+      ..strokeWidth = 2.0 / scale
+      ..strokeCap = StrokeCap.round;
+    
     for (final pt in data) {
       final sx = _xToScreen(pt.x, w) + ox;
       final sy = yTransform(pt.y) + oy;
-      canvas.drawCircle(Offset(sx, sy), 2.0 / scale, paint);
+      canvas.drawCircle(Offset(sx, sy), 1.5 / scale, paint);
     }
   }
 

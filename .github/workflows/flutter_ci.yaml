@@ -1,0 +1,46 @@
+name: Flutter-CI
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/flutter_ci.yaml"
+      - "lib/**"
+      - "pubspec.yaml"
+
+  pull_request:
+    branches:
+      - "main"
+
+env:
+  FLUTTER_VERSION: "3.27.4"
+
+jobs:
+  flutter-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+
+      - name: Enable Flutter Desktop
+        run: |
+          git config --system core.longpaths true
+          flutter config --enable-windows-desktop
+
+      - name: Get Flutter dependencies
+        run: flutter pub get
+
+      - name: Run Flutter analyze
+        run: flutter analyze
+
+      - name: Build Flutter Windows
+        run: flutter build windows --release

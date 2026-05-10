@@ -1,0 +1,61 @@
+name: Rust-CI
+
+on:
+  push:
+    branches:
+      - "main"
+    paths:
+      - ".github/workflows/rust_ci.yaml"
+      - "rust/**"
+      - "Cargo.toml"
+
+  pull_request:
+    branches:
+      - "main"
+
+env:
+  RUST_TOOLCHAIN: "1.85.0"
+
+jobs:
+  rust-build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+          components: rustfmt, clippy
+          profile: minimal
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: ${{ runner.os }}-cargo-rust-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-rust-
+
+      - name: Build Rust
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Run Rust tests
+        working-directory: rust
+        run: cargo test
+
+      - name: Check Rust formatting
+        working-directory: rust
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        working-directory: rust
+        run: cargo clippy --all-targets -- -D warnings

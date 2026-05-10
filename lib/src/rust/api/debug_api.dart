@@ -31,14 +31,12 @@ bool debugSendHex({required String deviceId, required String hexString}) =>
       hexString: hexString,
     );
 
-/// 手动接收（备用，主要靠后台 receive loop 自动记录）
 Uint8List? debugReceive({required String deviceId}) =>
     RustLib.instance.api.crateApiDebugApiDebugReceive(deviceId: deviceId);
 
 List<DebugLogEntry> debugGetLog({required String deviceId}) =>
     RustLib.instance.api.crateApiDebugApiDebugGetLog(deviceId: deviceId);
 
-/// 获取日志（带缓冲区大小限制）
 List<DebugLogEntry> debugGetLogWithLimit({
   required String deviceId,
   required int maxSize,
@@ -47,7 +45,6 @@ List<DebugLogEntry> debugGetLogWithLimit({
   maxSize: maxSize,
 );
 
-/// 设置缓冲区大小
 void debugSetBufferSize({required String deviceId, required int maxSize}) =>
     RustLib.instance.api.crateApiDebugApiDebugSetBufferSize(
       deviceId: deviceId,
@@ -63,7 +60,6 @@ bool debugIsConnected({required String deviceId}) =>
 List<String> debugGetActiveSessions() =>
     RustLib.instance.api.crateApiDebugApiDebugGetActiveSessions();
 
-/// 返回已连接设备的 (id, name) 列表，供 Lua UI 使用
 List<(String, String)> debugGetActiveDeviceNames() =>
     RustLib.instance.api.crateApiDebugApiDebugGetActiveDeviceNames();
 

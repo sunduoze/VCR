@@ -178,16 +178,26 @@ fn spawn_receive_loop(device_id: String) {
             }
 
             // Phase 3: CSV parse + Plot push — wrapped in catch_unwind
-            // parse_csv_line can panic on malformed input
-            if let Ok(text) = String::from_utf8(data) {
+            // Parse ALL complete lines (not just the first one)
+            if let Ok(text) = String::from_utf8(data.clone()) {
                 let parse_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let result = parse_csv_line(&text);
-                    if result.success && !result.values.is_empty() {
-                        let timestamp_ms = SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_secs_f64() * 1000.0)
-                            .unwrap_or(0.0);
-                        PLOT_DATA.push_batch(&id, timestamp_ms, result.prefix.as_deref(), &result.values);
+                    // Split by all line endings: \n, \r\n, \n\r, \r
+                    let lines: Vec<&str> = text.split(|c| c == '\n' || c == '\r')
+                        .map(|l| l.trim())
+                        .filter(|l| !l.is_empty())
+                        .collect();
+                    
+                    for line in lines {
+                        let result = parse_csv_line(line);
+                        if result.success && !result.channels.is_empty() {
+                            let timestamp_ms = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_secs_f64() * 1000.0)
+                                .unwrap_or(0.0);
+                            // Channel naming: first value → prefix (or "ch0"), others → ch1, ch2...
+                            let prefix = result.metadata.get("prefix").map(|s| s.as_str());
+                            PLOT_DATA.push_batch_with_names(&id, timestamp_ms, prefix, &result.channels);
+                        }
                     }
                 })).is_ok();
                 if !parse_ok {

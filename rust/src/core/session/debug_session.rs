@@ -82,8 +82,24 @@ impl DebugSessionManager {
         self.push_entry(device_id, "TX", data, bytes_to_ascii(data));
     }
 
+    /// Log RX data, splitting by line endings for millisecond-level timestamp precision
+    /// Each line (\r\n, \r, or \n delimited) gets its own entry with its own timestamp
     pub fn log_rx(&self, device_id: &str, data: &[u8]) {
-        self.push_entry(device_id, "RX", data, bytes_to_ascii(data));
+        // Check if data contains line endings
+        let has_line_endings = data.iter().any(|&b| b == b'\r' || b == b'\n');
+        
+        if has_line_endings {
+            // Split by \r\n, \r, or \n and create separate entries with individual timestamps
+            let lines = split_by_line_endings(data);
+            for (line_data, line_display) in lines {
+                if !line_data.is_empty() || !line_display.is_empty() {
+                    self.push_entry(device_id, "RX", &line_data, line_display);
+                }
+            }
+        } else {
+            // No line endings - single entry
+            self.push_entry(device_id, "RX", data, bytes_to_ascii(data));
+        }
     }
 
     pub fn log_error(&self, device_id: &str, msg: &str) {
@@ -220,4 +236,42 @@ fn bytes_to_ascii(data: &[u8]) -> String {
             }
         })
         .collect()
+}
+
+/// Split data by line endings (\r\n, \r, \n), returning (raw_bytes, display_string) for each line
+/// Handles all three line ending styles properly
+fn split_by_line_endings(data: &[u8]) -> Vec<(Vec<u8>, String)> {
+    let mut result = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    
+    while i < data.len() {
+        // Check for \r\n first (Windows line ending)
+        if i + 1 < data.len() && data[i] == b'\r' && data[i + 1] == b'\n' {
+            // Found \r\n - extract line without the ending
+            let line_data = &data[start..i];
+            let line_display = bytes_to_ascii(line_data);
+            result.push((line_data.to_vec(), line_display));
+            start = i + 2; // Skip past \r\n
+            i = start;
+        } else if data[i] == b'\r' || data[i] == b'\n' {
+            // Found \r or \n alone - extract line without the ending
+            let line_data = &data[start..i];
+            let line_display = bytes_to_ascii(line_data);
+            result.push((line_data.to_vec(), line_display));
+            start = i + 1; // Skip past the line ending
+            i = start;
+        } else {
+            i += 1;
+        }
+    }
+    
+    // Handle remaining data after last line ending (if any)
+    if start < data.len() {
+        let line_data = &data[start..];
+        let line_display = bytes_to_ascii(line_data);
+        result.push((line_data.to_vec(), line_display));
+    }
+    
+    result
 }

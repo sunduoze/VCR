@@ -137,7 +137,11 @@ class _MainShellState extends State<MainShell> {
     
     // Save Console state before switching away from it
     if (widget.selectedIndex == 3) { // Console tab index
-      DebugConsoleScreen.saveCurrentState();
+      try {
+        DebugConsoleScreen.saveCurrentState();
+      } catch (e) {
+        debugPrint('Failed to save console state: $e');
+      }
     }
     
     final routes = [

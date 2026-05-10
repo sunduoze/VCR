@@ -1,31 +1,17 @@
 // Device API - 设备管理接口
 // 提供设备增删改查、连接控制、串口扫描等功能
 
-use crate::core::app_context::{block_on, DEBUG, REGISTRY, RT, SESSIONS};
+use crate::core::app_context::{DEBUG, REGISTRY, SESSIONS};
 use crate::core::device::models::{
     all_protocols, ConnectionType, DataBits, DeviceConfig, DeviceInfo, FlowControl, Parity,
     PortInfo, Protocol, StopBits,
 };
 use crate::core::device::preset::{demo_presets, all_virtual_presets};
-use crate::core::protocol::csv_parser::{parse_csv_line, CsvParser};
-use crate::core::protocol::CsvParseResult;
+use crate::core::protocol::{CsvParser, parse_csv_line};
 use crate::core::transport::serial;
 use crate::api::debug_api::{start_receive_loop_if_needed, stop_receive_loop};
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard};
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-
-/// 安全获取 Mutex 锁，遇到 PoisonError 时恢复而非 panic
-fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
-    match mutex.lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => {
-            log::warn!("[DeviceAPI] Mutex was poisoned, recovering...");
-            poisoned.into_inner()
-        }
-    }
-}
 
 // ============================================================================
 // 协议与设备列表

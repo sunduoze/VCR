@@ -204,6 +204,59 @@ impl PlotDataManager {
         }
     }
 
+    /// 批量添加数据（使用友好的通道名称）
+    /// 第一列: prefix (或 "ch0")
+    /// 后续列: "ch1", "ch2", ...
+    pub fn push_batch_with_names(&self, device_id: &str, timestamp_ms: f64, prefix: Option<&str>, values: &[f64]) {
+        // Collect channel names: first value → prefix, others → ch1, ch2...
+        let channel_names: Vec<(String, f64)> = values
+            .iter()
+            .enumerate()
+            .map(|(i, value)| {
+                let ch_name = if i == 0 {
+                    // First value: use prefix (or "ch0")
+                    prefix.map(|p| p.to_string()).unwrap_or_else(|| "ch0".to_string())
+                } else {
+                    // Subsequent values: ch1, ch2...
+                    format!("ch{}", i)
+                };
+                (ch_name, *value)
+            })
+            .collect();
+
+        // Single lock: create device + channels if needed
+        {
+            let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
+            let dc = devices
+                .entry(device_id.to_string())
+                .or_insert_with(HashMap::new);
+            for (ch_name, _) in &channel_names {
+                dc.entry(ch_name.clone())
+                    .or_insert_with(|| Arc::new(Mutex::new(ChannelBuffer::new(self.default_capacity))));
+            }
+        }
+
+        // Push data (device/channels now guaranteed to exist)
+        {
+            let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(dc) = devices.get(device_id) {
+                for (ch_name, value) in &channel_names {
+                    if let Some(buf) = dc.get(ch_name) {
+                        lock_mutex(&buf).push(timestamp_ms, *value);
+                    }
+                }
+            }
+        }
+
+        // 触发回调
+        let callbacks = self.callbacks.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(cbs) = callbacks.get(device_id) {
+            for cb in cbs {
+                cb(device_id, timestamp_ms, values);
+            }
+        }
+    }
+
     /// 获取设备通道数据
     pub fn get_channel_data(&self, device_id: &str, channel: &str) -> Vec<DataPoint> {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());

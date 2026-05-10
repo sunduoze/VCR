@@ -6,7 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `eval`, `execute_script`, `fire_sys_timer`, `get_lua_engine`, `get_scripts_dir`, `load_core_scripts`, `lock_mutex`, `new`, `new`, `register_basic_api`, `set_device_id`, `trigger_callbacks`
+// These functions are ignored because they are not marked as `pub`: `eval`, `execute_script`, `fire_sys_timer`, `get_lua_engine`, `get_scripts_dir`, `load_core_scripts`, `lock_mutex`, `new`, `new`, `register_basic_api`, `set_device_id`, `trigger_callback_inner`, `trigger_callbacks`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `CALLBACKS`, `INPUT_BOX_RESPONSES`, `INPUT_BOX_STATE`, `InputBoxRequest`, `InputBoxState`, `LUA_ENGINE`, `LuaEngine`, `TIMER_TASKS`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `deref`, `deref`, `deref`, `deref`, `deref`, `initialize`, `initialize`, `initialize`, `initialize`, `initialize`
 
@@ -28,6 +28,7 @@ bool luaSetDeviceId({required String deviceId}) =>
 
 /// 触发指定通道的 Lua 回调(公共接口,供其他模块调用)
 /// 通过 tiggerCB(-1, channel, data) 触发通道回调
+/// 整个回调链都包裹在 AssertUnwindSafe 中,即使 Lua 侧 panic 也不会崩溃
 Future<void> triggerCallback({
   required String channel,
   required List<int> data,
@@ -36,7 +37,7 @@ Future<void> triggerCallback({
   data: data,
 );
 
-/// FFI 接口:读取 Lua 日志缓冲区
+/// FFI 接口:读取 Lua 日志缓冲区(同时清空,避免重复消费)
 List<String> luaGetLogs() => RustLib.instance.api.crateApiLuaApiLuaGetLogs();
 
 /// FFI 接口:清空 Lua 日志缓冲区

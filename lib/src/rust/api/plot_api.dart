@@ -84,6 +84,24 @@ List<String> plotGetChannels({required String deviceId}) =>
 void plotClearDevice({required String deviceId}) =>
     RustLib.instance.api.crateApiPlotApiPlotClearDevice(deviceId: deviceId);
 
+/// 获取当前样本计数器值
+BigInt plotGetCounter() => RustLib.instance.api.crateApiPlotApiPlotGetCounter();
+
+/// 重置样本计数器
+void plotClearCounter() =>
+    RustLib.instance.api.crateApiPlotApiPlotClearCounter();
+
+/// 从计数器值添加 CSV 数据（X轴使用计数器而非时间戳）
+void plotPushCsvCounter({
+  required String deviceId,
+  String? prefix,
+  required List<double> values,
+}) => RustLib.instance.api.crateApiPlotApiPlotPushCsvCounter(
+  deviceId: deviceId,
+  prefix: prefix,
+  values: values,
+);
+
 /// 获取当前时间戳（毫秒）
 double plotGetTimestampMs() =>
     RustLib.instance.api.crateApiPlotApiPlotGetTimestampMs();

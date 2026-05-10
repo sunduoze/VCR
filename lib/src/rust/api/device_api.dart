@@ -7,7 +7,7 @@ import '../core/device/models.dart';
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `get_persistence_path`, `lock_mutex`, `parse_connection_type`, `parse_protocol`
+// These functions are ignored because they are not marked as `pub`: `get_persistence_path`, `parse_connection_type`, `parse_protocol`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `PersistedDevice`
 
 /// 获取所有支持的协议

@@ -92,6 +92,25 @@ pub fn plot_clear_device(device_id: String) {
     PLOT_DATA.clear_device(&device_id);
 }
 
+/// 获取当前样本计数器值
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_get_counter() -> u64 {
+    PLOT_DATA.get_counter()
+}
+
+/// 重置样本计数器
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_clear_counter() {
+    PLOT_DATA.clear_counter();
+}
+
+/// 从计数器值添加 CSV 数据（X轴使用计数器而非时间戳）
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_push_csv_counter(device_id: String, prefix: Option<String>, values: Vec<f64>) {
+    let counter = PLOT_DATA.next_counter() as f64;
+    PLOT_DATA.push_batch(&device_id, counter, prefix.as_deref(), &values);
+}
+
 /// 获取当前时间戳（毫秒）
 #[flutter_rust_bridge::frb(sync)]
 pub fn plot_get_timestamp_ms() -> f64 {

@@ -6,7 +6,6 @@ use crate::core::plot::PLOT_DATA;
 use super::lua_api::trigger_callback;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 安全获取 Mutex 锁，遇到 PoisonError 时恢复而非 panic
 fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
@@ -190,13 +189,11 @@ fn spawn_receive_loop(device_id: String) {
                     for line in lines {
                         let result = parse_csv_line(line);
                         if result.success && !result.channels.is_empty() {
-                            let timestamp_ms = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .map(|d| d.as_secs_f64() * 1000.0)
-                                .unwrap_or(0.0);
+                    // Use counter-based X axis (from 0, incrementing)
+                            let counter = PLOT_DATA.next_counter() as f64;
                             // Channel naming: first value → prefix (or "ch0"), others → ch1, ch2...
                             let prefix = result.metadata.get("prefix").map(|s| s.as_str());
-                            PLOT_DATA.push_batch_with_names(&id, timestamp_ms, prefix, &result.channels);
+                            PLOT_DATA.push_batch_with_names(&id, counter, prefix, &result.channels);
                         }
                     }
                 })).is_ok();

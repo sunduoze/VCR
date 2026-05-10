@@ -1,4 +1,4 @@
-import 'dart:math';
+﻿import 'dart:math';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
@@ -181,7 +181,7 @@ class PlotScreen extends StatefulWidget {
 
 class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateMixin {
   // ── Data source ──
-  bool _useRealData = false; // false = demo, true = real device
+  bool _useRealData = true; // false = demo, true = real device
   Timer? _realDataTimer;
   
   // ── Plot Groups ──
@@ -204,7 +204,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Scroll (oscilloscope) mode ──
   bool _scrollMode = false;         // true = oscilloscope sweep mode
-  double _scrollWindowWidth = 10.0;  // visible X range in seconds
+  double _scrollWindowWidth = 100.0;  // visible X range in seconds
   double _scrollMinTime = 0.0;       // left edge of visible window
 
   // ── Scrollbar drag state ──
@@ -433,6 +433,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 color: _channelColors[colorIdx],
                 decimals: 3,
                 lineStyle: LineStyle.line,
+                showYAxis: false, // Real Data Mode default: unified Y axis
                 plotGroupId: groupId,
               ));
             }
@@ -444,7 +445,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             for (final ch in targetChannels) {
               try {
                 final points = plotGetChannelData(deviceId: deviceId, channel: ch.channelName);
-                ch.data = points.map((p) => _DataPoint(p.timestampMs / 1000.0, p.value)).toList();
+                ch.data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
                 if (ch.data.isNotEmpty) {
                   ch.currentValue = ch.data.last.y;
                 }
@@ -726,6 +727,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── CSV Export/Import ──
 
   void _clearData() {
+    // Reset sample counter so X axis starts from 0 again
+    plotClearCounter();
     setState(() {
       for (final ch in _channels) {
         ch.data.clear();
@@ -1729,6 +1732,19 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildNumericPanel() {
+    // Sort channels by name in Real Data Mode (CH0, CH1, CH10... natural order)
+    final displayChannels = _useRealData 
+        ? (List<PlotChannel>.from(_channels)..sort((a, b) {
+            // Natural sort for channel names like ch0, ch1, ch10
+            final aMatch = RegExp(r'ch(\d+)', caseSensitive: false).firstMatch(a.channelName);
+            final bMatch = RegExp(r'ch(\d+)', caseSensitive: false).firstMatch(b.channelName);
+            if (aMatch != null && bMatch != null) {
+              return int.parse(aMatch.group(1)!).compareTo(int.parse(bMatch.group(1)!));
+            }
+            return a.channelName.toLowerCase().compareTo(b.channelName.toLowerCase());
+          }))
+        : _channels;
+    
     return Container(
       color: AppTheme.surface,
       child: Column(
@@ -1755,9 +1771,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           Expanded(
             child: ListView.builder(
               padding: const EdgeInsets.all(8),
-              itemCount: _channels.length,
+              itemCount: displayChannels.length,
               itemBuilder: (context, index) {
-                final ch = _channels[index];
+                final ch = displayChannels[index];
+                final actualIdx = _channels.indexOf(ch);
                 return GestureDetector(
                   // Left-click: toggle visibility
                   onTap: () {
@@ -1765,7 +1782,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     _saveConfig();
                   },
                   // Right-click: channel config popup
-                  onSecondaryTapUp: (_) => _showSingleChannelConfig(index),
+                  onSecondaryTapUp: (_) => _showSingleChannelConfig(actualIdx),
                   child: MouseRegion(
                     cursor: SystemMouseCursors.click,
                     child: Card(
@@ -1804,7 +1821,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                                 // Delete button
                                 IconButton(
                                   icon: Icon(Icons.close, size: 14, color: AppTheme.textSecondary.withValues(alpha: 0.5)),
-                                  onPressed: () => _removeChannel(index),
+                                  onPressed: () => _removeChannel(actualIdx),
                                   padding: EdgeInsets.zero,
                                   constraints: const BoxConstraints(minWidth: 20, minHeight: 20),
                                   tooltip: 'Remove Channel',

@@ -95,6 +95,8 @@ pub struct PlotDataManager {
     default_capacity: usize,
     /// 订阅回调：device_id -> callbacks
     callbacks: RwLock<HashMap<String, Vec<Box<dyn Fn(&str, f64, &[f64]) + Send + Sync>>>>,
+    /// 样本计数器（用于 X 轴从0开始递增）
+    sample_counter: RwLock<u64>,
 }
 
 impl PlotDataManager {
@@ -103,6 +105,7 @@ impl PlotDataManager {
             devices: RwLock::new(HashMap::new()),
             default_capacity: 10000,
             callbacks: RwLock::new(HashMap::new()),
+            sample_counter: RwLock::new(0),
         }
     }
 
@@ -297,6 +300,25 @@ impl PlotDataManager {
                 lock_mutex(&buffer).clear();
             }
         }
+    }
+
+    /// 获取当前样本计数器值
+    pub fn get_counter(&self) -> u64 {
+        *self.sample_counter.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 重置样本计数器
+    pub fn clear_counter(&self) {
+        let mut counter = self.sample_counter.write().unwrap_or_else(|e| e.into_inner());
+        *counter = 0;
+    }
+
+    /// 获取并递增计数器（返回新值）
+    pub fn next_counter(&self) -> u64 {
+        let mut counter = self.sample_counter.write().unwrap_or_else(|e| e.into_inner());
+        let new_val = *counter + 1;
+        *counter = new_val;
+        new_val
     }
 }
 

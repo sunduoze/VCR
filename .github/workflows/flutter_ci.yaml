@@ -8,13 +8,16 @@ on:
       - ".github/workflows/flutter_ci.yaml"
       - "lib/**"
       - "pubspec.yaml"
-
+      - "rust/**"           # Rust 后端代码变动也触发
+      - "Cargo.toml"
+      - "Cargo.lock"
   pull_request:
     branches:
       - "main"
 
 env:
-  FLUTTER_VERSION: "3.27.4"
+  FLUTTER_VERSION: "3.41.7"     # 你要求的版本
+  RUST_VERSION: "1.95.0"
 
 jobs:
   flutter-build:
@@ -24,17 +27,40 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
-      - name: Install Flutter
+      - name: Install Flutter (${{ env.FLUTTER_VERSION }})
         uses: subosito/flutter-action@v2
         with:
           channel: "stable"
           flutter-version: ${{ env.FLUTTER_VERSION }}
           cache: true
 
+      - name: Install Rust (${{ env.RUST_VERSION }})
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Enable Flutter Desktop
         run: |
           git config --system core.longpaths true
           flutter config --enable-windows-desktop
+
+      - name: Generate Flutter Rust Bridge code
+        run: |
+          cargo install flutter_rust_bridge_codegen --version 2.12.0
+          flutter_rust_bridge_codegen generate --config flutter_rust_bridge.yaml
+        # 如果你没有 flutter_rust_bridge.yaml 文件，请根据你的项目配置创建或使用命令行参数
 
       - name: Get Flutter dependencies
         run: flutter pub get
@@ -42,5 +68,11 @@ jobs:
       - name: Run Flutter analyze
         run: flutter analyze
 
-      - name: Build Flutter Windows
+      - name: Build Flutter Windows Release
         run: flutter build windows --release
+
+      - name: Upload build artifact (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: build/windows/x64/runner/Release/

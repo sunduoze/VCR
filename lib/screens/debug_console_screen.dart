@@ -340,7 +340,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
         final json = jsonDecode(content) as Map<String, dynamic>;
         return json['lastSelectedDeviceId'] as String?;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to get last selected device ID: $e');
+    }
     return null;
   }
 
@@ -410,7 +412,11 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
 
       Map<String, dynamic> config = {};
       if (await file.exists()) {
-        config = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        try {
+          config = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        } catch (e) {
+          debugPrint('Failed to parse config file: $e');
+        }
       }
 
       // Save per-device state block
@@ -420,7 +426,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
       config['lastSelectedDeviceId'] = _selectedDeviceId;
 
       await file.writeAsString(jsonEncode(config));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to save signal states: $e');
+    }
   }
 
   Future<void> _loadSignalStates(String deviceId) async {
@@ -435,7 +443,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
           cs.fromJson(deviceConfigs[deviceId] as Map<String, dynamic>);
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to load signal states for device $deviceId: $e');
+    }
   }
 
   // ── Sort order ──
@@ -444,7 +454,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
       final config = await AppConfig.load();
       final order = config['deviceSortOrder'] as List?;
       if (order != null) _deviceSortOrder = order.cast<String>();
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to load sort order: $e');
+    }
   }
 
   void _sortDevices(List<DeviceInfo> devices) {
@@ -471,7 +483,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
         _lastExportDir = dir;
       }
       // Note: lastSelectedDeviceId is now loaded separately in _getLastSelectedDeviceId()
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to load global config: $e');
+    }
   }
 
   Future<void> _saveGlobalConfig() async {
@@ -482,7 +496,11 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
 
       Map<String, dynamic> config = {};
       if (await file.exists()) {
-        config = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        try {
+          config = jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+        } catch (e) {
+          debugPrint('Failed to parse config file: $e');
+        }
       }
 
       // Save per-device blocks
@@ -495,7 +513,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
       config['lastExportDir'] = _lastExportDir;
 
       await file.writeAsString(jsonEncode(config));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to save global config: $e');
+    }
   }
 
   // ── Scroll handling ──
@@ -614,7 +634,8 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
       _stopPolling();
       try {
         await disconnectDevice(deviceId: _selectedDeviceId!);
-      } catch (_) {
+      } catch (e) {
+        debugPrint('Disconnect failed: $e');
         // Disconnect failed — still mark as disconnected locally
       }
       cs.connected = false;

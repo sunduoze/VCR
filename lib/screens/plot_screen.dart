@@ -63,6 +63,36 @@ extension AALevelLabel on AntiAliasingLevel {
   }
 }
 
+/// A Plot Group — a vertical slice of the plot area with its own Y-axis.
+/// Channels assigned to the same group share the same plot area.
+class PlotGroup {
+  String id;
+  String name;
+  double heightRatio; // relative height ratio (default 1.0)
+  bool syncXAxis; // when true, X-axis is synced with other groups
+
+  PlotGroup({
+    required this.id,
+    required this.name,
+    this.heightRatio = 1.0,
+    this.syncXAxis = true,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'name': name,
+    'heightRatio': heightRatio,
+    'syncXAxis': syncXAxis,
+  };
+
+  factory PlotGroup.fromJson(Map<String, dynamic> json) => PlotGroup(
+    id: json['id'] as String? ?? 'default',
+    name: json['name'] as String? ?? 'Default',
+    heightRatio: (json['heightRatio'] as num?)?.toDouble() ?? 1.0,
+    syncXAxis: json['syncXAxis'] as bool? ?? true,
+  );
+}
+
 class PlotChannel {
   final String deviceId;
   String deviceName;
@@ -79,6 +109,7 @@ class PlotChannel {
   double yMinManual; // User-specified Y range (if not auto)
   double yMaxManual;
   bool autoScaleY; // Per-channel auto-scale
+  String plotGroupId; // Which PlotGroup this channel belongs to
 
   PlotChannel({
     required this.deviceId,
@@ -96,6 +127,7 @@ class PlotChannel {
     this.yMinManual = -1,
     this.yMaxManual = 1,
     this.autoScaleY = true,
+    this.plotGroupId = 'default',
   }) : data = data ?? [];
 
   Map<String, dynamic> toJson() => {
@@ -109,6 +141,7 @@ class PlotChannel {
     'autoScaleY': autoScaleY,
     'yMinManual': yMinManual,
     'yMaxManual': yMaxManual,
+    'plotGroupId': plotGroupId,
   };
 
   factory PlotChannel.fromJson(Map<String, dynamic> json) => PlotChannel(
@@ -123,6 +156,7 @@ class PlotChannel {
     autoScaleY: json['autoScaleY'] as bool? ?? true,
     yMinManual: (json['yMinManual'] as num?)?.toDouble() ?? -1,
     yMaxManual: (json['yMaxManual'] as num?)?.toDouble() ?? 1,
+    plotGroupId: json['plotGroupId'] as String? ?? 'default',
   );
 }
 
@@ -150,6 +184,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _useRealData = false; // false = demo, true = real device
   Timer? _realDataTimer;
   
+  // ── Plot Groups ──
+  List<PlotGroup> _plotGroups = [
+    PlotGroup(id: 'default', name: 'Default'),
+  ];
+
   // ── Data ──
   List<PlotChannel> _channels = [];
   final int _maxPoints = 20000;  // 降低最大点数，减少内存占用
@@ -200,6 +239,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Y axis share ──
   bool _shareYAxis = false; // Each channel uses its own Y range
+
+  // ── Per-group Y ranges (for multi-group mode) ──
+  Map<String, double> _groupYMin = {};
+  Map<String, double> _groupYMax = {};
+  Map<String, bool> _groupAutoScaleY = {};
 
   // ── Anti-aliasing ──
   AntiAliasingLevel _aaLevel = AntiAliasingLevel.off;
@@ -343,65 +387,95 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _realDataTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (!mounted || !_isPlaying) return;
 
-      // Get active sessions from Rust
-      final activeDevices = debugGetActiveSessions();
-      if (activeDevices.isEmpty) return;
-      
-      for (final deviceId in activeDevices) {
-        // Get channel data from Rust plot API
-        final channels = plotGetChannels(deviceId: deviceId);
-        if (channels.isEmpty) continue;
+      try {
+        // Get active sessions from Rust
+        final activeDevices = debugGetActiveSessions();
+        if (activeDevices.isEmpty) return;
         
-        // Ensure channels exist in our list
-        for (final chName in channels) {
-          final existingIdx = _channels.indexWhere(
-            (ch) => ch.deviceId == deviceId && ch.channelName == chName,
-          );
-          if (existingIdx == -1 && _autoAddChannels) {
-            // Add new channel
-            final colorIdx = _channels.length % _channelColors.length;
-            _channels.add(PlotChannel(
-              deviceId: deviceId,
-              deviceName: deviceId,
-              channelName: chName,
-              color: _channelColors[colorIdx],
-              decimals: 3,
-              lineStyle: LineStyle.line,
-            ));
+        for (final deviceId in activeDevices) {
+          // Get channel data from Rust plot API
+          List<String> channels;
+          try {
+            channels = plotGetChannels(deviceId: deviceId);
+          } catch (e) {
+            debugPrint('Failed to get channels for device $deviceId: $e');
+            continue;
           }
-        }
-        
-        // Fetch data for each channel
-        setState(() {
-          final targetChannels = _channels.where((c) => c.deviceId == deviceId).toList();
-          for (final ch in targetChannels) {
-            final points = plotGetChannelData(deviceId: deviceId, channel: ch.channelName);
-            ch.data = points.map((p) => _DataPoint(p.timestampMs / 1000.0, p.value)).toList();
-            if (ch.data.isNotEmpty) {
-              ch.currentValue = ch.data.last.y;
-            }
-            // Trim to max points to prevent unbounded growth
-            if (ch.data.length > _maxPoints * 2) {
-              ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+          if (channels.isEmpty) continue;
+          
+          // Ensure channels exist in our list
+          for (final chName in channels) {
+            final existingIdx = _channels.indexWhere(
+              (ch) => ch.deviceId == deviceId && ch.channelName == chName,
+            );
+            if (existingIdx == -1 && _autoAddChannels) {
+              // Add new channel — auto-assign to a per-device group
+              String groupId = 'default';
+              // Check if there's a group for this device
+              final deviceGroupId = 'device_$deviceId';
+              if (_plotGroups.any((g) => g.id == deviceGroupId)) {
+                groupId = deviceGroupId;
+              } else if (_useRealData && activeDevices.length > 1) {
+                // Auto-create a group per device when multiple devices exist
+                setState(() {
+                  _plotGroups.add(PlotGroup(
+                    id: deviceGroupId,
+                    name: deviceId,
+                  ));
+                });
+                groupId = deviceGroupId;
+              }
+              final colorIdx = _channels.length % _channelColors.length;
+              _channels.add(PlotChannel(
+                deviceId: deviceId,
+                deviceName: deviceId,
+                channelName: chName,
+                color: _channelColors[colorIdx],
+                decimals: 3,
+                lineStyle: LineStyle.line,
+                plotGroupId: groupId,
+              ));
             }
           }
-          _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
+          
+          // Fetch data for each channel
+          setState(() {
+            final targetChannels = _channels.where((c) => c.deviceId == deviceId).toList();
+            for (final ch in targetChannels) {
+              try {
+                final points = plotGetChannelData(deviceId: deviceId, channel: ch.channelName);
+                ch.data = points.map((p) => _DataPoint(p.timestampMs / 1000.0, p.value)).toList();
+                if (ch.data.isNotEmpty) {
+                  ch.currentValue = ch.data.last.y;
+                }
+                // Trim to max points to prevent unbounded growth
+                if (ch.data.length > _maxPoints * 2) {
+                  ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+                }
+              } catch (e) {
+                debugPrint('Failed to get data for channel ${ch.channelName}: $e');
+              }
+            }
+            _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
 
-          if (_scrollMode) {
-            // Auto-scroll window to latest data point
-            double latestX = _scrollMinTime + _scrollWindowWidth;
-            final visibleChs = _channels.where((c) => c.visible && c.data.isNotEmpty).toList();
-            for (final ch in visibleChs) {
-              if (ch.data.last.x > latestX) latestX = ch.data.last.x;
+            if (_scrollMode) {
+              // Auto-scroll window to latest data point
+              double latestX = _scrollMinTime + _scrollWindowWidth;
+              final visibleChs = _channels.where((c) => c.visible && c.data.isNotEmpty).toList();
+              for (final ch in visibleChs) {
+                if (ch.data.last.x > latestX) latestX = ch.data.last.x;
+              }
+              _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
+              _xMin = _scrollMinTime;
+              _xMax = latestX;
+            } else {
+              if (_autoScaleX) _fitXAxis();
+              if (_autoScaleY) _fitYAxis();
             }
-            _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
-            _xMin = _scrollMinTime;
-            _xMax = latestX;
-          } else {
-            if (_autoScaleX) _fitXAxis();
-            if (_autoScaleY) _fitYAxis();
-          }
-        });
+          });
+        }
+      } catch (e) {
+        debugPrint('Error in real data polling: $e');
       }
     });
   }
@@ -437,8 +511,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _xMax = maxVal + padding;
   }
 
-  void _fitYAxisForChannel(int chIdx) {
-    final ch = _channels[chIdx];
+  void _fitYAxisForChannel(PlotChannel ch) {
     if (!ch.visible || ch.data.isEmpty) return;
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
@@ -460,8 +533,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _fitYAxis() {
     _yMin = double.infinity;
     _yMax = double.negativeInfinity;
-    for (int i = 0; i < _channels.length; i++) {
-      _fitYAxisForChannel(i);
+    for (final ch in _channels) {
+      _fitYAxisForChannel(ch);
     }
     if (_yMin.isInfinite) { _yMin = -1; _yMax = 1; }
   }
@@ -509,35 +582,29 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Find which channel's Y-axis is closest to cursor X position.
   /// Returns -1 if none.
-  int _findYAxisChannelAtX(double cursorX, double plotLeft, double plotW) {
-    final yAxisChannels = _channels.asMap().entries
+  PlotChannel? _findYAxisChannelAtX(double cursorX, double plotLeft, double plotW, [List<PlotChannel>? channels]) {
+    final chList = channels ?? _channels;
+    final yAxisChannels = chList.asMap().entries
         .where((e) => e.value.visible && e.value.showYAxis)
         .map((e) => e.key)
         .toList();
-    if (yAxisChannels.isEmpty) return -1;
-    const hitHalfW = 30.0; // Half of the hit-test width for each axis slot
+    if (yAxisChannels.isEmpty) return null;
+    const hitHalfW = 30.0;
 
-    // Iterate each visual axis slot as rendered in _paintInternal.
-    // ci = 0,1,2,3 → left,right,left,right
-    // left slot N x-position: plotLeft - N*45 - 2  (x of the colored axis line)
-    // right slot N x-position: plotLeft + plotW + N*45 + 2
     for (int ci = 0; ci < yAxisChannels.length; ci++) {
       final isLeft = ci % 2 == 0;
       final slotIdx = ci ~/ 2;
       double axisX;
       if (isLeft) {
-        // x of left axis line N: plotLeft - N*45 - 2
         axisX = plotLeft - slotIdx * 45.0 - 2.0;
       } else {
-        // x of right axis line N: plotLeft + plotW + N*45 + 2
         axisX = plotLeft + plotW + slotIdx * 45.0 + 2.0;
       }
-      // Use the colored axis line as the hit target (± hitHalfW on each side)
       if ((cursorX - axisX).abs() < hitHalfW) {
-        return yAxisChannels[ci];
+        return chList[yAxisChannels[ci]];
       }
     }
-    return -1;
+    return null;
   }
 
 
@@ -572,12 +639,33 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         final chConfigs = json['channels'] as List?;
         if (chConfigs != null) {
           for (int i = 0; i < min(chConfigs.length, _channels.length); i++) {
-            final c = chConfigs[i] as Map<String, dynamic>;
-            _channels[i].visible = c['visible'] as bool? ?? true;
-            _channels[i].decimals = c['decimals'] as int? ?? 3;
-            _channels[i].showYAxis = c['showYAxis'] as bool? ?? true;
-            _channels[i].lineStyle = LineStyle.values.firstWhere(
-              (e) => e.name == c['lineStyle'], orElse: () => LineStyle.line);
+            try {
+              final c = chConfigs[i] as Map<String, dynamic>;
+              _channels[i].visible = c['visible'] as bool? ?? true;
+              _channels[i].decimals = c['decimals'] as int? ?? 3;
+              _channels[i].showYAxis = c['showYAxis'] as bool? ?? true;
+              _channels[i].lineStyle = LineStyle.values.firstWhere(
+                (e) => e.name == c['lineStyle'], orElse: () => LineStyle.line);
+              _channels[i].plotGroupId = c['plotGroupId'] as String? ?? 'default';
+            } catch (e) {
+              debugPrint('Failed to load channel config at index $i: $e');
+            }
+          }
+        }
+        // Load plot groups
+        final groupConfigs = json['plotGroups'] as List?;
+        if (groupConfigs != null && groupConfigs.isNotEmpty) {
+          try {
+            _plotGroups = groupConfigs
+                .map((g) => PlotGroup.fromJson(g as Map<String, dynamic>))
+                .toList();
+            // Ensure 'default' group always exists
+            if (!_plotGroups.any((g) => g.id == 'default')) {
+              _plotGroups.insert(0, PlotGroup(id: 'default', name: 'Default'));
+            }
+          } catch (e) {
+            debugPrint('Failed to load plot groups: $e');
+            _plotGroups = [PlotGroup(id: 'default', name: 'Default')];
           }
         }
         final aaIdx = json['aaLevel'] as int?;
@@ -591,7 +679,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _scrollMinTime = (json['scrollMinTime'] as num?)?.toDouble() ?? 0.0;
         if (mounted) setState(() {});
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to load plot config: $e');
+    }
   }
 
   Future<void> _saveConfig() async {
@@ -601,6 +691,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (!await dir.exists()) await dir.create(recursive: true);
       await file.writeAsString(jsonEncode({
         'channels': _channels.map((ch) => ch.toJson()).toList(),
+        'plotGroups': _plotGroups.map((g) => g.toJson()).toList(),
         'aaLevel': _aaLevel.index,
         'panelWidth': _panelWidth,
         'shareYAxis': _shareYAxis,
@@ -613,12 +704,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final appFile = File('$appData\\VCR\\app_config.json');
       Map<String, dynamic> appConfig = {};
       if (await appFile.exists()) {
-        appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
+        try {
+          appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
+        } catch (e) {
+          debugPrint('Failed to parse app_config.json: $e');
+        }
       }
       appConfig['plotAALevel'] = _aaLevel.index;
       if (!await appFile.parent.exists()) await appFile.parent.create(recursive: true);
       await appFile.writeAsString(jsonEncode(appConfig));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to save plot config: $e');
+    }
   }
 
   void _setAALevel(AntiAliasingLevel level) {
@@ -646,46 +743,62 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _exportCsv() async {
-    final path = await FilePicker.platform.saveFile(
-      dialogTitle: 'Export Waveform Data',
-      fileName: 'waveform_${DateTime.now().millisecondsSinceEpoch}.csv',
-      type: FileType.custom,
-      allowedExtensions: ['csv'],
-    );
-    if (path == null) return;
+    try {
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Export Waveform Data',
+        fileName: 'waveform_${DateTime.now().millisecondsSinceEpoch}.csv',
+        type: FileType.custom,
+        allowedExtensions: ['csv'],
+      );
+      if (path == null) return;
 
-    final visibleChannels = _channels.where((ch) => ch.visible && ch.data.isNotEmpty).toList();
-    if (visibleChannels.isEmpty) return;
+      final visibleChannels = _channels.where((ch) => ch.visible && ch.data.isNotEmpty).toList();
+      if (visibleChannels.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('No visible channels with data to export'), duration: Duration(seconds: 2)),
+          );
+        }
+        return;
+      }
 
-    // Wide format CSV: Time,Ch1,Time,Ch2,Time,Ch3,...
-    // Each channel writes its own X (timestamp) + Y value
-    final sb = StringBuffer();
-    for (int c = 0; c < visibleChannels.length; c++) {
-      if (c > 0) sb.write(',');
-      sb.write('Time,${visibleChannels[c].deviceName} - ${visibleChannels[c].channelName}');
-    }
-    sb.writeln();
-
-    int maxLen = visibleChannels.fold(0, (m, ch) => max(m, ch.data.length));
-    for (int i = 0; i < maxLen; i++) {
+      // Wide format CSV: Time,Ch1,Time,Ch2,Time,Ch3,...
+      // Each channel writes its own X (timestamp) + Y value
+      final sb = StringBuffer();
       for (int c = 0; c < visibleChannels.length; c++) {
         if (c > 0) sb.write(',');
-        final ch = visibleChannels[c];
-        if (i < ch.data.length) {
-          sb.write('${ch.data[i].x.toStringAsFixed(6)},${ch.data[i].y.toStringAsFixed(ch.decimals)}');
-        } else {
-          sb.write(',');
-        }
+        sb.write('Time,${visibleChannels[c].deviceName} - ${visibleChannels[c].channelName}');
       }
       sb.writeln();
-    }
 
-    final file = File(path);
-    await file.writeAsString(sb.toString());
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Exported to $path'), duration: const Duration(seconds: 2)),
-      );
+      int maxLen = visibleChannels.fold(0, (m, ch) => max(m, ch.data.length));
+      for (int i = 0; i < maxLen; i++) {
+        for (int c = 0; c < visibleChannels.length; c++) {
+          if (c > 0) sb.write(',');
+          final ch = visibleChannels[c];
+          if (i < ch.data.length) {
+            sb.write('${ch.data[i].x.toStringAsFixed(6)},${ch.data[i].y.toStringAsFixed(ch.decimals)}');
+          } else {
+            sb.write(',');
+          }
+        }
+        sb.writeln();
+      }
+
+      final file = File(path);
+      await file.writeAsString(sb.toString());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Exported to $path'), duration: const Duration(seconds: 2)),
+        );
+      }
+    } catch (e) {
+      debugPrint('Failed to export CSV: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Export failed: $e'), duration: const Duration(seconds: 3)),
+        );
+      }
     }
   }
 
@@ -757,6 +870,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         deviceName: 'Manual',
         channelName: 'Channel ${idx + 1}',
         color: _channelColors[idx % _channelColors.length],
+        plotGroupId: _plotGroups.isNotEmpty ? _plotGroups.first.id : 'default',
       ));
     });
     _saveConfig();
@@ -767,6 +881,54 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _channels.removeAt(index);
     });
     _saveConfig();
+  }
+
+  // ── Plot Group management ──
+  void _addPlotGroup() {
+    final idx = _plotGroups.length;
+    final id = 'group_$idx';
+    setState(() {
+      _plotGroups.add(PlotGroup(
+        id: id,
+        name: 'Group ${idx + 1}',
+      ));
+    });
+    _saveConfig();
+  }
+
+  void _removePlotGroup(String groupId) {
+    if (groupId == 'default') return; // Can't remove default group
+    setState(() {
+      _plotGroups.removeWhere((g) => g.id == groupId);
+      // Move channels from removed group to default
+      for (final ch in _channels) {
+        if (ch.plotGroupId == groupId) {
+          ch.plotGroupId = 'default';
+        }
+      }
+    });
+    _saveConfig();
+  }
+
+  void _renamePlotGroup(String groupId, String newName) {
+    setState(() {
+      final g = _plotGroups.firstWhere((g) => g.id == groupId);
+      g.name = newName;
+    });
+    _saveConfig();
+  }
+
+  /// Get list of groups that have at least one visible channel
+  List<PlotGroup> _activeGroups() {
+    final activeGroupIds = <String>{};
+    for (final ch in _channels) {
+      if (ch.visible) {
+        activeGroupIds.add(ch.plotGroupId);
+      }
+    }
+    // Always include groups that exist, even if no visible channels
+    // (so user can see empty groups they created)
+    return _plotGroups.where((g) => activeGroupIds.contains(g.id) || g.id == 'default').toList();
   }
 
   // ── Scroll mode settings dialog ──
@@ -980,6 +1142,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             onPressed: _showChannelConfig,
             tooltip: 'Channel Config',
           ),
+          // Add Plot Group
+          IconButton(
+            icon: const Icon(Icons.dashboard_customize),
+            onPressed: () => _showPlotGroupManager(),
+            tooltip: 'Plot Groups',
+          ),
           // Anti-aliasing level toggle
           PopupMenuButton<AntiAliasingLevel>(
             icon: Icon(
@@ -1063,6 +1231,74 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildPlotArea() {
+    final activeGroups = _activeGroups();
+    // If only 1 active group with all channels → single plot (original behavior)
+    if (activeGroups.length <= 1) {
+      return _buildSinglePlotArea(_channels);
+    }
+
+    // Multiple groups → vertically stacked plots
+    final totalRatio = activeGroups.fold(0.0, (sum, g) => sum + g.heightRatio);
+    return Container(
+      color: const Color(0xFF0A0E14),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final totalHeight = constraints.maxHeight;
+          return Column(
+            children: activeGroups.asMap().entries.map((entry) {
+              final idx = entry.key;
+              final group = entry.value;
+              final groupChannels = _channels.where((ch) => ch.plotGroupId == group.id).toList();
+              final height = (totalHeight * group.heightRatio / totalRatio);
+              final isLast = idx == activeGroups.length - 1;
+              return SizedBox(
+                height: height,
+                child: Column(
+                  children: [
+                    // Group label bar
+                    Container(
+                      height: 20,
+                      color: const Color(0xFF161B22),
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Row(
+                        children: [
+                          Text(
+                            group.name,
+                            style: const TextStyle(
+                              color: Color(0xFF8B949E),
+                              fontSize: 10,
+                              fontFamily: 'Consolas, monospace',
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            '${groupChannels.where((c) => c.visible).length} ch',
+                            style: const TextStyle(
+                              color: Color(0xFF8B949E),
+                              fontSize: 9,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // The actual plot for this group
+                    Expanded(
+                      child: _buildSinglePlotArea(groupChannels, groupId: group.id),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Build a single plot area for the given list of channels.
+  /// This is the original _buildPlotArea logic, now parameterized.
+  Widget _buildSinglePlotArea(List<PlotChannel> channels, {String groupId = 'default'}) {
+    final isSingleGroup = _activeGroups().length <= 1;
     return Container(
       color: const Color(0xFF0A0E14),
       child: LayoutBuilder(
@@ -1093,8 +1329,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 final plotLeft = _plotLeft().toDouble();
                 final plotRight = _plotRight().toDouble();
                 final plotW = w - plotLeft - plotRight;
-                final targetCh = _findYAxisChannelAtX(pos.dx, plotLeft, plotW);
-                if (targetCh >= 0) {
+                final targetCh = _findYAxisChannelAtX(pos.dx, plotLeft, plotW, channels);
+                if (targetCh != null) {
                   setState(() {
                     _fitYAxisForChannel(targetCh);
                   });
@@ -1192,7 +1428,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     final plotLeft = _plotLeft();
                     final plotRight = _plotRight();
                     final plotW = w - plotLeft - plotRight;
-                    final targetCh = _findYAxisChannelAtX(pos.dx, plotLeft, plotW);
+                    final targetCh = _findYAxisChannelAtX(pos.dx, plotLeft, plotW, channels);
                     final nearRightYAxis = plotW > 0 && pos.dx > w - plotRight && _rightSlotCount() > 0;
                     // Zoom factor: scroll up = zoom in (factor < 1), scroll down = zoom out (factor > 1)
                     final factor = dy > 0 ? 1.1 : 0.9;
@@ -1209,16 +1445,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         final clampedRange = range.clamp(_minVisibleRange, maxRange.isFinite && maxRange > 0 ? maxRange : range);
                         _xMin = center - clampedRange / 2;
                         _xMax = center + clampedRange / 2;
-                      } else if (targetCh >= 0 && !_shareYAxis) {
+                      } else if (targetCh != null && !_shareYAxis) {
                         // Per-channel Y zoom (near specific channel's Y axis) — only when NOT sharing Y axis
-                        final ch = _channels[targetCh];
+                        final ch = targetCh!;
                         final chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
                         final chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
                         final center = (chYMin + chYMax) / 2;
                         final range = chYMax - chYMin;
                         ch.yMin = center - range / 2 * factor;
                         ch.yMax = center + range / 2 * factor;
-                      } else if (targetCh >= 0 && _shareYAxis) {
+                      } else if (targetCh != null && _shareYAxis) {
                         // When sharing Y axis, per-channel Y-axis zoom affects global range
                         _autoScaleY = false;
                         final center = (_yMin + _yMax) / 2;
@@ -1247,9 +1483,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 },
                 child: CustomPaint(
                   painter: _PlotPainter(
-                    channels: _channels,
+                    channels: channels,
                     xMin: _xMin, xMax: _xMax,
-                    yMin: _yMin, yMax: _yMax,
+                    yMin: _groupYMin[groupId] ?? _yMin,
+                    yMax: _groupYMax[groupId] ?? _yMax,
                     mousePosition: _mousePosition,
                     fps: _fps,
                     totalPoints: _totalPoints,
@@ -1701,6 +1938,26 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     setState(() {});
                   },
                 ),
+                const SizedBox(height: 8),
+                // Plot Group assignment
+                DropdownButtonFormField<String>(
+                  value: ch.plotGroupId,
+                  decoration: const InputDecoration(
+                    labelText: 'Plot Group',
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  ),
+                  items: _plotGroups.map((g) => DropdownMenuItem(
+                    value: g.id,
+                    child: Text(g.name),
+                  )).toList(),
+                  onChanged: (v) {
+                    if (v != null) {
+                      setDialogState(() => ch.plotGroupId = v);
+                      setState(() {});
+                    }
+                  },
+                ),
               ],
             ),
           ),
@@ -1715,6 +1972,88 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 Navigator.pop(ctx);
               },
               child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPlotGroupManager() {
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: const Text('Plot Groups'),
+          content: SizedBox(
+            width: 400,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // List of existing groups
+                ..._plotGroups.map((group) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(
+                        group.id == 'default' ? Icons.folder_special : Icons.folder,
+                        size: 18,
+                        color: const Color(0xFF8B949E),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: TextField(
+                          controller: TextEditingController(text: group.name)
+                            ..selection = TextSelection.fromPosition(
+                              TextPosition(offset: group.name.length),
+                            ),
+                          style: const TextStyle(fontSize: 13),
+                          decoration: const InputDecoration(
+                            isDense: true,
+                            border: InputBorder.none,
+                            contentPadding: EdgeInsets.symmetric(vertical: 4),
+                          ),
+                          onChanged: (val) => _renamePlotGroup(group.id, val),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${_channels.where((c) => c.plotGroupId == group.id).length} ch',
+                        style: const TextStyle(fontSize: 11, color: Color(0xFF8B949E)),
+                      ),
+                      if (group.id != 'default') ...[
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: const Icon(Icons.close, size: 16),
+                          onPressed: () {
+                            _removePlotGroup(group.id);
+                            setDialogState(() {});
+                          },
+                          tooltip: 'Remove group',
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
+                        ),
+                      ],
+                    ],
+                  ),
+                )),
+                const Divider(),
+                // Add group button
+                TextButton.icon(
+                  onPressed: () {
+                    _addPlotGroup();
+                    setDialogState(() {});
+                  },
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text('Add Group'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Close'),
             ),
           ],
         ),

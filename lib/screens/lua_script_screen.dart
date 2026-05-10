@@ -99,7 +99,7 @@ class _HighlightedTextEditingController extends TextEditingController {
   _HighlightedTextEditingController(String text) : super(text: text);
 
   @override
-  TextSpan buildTextSpan({required BuildContext context, required TextRange buildEditableSpan, TextStyle? style, required bool withComposing}) {
+  TextSpan buildTextSpan({required BuildContext context, TextStyle? style, required bool withComposing}) {
     return TextSpan(style: style?.copyWith(fontFamily: 'monospace', fontSize: 14, height: 1.5, color: const Color(0xFFABB2BF)) ?? const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.5), children: [_LuaSyntaxHighlighter.highlight(text)]);
   }
 }

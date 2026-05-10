@@ -65,18 +65,27 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   }
 
   Future<void> _loadSortOrder() async {
-    final config = await AppConfig.load();
-    final order = config['deviceSortOrder'] as List?;
-    if (order != null) {
-      _deviceSortOrder = order.cast<String>();
+    try {
+      final config = await AppConfig.load();
+      final order = config['deviceSortOrder'] as List?;
+      if (order != null) {
+        _deviceSortOrder = order.cast<String>();
+      }
+    } catch (e) {
+      debugPrint('Failed to load sort order: $e');
     }
   }
 
   Future<void> _loadDevices() async {
-    final devices = listDevices();
-    // Sort: connected first, then by persisted sort order (previously connected), then alphabetical
-    _sortDevices(devices);
-    setState(() => _devices = devices);
+    try {
+      final devices = listDevices();
+      // Sort: connected first, then by persisted sort order (previously connected), then alphabetical
+      _sortDevices(devices);
+      if (mounted) setState(() => _devices = devices);
+    } catch (e) {
+      debugPrint('Failed to load devices: $e');
+      if (mounted) setState(() => _devices = []);
+    }
   }
 
   /// Sort devices: connected first, then previously connected (by sort order), then alphabetically
@@ -114,9 +123,14 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   }
 
   Future<void> _loadProtocols() async {
-    // getSupportedProtocols returns List<String> (protocol labels)
-    final protocols = getSupportedProtocols();
-    setState(() => _protocols = protocols);
+    try {
+      // getSupportedProtocols returns List<String> (protocol labels)
+      final protocols = getSupportedProtocols();
+      if (mounted) setState(() => _protocols = protocols);
+    } catch (e) {
+      debugPrint('Failed to load protocols: $e');
+      if (mounted) setState(() => _protocols = []);
+    }
   }
 
   /// Scan serial ports (sync, ~50ms with cache)
@@ -136,41 +150,50 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         availablePorts: _scanPortsSync(),
         protocols: _protocols,
         onConfirm: (name, connType, address, protocol) async {
-          if (connType == ConnectionType.serial) {
-            final parts = address.split(':');
-            final port = parts[0];
-            final baudRate = parts.length > 1 ? int.tryParse(parts[1]) ?? 9600 : 9600;
-            final dataBits = parts.length > 2 ? _parseDataBits(parts[2]) : DataBits.eight;
-            final stopBits = parts.length > 3 ? _parseStopBits(parts[3]) : StopBits.one;
-            final parity = parts.length > 4 ? _parseParity(parts[4]) : Parity.none;
-            final flowControl = parts.length > 5 ? _parseFlowControl(parts[5]) : FlowControl.none;
-            // 解析硬件流控制设置
-            final dtrEnabled = parts.length > 7 && parts[7] == '1';
-            final rtsEnabled = parts.length > 8 && parts[8] == '1';
-            final breakEnabled = parts.length > 9 && parts[9] == '1';
-            addSerialDevice(
-              name: name,
-              port: port,
-              baudRate: baudRate,
-              protocol: protocol,
-              dataBits: dataBits,
-              stopBits: stopBits,
-              parity: parity,
-              flowControl: flowControl,
-              receiveTimeoutMs: BigInt.from(100),
-              dtrEnabled: dtrEnabled,
-              rtsEnabled: rtsEnabled,
-              breakEnabled: breakEnabled,
-            );
-            saveDevices(); // 持久化新设备
-          } else if (connType == ConnectionType.tcp) {
-            final parts = address.split(':');
-            final host = parts[0];
-            final port = parts.length > 1 ? int.tryParse(parts[1]) ?? 502 : 502;
-            addTcpDevice(name: name, host: host, port: port, protocol: protocol);
-            saveDevices(); // 持久化新设备
+          try {
+            if (connType == ConnectionType.serial) {
+              final parts = address.split(':');
+              final port = parts[0];
+              final baudRate = parts.length > 1 ? int.tryParse(parts[1]) ?? 9600 : 9600;
+              final dataBits = parts.length > 2 ? _parseDataBits(parts[2]) : DataBits.eight;
+              final stopBits = parts.length > 3 ? _parseStopBits(parts[3]) : StopBits.one;
+              final parity = parts.length > 4 ? _parseParity(parts[4]) : Parity.none;
+              final flowControl = parts.length > 5 ? _parseFlowControl(parts[5]) : FlowControl.none;
+              // 解析硬件流控制设置
+              final dtrEnabled = parts.length > 7 && parts[7] == '1';
+              final rtsEnabled = parts.length > 8 && parts[8] == '1';
+              final breakEnabled = parts.length > 9 && parts[9] == '1';
+              addSerialDevice(
+                name: name,
+                port: port,
+                baudRate: baudRate,
+                protocol: protocol,
+                dataBits: dataBits,
+                stopBits: stopBits,
+                parity: parity,
+                flowControl: flowControl,
+                receiveTimeoutMs: BigInt.from(100),
+                dtrEnabled: dtrEnabled,
+                rtsEnabled: rtsEnabled,
+                breakEnabled: breakEnabled,
+              );
+              saveDevices(); // 持久化新设备
+            } else if (connType == ConnectionType.tcp) {
+              final parts = address.split(':');
+              final host = parts[0];
+              final port = parts.length > 1 ? int.tryParse(parts[1]) ?? 502 : 502;
+              addTcpDevice(name: name, host: host, port: port, protocol: protocol);
+              saveDevices(); // 持久化新设备
+            }
+            await _loadDevices();
+          } catch (e) {
+            debugPrint('Failed to add device: $e');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Failed to add device: $e'), backgroundColor: AppTheme.error),
+              );
+            }
           }
-          await _loadDevices();
         },
       ),
     );
@@ -184,21 +207,41 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         protocols: _protocols,
         editDevice: device,
         onConfirm: (name, connType, address, protocol) async {
-          await updateDevice(deviceId: device.id, name: name, address: address, protocol: protocol);
-          saveDevices(); // 持久化更�?          await _loadDevices();
+          try {
+            await updateDevice(deviceId: device.id, name: name, address: address, protocol: protocol);
+            saveDevices(); // 持久化更新
+            await _loadDevices();
+          } catch (e) {
+            debugPrint('Failed to update device: $e');
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Failed to update device: $e'), backgroundColor: AppTheme.error),
+              );
+            }
+          }
         },
       ),
     );
   }
 
   Future<void> _toggleConnect(DeviceInfo device) async {
-    if (device.status == DeviceStatus.connected) {
-      await disconnectDevice(deviceId: device.id);
-    } else {
-      await connectDevice(deviceId: device.id);
+    try {
+      if (device.status == DeviceStatus.connected) {
+        await disconnectDevice(deviceId: device.id);
+      } else {
+        await connectDevice(deviceId: device.id);
+      }
+      await _loadDevices();
+      _saveDeviceState();
+    } catch (e) {
+      debugPrint('Failed to toggle connection for device ${device.id}: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Connection failed: $e'), backgroundColor: AppTheme.error),
+        );
+      }
+      await _loadDevices();
     }
-    await _loadDevices();
-    _saveDeviceState();
   }
 
   // 从列表点击设备 → 直接跳转到 Console 并自动选中该设备
@@ -222,9 +265,19 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   }
 
   Future<void> _removeDevice(String deviceId) async {
-    await removeDevice(deviceId: deviceId);
-    saveDevices(); // 持久化删�?    await _loadDevices();
-    _saveDeviceState();
+    try {
+      await removeDevice(deviceId: deviceId);
+      saveDevices(); // 持久化删除
+      await _loadDevices();
+      _saveDeviceState();
+    } catch (e) {
+      debugPrint('Failed to remove device $deviceId: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to remove device: $e'), backgroundColor: AppTheme.error),
+        );
+      }
+    }
   }
 
   @override

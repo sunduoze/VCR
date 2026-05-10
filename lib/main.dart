@@ -64,11 +64,15 @@ Future<void> _autoReconnectIfNeeded() async {
     // Attempt to reconnect each device (async — does not block UI)
     for (final id in lastConnected) {
       if (id is String) {
-        await connectDevice(deviceId: id);
+        try {
+          await connectDevice(deviceId: id);
+        } catch (e) {
+          debugPrint('Auto-reconnect failed for device $id: $e');
+        }
       }
     }
-  } catch (_) {
-    // Silently ignore errors during auto-reconnect
+  } catch (e) {
+    debugPrint('Error during auto-reconnect: $e');
   }
 }
 

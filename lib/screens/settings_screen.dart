@@ -18,7 +18,9 @@ class AppConfig {
         final content = await file.readAsString();
         return jsonDecode(content) as Map<String, dynamic>;
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to load app config: $e');
+    }
     return {};
   }
 
@@ -30,7 +32,9 @@ class AppConfig {
         await dir.create(recursive: true);
       }
       await file.writeAsString(jsonEncode(config));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Failed to save app config: $e');
+    }
   }
 
   /// Save the IDs of currently connected devices (called on connect/disconnect)

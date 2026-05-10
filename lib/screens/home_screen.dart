@@ -32,10 +32,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadSortOrder() async {
-    final config = await AppConfig.load();
-    final order = config['deviceSortOrder'] as List?;
-    if (order != null) {
-      _deviceSortOrder = order.cast<String>();
+    try {
+      final config = await AppConfig.load();
+      final order = config['deviceSortOrder'] as List?;
+      if (order != null) {
+        _deviceSortOrder = order.cast<String>();
+      }
+    } catch (e) {
+      debugPrint('Failed to load device sort order: $e');
     }
   }
 

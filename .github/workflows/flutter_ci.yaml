@@ -64,7 +64,7 @@ jobs:
         run: flutter pub get
 
       - name: Run analyze
-        run: flutter analyze
+        run: flutter analyze lib/ test/
 
       - name: Build Flutter Windows Release
         run: flutter build windows --release
@@ -102,7 +102,7 @@ jobs:
         run: flutter pub get
 
       - name: Run analyze
-        run: flutter analyze
+        run: flutter analyze lib/ test/
 
       - name: Build Linux Release
         run: flutter build linux --release

@@ -58,7 +58,7 @@ jobs:
       - name: Generate Flutter Rust Bridge code
         run: |
           cargo install flutter_rust_bridge_codegen --version 2.12.0
-          flutter_rust_bridge_codegen generate --config flutter_rust_bridge.yaml
+          flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml
 
       - name: Get Flutter dependencies
         run: flutter pub get
@@ -90,6 +90,22 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Install Rust (${{ env.RUST_VERSION }})
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -97,6 +113,11 @@ jobs:
 
       - name: Enable Linux Desktop
         run: flutter config --enable-linux-desktop
+
+      - name: Generate Flutter Rust Bridge code
+        run: |
+          cargo install flutter_rust_bridge_codegen --version 2.12.0
+          flutter_rust_bridge_codegen generate --config-file flutter_rust_bridge.yaml
 
       - name: Get Flutter dependencies
         run: flutter pub get

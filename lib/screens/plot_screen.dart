@@ -1,4 +1,4 @@
-﻿import 'dart:math';
+import 'dart:math';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
@@ -1450,7 +1450,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         _xMax = center + clampedRange / 2;
                       } else if (targetCh != null && !_shareYAxis) {
                         // Per-channel Y zoom (near specific channel's Y axis) — only when NOT sharing Y axis
-                        final ch = targetCh!;
+                        final ch = targetCh;
                         final chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
                         final chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
                         final center = (chYMin + chYMax) / 2;
@@ -1878,7 +1878,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     setDialogState(() => ch.visible = v);
                     setState(() {});
                   },
-                  activeColor: AppTheme.primary,
+                  activeThumbColor: AppTheme.primary,
                 ),
                 const SizedBox(height: 8),
                 // Channel name
@@ -1907,7 +1907,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     SizedBox(
                       width: 100,
                       child: DropdownButtonFormField<int>(
-                        value: ch.decimals,
+                        initialValue: ch.decimals,
                         decoration: const InputDecoration(
                           labelText: 'Decimals',
                           isDense: true,
@@ -1927,7 +1927,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     SizedBox(
                       width: 130,
                       child: DropdownButtonFormField<LineStyle>(
-                        value: ch.lineStyle,
+                        initialValue: ch.lineStyle,
                         decoration: const InputDecoration(
                           labelText: 'Style',
                           isDense: true,
@@ -1958,7 +1958,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 const SizedBox(height: 8),
                 // Plot Group assignment
                 DropdownButtonFormField<String>(
-                  value: ch.plotGroupId,
+                  initialValue: ch.plotGroupId,
                   decoration: const InputDecoration(
                     labelText: 'Plot Group',
                     isDense: true,
@@ -2131,7 +2131,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                             SizedBox(
                               width: 100,
                               child: DropdownButtonFormField<int>(
-                                value: ch.decimals,
+                                initialValue: ch.decimals,
                                 decoration: const InputDecoration(
                                   labelText: 'Decimals',
                                   isDense: true,
@@ -2150,7 +2150,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                             SizedBox(
                               width: 130,
                               child: DropdownButtonFormField<LineStyle>(
-                                value: ch.lineStyle,
+                                initialValue: ch.lineStyle,
                                 decoration: const InputDecoration(
                                   labelText: 'Style',
                                   isDense: true,

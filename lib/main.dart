@@ -7,7 +7,6 @@ import 'src/rust/api/virtual_api.dart';
 import 'src/rust/api/lua_api.dart';
 import 'app/theme.dart';
 import 'app/routes.dart';
-import 'widgets/main_shell.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

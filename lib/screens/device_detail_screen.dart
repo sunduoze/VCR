@@ -372,7 +372,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     subtitle: const Text('连接断开时自动尝试重连'),
                     value: _autoReconnect,
                     onChanged: (value) => setState(() => _autoReconnect = value),
-                    activeColor: AppTheme.primary,
+                    activeThumbColor: AppTheme.primary,
                   ),
                   _buildConfigField(
                     '超时时间 (ms)',

@@ -8,7 +8,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:gbk_codec/gbk_codec.dart';
-import '../src/rust/frb_generated.dart';
 import '../app/theme.dart';
 import '../src/rust/api/device_api.dart';
 import '../src/rust/api/debug_api.dart';
@@ -1092,7 +1091,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
           child: Row(children: [
             Expanded(
               child: DropdownButtonFormField<String>(
-                value: _selectedDeviceId,
+                initialValue: _selectedDeviceId,
                 hint: const Text('Select Device'),
                 icon: const SizedBox.shrink(),
                 decoration: const InputDecoration(contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8), border: OutlineInputBorder()),
@@ -1248,7 +1247,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
             SizedBox(
               width: 75,
               child: DropdownButtonFormField<String>(
-                value: _cs.sendFormat,
+                initialValue: _cs.sendFormat,
                 icon: const SizedBox.shrink(),
                 decoration: _dropdownDecoration(),
                 items: const [
@@ -1272,7 +1271,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
               SizedBox(
                 width: 75,
                 child: DropdownButtonFormField<String>(
-                  value: _cs.encoding,
+                  initialValue: _cs.encoding,
                   icon: const SizedBox.shrink(),
                   decoration: _dropdownDecoration(),
                   items: const [
@@ -1290,7 +1289,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
             SizedBox(
               width: 100,
               child: DropdownButtonFormField<String>(
-                value: _cs.lineEnding,
+                initialValue: _cs.lineEnding,
                 icon: const SizedBox.shrink(),
                 decoration: _dropdownDecoration(),
                 items: const [

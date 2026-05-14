@@ -767,7 +767,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
               
               // 连接类型（编辑模式下不可更改）
               DropdownButtonFormField<ConnectionType>(
-                value: _connType,
+                initialValue: _connType,
                 decoration: const InputDecoration(labelText: 'Connection Type'),
                 items: const [
                   DropdownMenuItem(value: ConnectionType.serial, child: Text('Serial / COM')),
@@ -779,7 +779,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
               
               // 协议选择
               DropdownButtonFormField<String>(
-                value: _selectedProtocolLabel,
+                initialValue: _selectedProtocolLabel,
                 decoration: const InputDecoration(
                   labelText: 'Protocol',
                   helperText: 'Select communication protocol',
@@ -801,7 +801,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
               // 串口配置
               if (_connType == ConnectionType.serial) ...[
                 DropdownButtonFormField<String>(
-                  value: _selectedPort,
+                  initialValue: _selectedPort,
                   decoration: InputDecoration(
                     labelText: 'Serial Port',
                     suffixIcon: _ports.isEmpty 
@@ -859,7 +859,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<int>(
-                        value: _customBaudRate ? null : _selectedBaudRate,
+                        initialValue: _customBaudRate ? null : _selectedBaudRate,
                         decoration: const InputDecoration(labelText: 'Baud Rate'),
                         items: _baudRateOptions.map((br) => DropdownMenuItem(
                           value: br,
@@ -901,7 +901,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<DataBits>(
-                        value: _selectedDataBits,
+                        initialValue: _selectedDataBits,
                         decoration: const InputDecoration(
                           labelText: 'Data Bits',
                           isDense: true,
@@ -919,7 +919,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: DropdownButtonFormField<StopBits>(
-                        value: _selectedStopBits,
+                        initialValue: _selectedStopBits,
                         decoration: const InputDecoration(
                           labelText: 'Stop Bits',
                           isDense: true,
@@ -939,7 +939,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<Parity>(
-                        value: _selectedParity,
+                        initialValue: _selectedParity,
                         decoration: const InputDecoration(
                           labelText: 'Parity',
                           isDense: true,
@@ -956,7 +956,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                     const SizedBox(width: 8),
                     Expanded(
                       child: DropdownButtonFormField<FlowControl>(
-                        value: _selectedFlowControl,
+                        initialValue: _selectedFlowControl,
                         decoration: const InputDecoration(
                           labelText: 'Flow Control',
                           isDense: true,

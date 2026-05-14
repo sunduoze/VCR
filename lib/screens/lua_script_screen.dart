@@ -109,7 +109,7 @@ class _LineNumberEditor extends StatefulWidget {
   final TextEditingController scriptController;
   final ValueChanged<String> onChanged;
 
-  const _LineNumberEditor({ super.key, required this.scriptController, required this.onChanged });
+  const _LineNumberEditor({ required this.scriptController, required this.onChanged });
 
   @override
   State<_LineNumberEditor> createState() => _LineNumberEditorState();

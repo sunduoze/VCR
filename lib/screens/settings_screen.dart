@@ -120,7 +120,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('Reconnect previously connected devices when app starts'),
                   value: _autoReconnect,
                   onChanged: _saveAutoReconnect,
-                  activeColor: AppTheme.primary,
+                  activeThumbColor: AppTheme.primary,
                 ),
                 const Divider(height: 1),
                 ListTile(
@@ -184,7 +184,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('Save raw data to disk'),
                   value: false,
                   onChanged: (v) {},
-                  activeColor: AppTheme.primary,
+                  activeThumbColor: AppTheme.primary,
                 ),
               ],
             ),
@@ -200,7 +200,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('Industrial dark theme'),
                   value: _darkMode,
                   onChanged: (v) => setState(() => _darkMode = v),
-                  activeColor: AppTheme.primary,
+                  activeThumbColor: AppTheme.primary,
                 ),
                 const Divider(height: 1),
                 ListTile(

@@ -224,26 +224,6 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     );
   }
 
-  Future<void> _toggleConnect(DeviceInfo device) async {
-    try {
-      if (device.status == DeviceStatus.connected) {
-        await disconnectDevice(deviceId: device.id);
-      } else {
-        await connectDevice(deviceId: device.id);
-      }
-      await _loadDevices();
-      _saveDeviceState();
-    } catch (e) {
-      debugPrint('Failed to toggle connection for device ${device.id}: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Connection failed: $e'), backgroundColor: AppTheme.error),
-        );
-      }
-      await _loadDevices();
-    }
-  }
-
   // 从列表点击设备 → 直接跳转到 Console 并自动选中该设备
   void _navigateToConsole(DeviceInfo device) {
     Navigator.pushNamed(
@@ -375,9 +355,9 @@ class _DeviceCard extends StatelessWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
-                        color: Colors.purple.withOpacity(0.2),
+                        color: Colors.purple.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.purple.withOpacity(0.5)),
+                        border: Border.all(color: Colors.purple.withValues(alpha: 0.5)),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -397,7 +377,7 @@ class _DeviceCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                   ],
-                  Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary.withOpacity(0.5)),
+                  Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary.withValues(alpha: 0.5)),
                 ],
               ),
               const SizedBox(height: 12),
@@ -405,9 +385,9 @@ class _DeviceCard extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
-                  color: AppTheme.surfaceLight.withOpacity(0.5),
+                  color: AppTheme.surfaceLight.withValues(alpha: 0.5),
                   borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
+                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
                 ),
                 child: Row(
                   children: [
@@ -456,7 +436,7 @@ class _DeviceCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: AppTheme.error.withOpacity(0.1),
+                    color: AppTheme.error.withValues(alpha: 0.1),
                     borderRadius: BorderRadius.circular(4),
                   ),
                   child: Row(
@@ -558,9 +538,9 @@ class _TypeChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: AppTheme.primary.withOpacity(0.15),
+        color: AppTheme.primary.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: AppTheme.primary.withOpacity(0.3)),
+        border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
       ),
       child: Text(label, style: const TextStyle(color: AppTheme.primary, fontSize: 11, fontWeight: FontWeight.w600)),
     );
@@ -576,9 +556,9 @@ class _ProtocolChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(
-        color: AppTheme.secondary.withOpacity(0.15),
+        color: AppTheme.secondary.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: AppTheme.secondary.withOpacity(0.3)),
+        border: Border.all(color: AppTheme.secondary.withValues(alpha: 0.3)),
       ),
       child: Text(label, style: const TextStyle(color: AppTheme.secondary, fontSize: 11, fontWeight: FontWeight.w600)),
     );
@@ -836,7 +816,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                             decoration: BoxDecoration(
-                              color: Colors.purple.withOpacity(0.2),
+                              color: Colors.purple.withValues(alpha: 0.2),
                               borderRadius: BorderRadius.circular(4),
                             ),
                             child: const Text(

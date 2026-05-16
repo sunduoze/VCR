@@ -243,7 +243,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── Per-group Y ranges (for multi-group mode) ──
   Map<String, double> _groupYMin = {};
   Map<String, double> _groupYMax = {};
-  Map<String, bool> _groupAutoScaleY = {};
 
   // ── Anti-aliasing ──
   AntiAliasingLevel _aaLevel = AntiAliasingLevel.off;
@@ -540,15 +539,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_yMin.isInfinite) { _yMin = -1; _yMax = 1; }
   }
 
-  int _leftYAxisCount() {
-    final total = _channels.where((ch) => ch.visible && ch.showYAxis).length;
-    return (total + 1) ~/ 2; // ceil(total/2)
-  }
-
-  int _rightYAxisCount() {
-    final total = _channels.where((ch) => ch.visible && ch.showYAxis).length;
-    return total ~/ 2; // floor(total/2)
-  }
 
   // Dynamic Y-axis slot layout matching _paintInternal
   // slot 0,2,4... = left, slot 1,3,5... = right
@@ -1249,11 +1239,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final totalHeight = constraints.maxHeight;
           return Column(
             children: activeGroups.asMap().entries.map((entry) {
-              final idx = entry.key;
               final group = entry.value;
               final groupChannels = _channels.where((ch) => ch.plotGroupId == group.id).toList();
               final height = (totalHeight * group.heightRatio / totalRatio);
-              final isLast = idx == activeGroups.length - 1;
               return SizedBox(
                 height: height,
                 child: Column(
@@ -1301,7 +1289,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Build a single plot area for the given list of channels.
   /// This is the original _buildPlotArea logic, now parameterized.
   Widget _buildSinglePlotArea(List<PlotChannel> channels, {String groupId = 'default'}) {
-    final isSingleGroup = _activeGroups().length <= 1;
     return Container(
       color: const Color(0xFF0A0E14),
       child: LayoutBuilder(
@@ -1427,12 +1414,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     final w = constraints.maxWidth;
 
                     final nearXAxis = pos.dy > h - 40;
-                    final plotTop = _plotTop();
                     final plotLeft = _plotLeft();
                     final plotRight = _plotRight();
                     final plotW = w - plotLeft - plotRight;
                     final targetCh = _findYAxisChannelAtX(pos.dx, plotLeft, plotW, channels);
-                    final nearRightYAxis = plotW > 0 && pos.dx > w - plotRight && _rightSlotCount() > 0;
                     // Zoom factor: scroll up = zoom in (factor < 1), scroll down = zoom out (factor > 1)
                     final factor = dy > 0 ? 1.1 : 0.9;
 
@@ -2263,28 +2248,6 @@ class _MinimapPainter extends CustomPainter {
       }
       canvas.drawPath(path, paint);
     }
-  }
-
-  double _calcChannelYMin(List<PlotChannel> chs) {
-    double minVal = double.infinity;
-    for (final ch in chs) {
-      if (!ch.visible || ch.data.isEmpty) continue;
-      for (final pt in ch.data) {
-        if (pt.y < minVal) minVal = pt.y;
-      }
-    }
-    return minVal.isInfinite ? 0.0 : minVal;
-  }
-
-  double _calcChannelYMax(List<PlotChannel> chs) {
-    double maxVal = double.negativeInfinity;
-    for (final ch in chs) {
-      if (!ch.visible || ch.data.isEmpty) continue;
-      for (final pt in ch.data) {
-        if (pt.y > maxVal) maxVal = pt.y;
-      }
-    }
-    return maxVal.isInfinite ? 1.0 : maxVal;
   }
 
   @override

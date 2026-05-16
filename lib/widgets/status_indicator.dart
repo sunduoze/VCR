@@ -30,7 +30,7 @@ class StatusIndicator extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        boxShadow: status == DeviceStatus.connected ? [BoxShadow(color: color.withOpacity(0.5), blurRadius: 6)] : null,
+        boxShadow: status == DeviceStatus.connected ? [BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 6)] : null,
       ),
     );
   }

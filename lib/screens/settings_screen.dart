@@ -65,7 +65,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _samplingRate = 1000;
   int _bufferSize = 4096;
   String _language = 'zh_CN';
-  bool _configLoaded = false;
   int _plotAALevel = 0; // 0=off, 1=2x, 2=4x, 3=8x, 4=16x
 
   @override
@@ -80,7 +79,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _autoReconnect = config['autoReconnect'] as bool? ?? false;
         _plotAALevel = config['plotAALevel'] as int? ?? 0;
-        _configLoaded = true;
       });
     }
   }

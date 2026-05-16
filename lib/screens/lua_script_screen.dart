@@ -16,7 +16,6 @@ class _LuaSyntaxHighlighter {
   ];
   static const _keywordColor = Color(0xFFC678DD);     // purple
   static const _builtinColor = Color(0xFFE5C07B);     // yellow
-  static const _stringColor  = Color(0xFF98C379);     // green
   static const _commentColor = Color(0xFF5C6370);     // gray
   static const _numberColor  = Color(0xFFD19A66);     // orange
 

@@ -180,10 +180,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
   // HEX formatter
   static final _hexFormatter = FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Fa-f ]'));
 
-  static String get _appConfigPath {
-    final appData = Platform.environment['APPDATA'] ?? '';
-    return '$appData\\VCR\\app_config.json';
-  }
 
   static String get _configPath {
     final appData = Platform.environment['APPDATA'] ?? '';
@@ -202,29 +198,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
 
   // ── Convenience getters (forwarded to current device state) ──
   bool get _connected       => _cs.connected;
-  bool get _isSerialDevice  => _cs.isSerialDevice;
-  bool get _dtrEnabled      => _cs.dtrEnabled;
-  bool get _rtsEnabled      => _cs.rtsEnabled;
-  bool get _breakEnabled    => _cs.breakEnabled;
-  int  get _txBytes         => _cs.txBytes;
-  int  get _rxBytes         => _cs.rxBytes;
-  int  get _txPackets       => _cs.txPackets;
-  int  get _rxPackets       => _cs.rxPackets;
-  double get _txRate        => _cs.txRate;
-  double get _rxRate        => _cs.rxRate;
-  int  get _bufferSize      => _cs.bufferSize;
-  List<String> get _commandHistory => _cs.commandHistory;
-  bool get _showTimestamp   => _cs.showTimestamp;
-  bool get _showHex         => _cs.showHex;
-  bool get _showTx          => _cs.showTx;
-  bool get _showRx          => _cs.showRx;
-  bool get _autoScroll      => _cs.autoScroll;
-  String get _sendFormat    => _cs.sendFormat;
-  String get _lineEnding    => _cs.lineEnding;
-  String get _encoding      => _cs.encoding;
-  bool get _continuousSending    => _cs.continuousSending;
-  int  get _continuousSendCount  => _cs.continuousSendCount;
-  int  get _continuousSendTarget => _cs.continuousSendTarget;
 
   @override
   void initState() {
@@ -256,7 +229,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
     // Sync all devices' connection/isSerial state from Rust
     _syncDeviceStates();
     
-    _initialLoadComplete = true;
     if (mounted) setState(() {});
   }
 
@@ -846,10 +818,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
     _refreshLog();
   }
 
-  void _doSendBytes(List<int> bytes) {
-    if (_selectedDeviceId == null) return;
-    debugSendBytes(deviceId: _selectedDeviceId!, data: bytes);
-  }
 
   void _send() => _doSend();
 
@@ -1040,8 +1008,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen> with WidgetsBin
     ));
   }
 
-  // ── Flag to track if initial config load is complete ──
-  bool _initialLoadComplete = false;
 
   // ── Build ──
   @override

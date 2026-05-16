@@ -106,6 +106,23 @@ void plotPushCsvCounter({
 double plotGetTimestampMs() =>
     RustLib.instance.api.crateApiPlotApiPlotGetTimestampMs();
 
+/// 获取通道视口数据：裁剪 + 降采样
+/// 只返回 [x_min, x_max] 范围内的数据，最多 max_points 个点。
+/// 使用 min/max 降采样确保波形轮廓完整，首尾点始终保留。
+List<PlotPoint> plotGetChannelViewportData({
+  required String deviceId,
+  required String channel,
+  required double xMin,
+  required double xMax,
+  required int maxPoints,
+}) => RustLib.instance.api.crateApiPlotApiPlotGetChannelViewportData(
+  deviceId: deviceId,
+  channel: channel,
+  xMin: xMin,
+  xMax: xMax,
+  maxPoints: maxPoints,
+);
+
 /// 数据点（FRB 兼容）
 class PlotPoint {
   final double timestampMs;

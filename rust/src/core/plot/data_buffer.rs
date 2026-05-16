@@ -111,6 +111,7 @@ impl PlotDataManager {
 
     /// 注册设备
     pub fn register_device(&self, device_id: &str, channels: &[&str]) {
+        log::info!("[PlotBuffer] register_device: device={}, channels={:?}", device_id, channels);
         let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
         let mut device_channels = HashMap::new();
         for ch in channels {
@@ -124,6 +125,7 @@ impl PlotDataManager {
 
     /// 注销设备
     pub fn unregister_device(&self, device_id: &str) {
+        log::info!("[PlotBuffer] unregister_device: device={}", device_id);
         let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
         devices.remove(device_id);
     }
@@ -139,6 +141,7 @@ impl PlotDataManager {
             }
         };
         if needs_create {
+            log::info!("[PlotBuffer] auto-create channel: device={}, ch={}", device_id, channel);
             let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
             devices
                 .entry(device_id.to_string())
@@ -260,15 +263,131 @@ impl PlotDataManager {
         }
     }
 
-    /// 获取设备通道数据
+    /// 获取通道数据（全量）
     pub fn get_channel_data(&self, device_id: &str, channel: &str) -> Vec<DataPoint> {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
         if let Some(device_channels) = devices.get(device_id) {
             if let Some(buffer) = device_channels.get(channel) {
-                return lock_mutex(&buffer).get_all();
+                let data = lock_mutex(&buffer).get_all();
+                log::debug!("[PlotBuffer] get_channel_data: device={}, ch={}, len={}", device_id, channel, data.len());
+                return data;
             }
         }
+        log::warn!("[PlotBuffer] get_channel_data: device={}, ch={} -> NOT FOUND", device_id, channel);
         vec![]
+    }
+
+    /// 获取通道数据：视口裁剪 + min/max 降采样
+    /// 返回在 [x_min, x_max] 范围内的数据，最多 max_points 个点。
+    /// 使用 min/max 降采样：每个桶保留极值点，确保波形轮廓完整。
+    /// 首尾数据点始终保留，防止边界空白。
+    pub fn get_channel_viewport_data(
+        &self,
+        device_id: &str,
+        channel: &str,
+        x_min: f64,
+        x_max: f64,
+        max_points: usize,
+    ) -> Vec<DataPoint> {
+        if max_points == 0 {
+            return vec![];
+        }
+
+        let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
+        let all_data = if let Some(device_channels) = devices.get(device_id) {
+            if let Some(buffer) = device_channels.get(channel) {
+                let data = lock_mutex(&buffer).get_all();
+                log::debug!("[PlotBuffer] get_channel_viewport_data: device={}, ch={}, total={}, x=[{:.1},{:.1}], max={}",
+                    device_id, channel, data.len(), x_min, x_max, max_points);
+                data
+            } else {
+                log::warn!("[PlotBuffer] get_channel_viewport_data: channel '{}' not found for device '{}'", channel, device_id);
+                return vec![];
+            }
+        } else {
+            log::warn!("[PlotBuffer] get_channel_viewport_data: device '{}' not found", device_id);
+            return vec![];
+        };
+
+        if all_data.is_empty() {
+            return vec![];
+        }
+
+        // Step 1: Binary search for viewport range
+        let margin = (x_max - x_min) * 0.01;
+        let search_min = x_min - margin;
+        let search_max = x_max + margin;
+
+        // Find start index (first point >= search_min)
+        let start_idx = match all_data.binary_search_by(|p| p.timestamp_ms.partial_cmp(&search_min).unwrap()) {
+            Ok(i) => i.saturating_sub(1),
+            Err(i) => i.saturating_sub(1),
+        };
+
+        // Find end index (last point <= search_max)
+        let end_idx = match all_data.binary_search_by(|p| p.timestamp_ms.partial_cmp(&search_max).unwrap()) {
+            Ok(i) => (i + 1).min(all_data.len()),
+            Err(i) => i,
+        };
+
+        let viewport_data = &all_data[start_idx..end_idx];
+        if viewport_data.is_empty() {
+            return vec![];
+        }
+
+        // Step 2: Decimate if needed
+        if viewport_data.len() <= max_points {
+            return viewport_data.to_vec();
+        }
+
+        // Min/max decimation with first/last point preservation
+        let bucket_size = viewport_data.len() as f64 / max_points as f64;
+        let mut result = Vec::with_capacity(max_points * 2 + 2);
+
+        for i in 0..max_points {
+            let start = (i as f64 * bucket_size) as usize;
+            let end = ((i as f64 + 1.0) * bucket_size).ceil() as usize;
+            let end = end.min(viewport_data.len());
+
+            if start >= viewport_data.len() {
+                break;
+            }
+
+            let mut min_pt = viewport_data[start];
+            let mut max_pt = viewport_data[start];
+
+            for j in (start + 1)..end {
+                if viewport_data[j].value < min_pt.value {
+                    min_pt = viewport_data[j];
+                }
+                if viewport_data[j].value > max_pt.value {
+                    max_pt = viewport_data[j];
+                }
+            }
+
+            // Add both min and max in time order for line continuity
+            if min_pt.timestamp_ms <= max_pt.timestamp_ms {
+                result.push(min_pt);
+                if min_pt.timestamp_ms != max_pt.timestamp_ms {
+                    result.push(max_pt);
+                }
+            } else {
+                result.push(max_pt);
+                result.push(min_pt);
+            }
+        }
+
+        // Ensure first and last points are included
+        let first = viewport_data.first().unwrap();
+        let last = viewport_data.last().unwrap();
+        if result.first().map_or(true, |p| p.timestamp_ms != first.timestamp_ms) {
+            result.insert(0, *first);
+        }
+        if result.last().map_or(true, |p| p.timestamp_ms != last.timestamp_ms) {
+            result.push(*last);
+        }
+
+        result
     }
 
     /// 获取设备所有通道数据

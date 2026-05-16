@@ -29,7 +29,7 @@ extension LineStyleLabel on LineStyle {
   }
 }
 
-enum AntiAliasingLevel { off, x2, x4, x8, x16 }
+enum AntiAliasingLevel { off, x2, x4, x8 }
 
 extension AALevelLabel on AntiAliasingLevel {
   String get label {
@@ -38,7 +38,6 @@ extension AALevelLabel on AntiAliasingLevel {
       case AntiAliasingLevel.x2: return '2×';
       case AntiAliasingLevel.x4: return '4×';
       case AntiAliasingLevel.x8: return '8×';
-      case AntiAliasingLevel.x16: return '16×';
     }
   }
 
@@ -48,7 +47,6 @@ extension AALevelLabel on AntiAliasingLevel {
       case AntiAliasingLevel.x2: return 2.0;
       case AntiAliasingLevel.x4: return 4.0;
       case AntiAliasingLevel.x8: return 8.0;
-      case AntiAliasingLevel.x16: return 16.0;
     }
   }
 
@@ -58,7 +56,6 @@ extension AALevelLabel on AntiAliasingLevel {
       case AntiAliasingLevel.x2: return 1;
       case AntiAliasingLevel.x4: return 2;
       case AntiAliasingLevel.x8: return 3;
-      case AntiAliasingLevel.x16: return 4;
     }
   }
 }
@@ -102,7 +99,8 @@ class PlotChannel {
   int decimals;
   bool showYAxis;
   LineStyle lineStyle;
-  List<_DataPoint> data;
+  List<_DataPoint> data; // Full data (for scale/cursor)
+  List<_DataPoint> viewportData; // Decimated viewport data (for painting)
   double currentValue;
   double yMin; // Per-channel Y range
   double yMax;
@@ -121,6 +119,7 @@ class PlotChannel {
     this.showYAxis = true,
     this.lineStyle = LineStyle.line,
     List<_DataPoint>? data,
+    List<_DataPoint>? viewportData,
     this.currentValue = 0.0,
     this.yMin = 0,
     this.yMax = 1,
@@ -128,7 +127,8 @@ class PlotChannel {
     this.yMaxManual = 1,
     this.autoScaleY = true,
     this.plotGroupId = 'default',
-  }) : data = data ?? [];
+  }) : data = data ?? [],
+       viewportData = viewportData ?? [];
 
   Map<String, dynamic> toJson() => {
     'deviceId': deviceId,
@@ -206,6 +206,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _scrollMode = false;         // true = oscilloscope sweep mode
   double _scrollWindowWidth = 100.0;  // visible X range in seconds
   double _scrollMinTime = 0.0;       // left edge of visible window
+  double _screenWidth = 800.0;       // plot area width for viewport decimation
 
   // ── Scrollbar drag state ──
   _ScrollbarDrag _scrollbarDrag = _ScrollbarDrag.none;
@@ -264,6 +265,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     Color(0xFF39D2C0),
     Color(0xFFFF7B72),
     Color(0xFF79C0FF),
+    Color(0xFF56D364),
+    Color(0xFFFFA657),
+    Color(0xFFFFC680),
+    Color(0xFFA5D6FF),
   ];
 
   // ── Config persistence ──
@@ -318,7 +323,57 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         deviceId: 'demo_ch8', deviceName: deviceName, channelName: 'RPM',
         color: _channelColors[7], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
+      // Fourier square wave approximations (5+ terms)
+      PlotChannel(
+        deviceId: 'demo_ch9', deviceName: deviceName, channelName: 'Square_1Hz',
+        color: _channelColors[8], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch10', deviceName: deviceName, channelName: 'Square_3Hz',
+        color: _channelColors[9], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch11', deviceName: deviceName, channelName: 'PWM_2Hz',
+        color: _channelColors[10], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
+      PlotChannel(
+        deviceId: 'demo_ch12', deviceName: deviceName, channelName: 'Step_0.5Hz',
+        color: _channelColors[11], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+      ),
     ];
+  }
+
+  /// Fourier series square wave approximation with n terms
+  /// square(t) ≈ (4/π) Σ sin((2k-1)ωt) / (2k-1), k=1..n
+  static double _fourierSquare(double t, double freq, int terms) {
+    double sum = 0;
+    for (int k = 1; k <= terms; k++) {
+      final n = 2 * k - 1;
+      sum += sin(n * 2 * pi * freq * t) / n;
+    }
+    return (4 / pi) * sum;
+  }
+
+  // Sub-samples per timer tick for smooth curves
+  static const int _demoSubSamples = 10;
+
+  double _demoEval(int channel, double t, double noise) {
+    switch (channel) {
+      case 0: return 3.3 * sin(2 * pi * 0.5 * t) + 0.3 * sin(2 * pi * 5.1 * t) + 0.15 * sin(2 * pi * 13.7 * t) + noise;
+      case 1: return 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + 0.2 * sin(2 * pi * 4.3 * t) + 0.1 * cos(2 * pi * 11.1 * t) + noise;
+      case 2: return 3.3 * sin(2 * pi * 0.5 * t) * 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + 0.4 * sin(2 * pi * 7.7 * t) + noise;
+      case 3: return 25.0 + 10.0 * sin(2 * pi * 0.1 * t) + 3.0 * sin(2 * pi * 1.3 * t) + 1.5 * sin(2 * pi * 6.3 * t) + 0.8 * cos(2 * pi * 15.1 * t) + noise;
+      case 4: return 101.3 + 5.0 * sin(2 * pi * 0.07 * t + pi / 3) + 2.0 * cos(2 * pi * 0.8 * t) + 0.8 * sin(2 * pi * 4.7 * t) + noise;
+      case 5: return 5.0 + 2.0 * sin(2 * pi * 0.2 * t) + 1.0 * sin(2 * pi * 1.5 * t + pi / 6) + 0.5 * sin(2 * pi * 8.9 * t) + noise;
+      case 6: return 50.0 * sin(2 * pi * 0.15 * t) + 20.0 * cos(2 * pi * 0.9 * t) + 8.0 * sin(2 * pi * 3.7 * t) + 3.0 * cos(2 * pi * 9.3 * t) + noise;
+      case 7: return 3000.0 + 1500.0 * sin(2 * pi * 0.25 * t + pi / 2) + 500.0 * sin(2 * pi * 2.0 * t) + 200.0 * sin(2 * pi * 8.5 * t) + noise * 100;
+      // Fourier square wave approximations
+      case 8: return 3.3 * _fourierSquare(t, 1.0, 7) + noise;
+      case 9: return 2.0 * _fourierSquare(t, 3.0, 7) + noise;
+      case 10: return 1.0 + 0.8 * _fourierSquare(t, 2.0, 5) + noise;
+      case 11: return 5.0 * _fourierSquare(t, 0.5, 9) + noise;
+      default: return sin(t) + noise;
+    }
   }
 
   // 帧率控制：防止setState调用过于频繁
@@ -326,36 +381,28 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   
   void _startDemoData() {
     _demoTimer?.cancel();
-    _demoTimer = Timer.periodic(const Duration(milliseconds: 16), (_) {  // 降低到约60fps (16ms)
+    final dt = 0.008 / _demoSubSamples; // sub-sample interval
+    _demoTimer = Timer.periodic(const Duration(milliseconds: 8), (_) {  // ~120fps timer
       if (!mounted || !_isPlaying) return;
-      _demoPhase += 0.016;  // 对应16ms的时间步长
-      final t = _demoPhase;
       
       // 限制UI更新频率：每50ms最多更新一次界面（约20fps）
       final now = DateTime.now();
       final shouldUpdateUI = now.difference(_lastDemoUpdate).inMilliseconds >= 50;
+      final rng = Random();
       
-      // 始终更新数据，但可选是否更新UI
-      for (int i = 0; i < _channels.length; i++) {
-        final rng = Random();
-        final noise = 0.05 * (rng.nextDouble() - 0.5);
-        double val;
-        switch (i) {
-          case 0: val = 3.3 * sin(2 * pi * 0.5 * t) + noise; break;
-          case 1: val = 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
-          case 2: val = 3.3 * sin(2 * pi * 0.5 * t) * 2.0 * sin(2 * pi * 0.3 * t + pi / 4) + noise; break;
-          case 3: val = 25.0 + 10.0 * sin(2 * pi * 0.1 * t) + 3.0 * sin(2 * pi * 1.3 * t) + noise; break;
-          case 4: val = 101.3 + 5.0 * sin(2 * pi * 0.07 * t + pi / 3) + 2.0 * cos(2 * pi * 0.8 * t) + noise; break;
-          case 5: val = 5.0 + 2.0 * sin(2 * pi * 0.2 * t) + 1.0 * sin(2 * pi * 1.5 * t + pi / 6) + noise; break;
-          case 6: val = 50.0 * sin(2 * pi * 0.15 * t) + 20.0 * cos(2 * pi * 0.9 * t) + noise; break;
-          case 7: val = 3000.0 + 1500.0 * sin(2 * pi * 0.25 * t + pi / 2) + 500.0 * sin(2 * pi * 2.0 * t) + noise * 100; break;
-          default: val = sin(t) + noise; break;
-        }
-        _channels[i].data.add(_DataPoint(t, val));
-        _channels[i].currentValue = val;
-        // Trim old data to prevent unbounded memory growth
-        if (_channels[i].data.length > _maxPoints * 2) {
-          _channels[i].data = _channels[i].data.sublist(_channels[i].data.length - _maxPoints);
+      // Generate sub-samples per tick for smooth curves
+      for (int s = 0; s < _demoSubSamples; s++) {
+        _demoPhase += dt;
+        final t = _demoPhase;
+        for (int i = 0; i < _channels.length; i++) {
+          final noise = 0.05 * (rng.nextDouble() - 0.5);
+          final val = _demoEval(i, t, noise);
+          _channels[i].data.add(_DataPoint(t, val));
+          _channels[i].currentValue = val;
+          // Trim old data
+          if (_channels[i].data.length > _maxPoints + _maxPoints ~/ 10) {
+            _channels[i].data = _channels[i].data.sublist(_channels[i].data.length - _maxPoints);
+          }
         }
       }
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
@@ -364,7 +411,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         // Oscilloscope mode: auto-scroll window to latest data
         final latestX = _channels.isNotEmpty && _channels.first.data.isNotEmpty
             ? _channels.first.data.last.x
-            : t;
+            : _demoPhase;
         _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
         _xMin = _scrollMinTime;
         _xMax = latestX;
@@ -379,6 +426,32 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         setState(() {});
       }
     });
+  }
+
+  /// Refresh viewportData for all channels using current _xMin/_xMax.
+  /// Called after scrollbar drag, zoom, or any viewport change.
+  void _refreshViewportData() {
+    if (!_useRealData) return; // Demo mode: data lives in Dart, no Rust query needed
+    if (_xMin == _xMax || _screenWidth <= 0) return;
+    final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
+    for (final ch in _channels) {
+      if (!ch.visible) {
+        ch.viewportData = [];
+        continue;
+      }
+      try {
+        final vpPoints = plotGetChannelViewportData(
+          deviceId: ch.deviceId,
+          channel: ch.channelName,
+          xMin: _xMin,
+          xMax: _xMax,
+          maxPoints: maxPts,
+        );
+        ch.viewportData = vpPoints.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+      } catch (_) {
+        ch.viewportData = [];
+      }
+    }
   }
 
   void _startRealData() {
@@ -439,40 +512,65 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           }
           
           // Fetch data for each channel
-          setState(() {
-            final targetChannels = _channels.where((c) => c.deviceId == deviceId).toList();
-            for (final ch in targetChannels) {
-              try {
-                final points = plotGetChannelData(deviceId: deviceId, channel: ch.channelName);
-                ch.data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
-                if (ch.data.isNotEmpty) {
-                  ch.currentValue = ch.data.last.y;
-                }
-                // Trim to max points to prevent unbounded growth
-                if (ch.data.length > _maxPoints * 2) {
-                  ch.data = ch.data.sublist(ch.data.length - _maxPoints);
-                }
-              } catch (e) {
-                debugPrint('Failed to get data for channel ${ch.channelName}: $e');
+          final targetChannels = _channels.where((c) => c.deviceId == deviceId).toList();
+          for (final ch in targetChannels) {
+            try {
+              final points = plotGetChannelData(deviceId: deviceId, channel: ch.channelName);
+              ch.data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+              if (ch.data.isNotEmpty) {
+                ch.currentValue = ch.data.last.y;
               }
+              // Trim to max points gradually to prevent unbounded growth
+              if (ch.data.length > _maxPoints + _maxPoints ~/ 10) {
+                ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+              }
+            } catch (e) {
+              debugPrint('Failed to get data for channel ${ch.channelName}: $e');
             }
-            _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
+          }
+          _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
 
-            if (_scrollMode) {
-              // Auto-scroll window to latest data point
-              double latestX = _scrollMinTime + _scrollWindowWidth;
-              final visibleChs = _channels.where((c) => c.visible && c.data.isNotEmpty).toList();
-              for (final ch in visibleChs) {
-                if (ch.data.last.x > latestX) latestX = ch.data.last.x;
-              }
-              _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
-              _xMin = _scrollMinTime;
-              _xMax = latestX;
-            } else {
-              if (_autoScaleX) _fitXAxis();
-              if (_autoScaleY) _fitYAxis();
+          if (_scrollMode) {
+            double latestX = _scrollMinTime + _scrollWindowWidth;
+            final visibleChs = _channels.where((c) => c.visible && c.data.isNotEmpty).toList();
+            for (final ch in visibleChs) {
+              if (ch.data.last.x > latestX) latestX = ch.data.last.x;
             }
-          });
+            _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
+            _xMin = _scrollMinTime;
+            _xMax = latestX;
+          } else {
+            if (_autoScaleX) _fitXAxis();
+            if (_autoScaleY) _fitYAxis();
+          }
+
+          // Fetch viewport-decimated data via Rust (same setState call)
+          if (_xMin != _xMax && _screenWidth > 0) {
+            final vxMin = _xMin;
+            final vxMax = _xMax;
+            final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
+            for (final ch in targetChannels) {
+              if (!ch.visible) {
+                ch.viewportData = [];
+                continue;
+              }
+              try {
+                final vpPoints = plotGetChannelViewportData(
+                  deviceId: deviceId,
+                  channel: ch.channelName,
+                  xMin: vxMin,
+                  xMax: vxMax,
+                  maxPoints: maxPts,
+                );
+                ch.viewportData = vpPoints.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+              } catch (e) {
+                ch.viewportData = [];
+              }
+            }
+          }
+
+          // Single setState for everything
+          setState(() {});
         }
       } catch (e) {
         debugPrint('Error in real data polling: $e');
@@ -1293,6 +1391,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       color: const Color(0xFF0A0E14),
       child: LayoutBuilder(
         builder: (context, constraints) {
+          // Track plot area width for viewport decimation
+          final plotLeftPx = 50.0; // approximate, matches painter
+          final plotRightPx = 10.0;
+          _screenWidth = (constraints.maxWidth - plotLeftPx - plotRightPx).clamp(100.0, 4000.0);
           return MouseRegion(
             onHover: (details) {
               setState(() => _mousePosition = details.localPosition);
@@ -1398,6 +1500,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     _yMin = _dragStartYMin + dy / h * yRange;
                     _yMax = _dragStartYMax + dy / h * yRange;
                   }
+                  _refreshViewportData();
                 });
               },
               onPanEnd: (_) {
@@ -1602,7 +1705,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       } else {
                         _autoScaleX = false;
                       }
-                      setState(() {});
+                      setState(() => _refreshViewportData());
                     },
                     onHorizontalDragEnd: (d) {
                       _scrollbarDrag = _ScrollbarDrag.none;
@@ -1645,7 +1748,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         } else {
                           _autoScaleX = false;
                         }
-                        setState(() {});
+                        setState(() => _refreshViewportData());
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;
@@ -1691,7 +1794,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         } else {
                           _autoScaleX = false;
                         }
-                        setState(() {});
+                        setState(() => _refreshViewportData());
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;
@@ -2316,7 +2419,9 @@ class _PlotPainter extends CustomPainter {
         // Scale back to logical size WITHOUT stretching — just downsample.
         final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
         final dstRect = Rect.fromLTWH(0, 0, w, h);
-        canvas.drawImageRect(image, srcRect, dstRect, Paint()..filterQuality = FilterQuality.high);
+        canvas.drawImageRect(image, srcRect, dstRect, Paint()
+          ..filterQuality = FilterQuality.medium
+          ..blendMode = BlendMode.srcOver);
         image.dispose();
       } catch (e) {
         // Fallback: draw directly without supersampling
@@ -2575,41 +2680,46 @@ class _PlotPainter extends CustomPainter {
   }
 
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
-    final allData = ch.data;
-    if (allData.isEmpty) return;
+    // Use pre-decimated viewport data from Rust if available, otherwise fall back to full data
+    List<_DataPoint> data;
+    if (ch.viewportData.isNotEmpty) {
+      data = ch.viewportData;
+    } else {
+      final allData = ch.data;
+      if (allData.isEmpty) return;
+
+      // Viewport clip: only pass data points within visible X range + 1 point margin
+      final xRange = xMax - xMin;
+      final margin = xRange * 0.01;
+      int startIdx = 0;
+      int endIdx = allData.length - 1;
+      int lo = 0, hi = allData.length - 1;
+      while (lo < hi) {
+        final mid = (lo + hi) ~/ 2;
+        if (allData[mid].x < xMin - margin) lo = mid + 1; else hi = mid;
+      }
+      startIdx = lo > 0 ? lo - 1 : 0;
+      lo = startIdx; hi = allData.length - 1;
+      while (lo < hi) {
+        final mid = (lo + hi + 1) ~/ 2;
+        if (allData[mid].x > xMax + margin) hi = mid - 1; else lo = mid;
+      }
+      endIdx = lo < allData.length - 1 ? lo + 1 : allData.length - 1;
+      data = allData.sublist(startIdx, endIdx + 1);
+
+      // No decimation for demo mode — data is bounded and viewport-clipped
+      // Decimation loses high-frequency Fourier harmonics, causing jagged appearance
+      // if (data.length > w * 1) {
+      //   data = _decimateDataSmooth(data, w);
+      // }
+    }
+
+    if (data.isEmpty) return;
 
     // Use per-channel Y transform
     double yTransform(double y) {
       if (chYMax == chYMin) return h / 2;
       return h - (y - chYMin) / (chYMax - chYMin) * h;
-    }
-
-    // Viewport clip: only pass data points within visible X range + 1 point margin
-    final xRange = xMax - xMin;
-    final margin = xRange * 0.01; // 1% margin on each side
-    int startIdx = 0;
-    int endIdx = allData.length - 1;
-    // Binary search for start
-    int lo = 0, hi = allData.length - 1;
-    while (lo < hi) {
-      final mid = (lo + hi) ~/ 2;
-      if (allData[mid].x < xMin - margin) lo = mid + 1; else hi = mid;
-    }
-    startIdx = lo > 0 ? lo - 1 : 0; // include 1 point before for line continuity
-    // Binary search for end
-    lo = startIdx; hi = allData.length - 1;
-    while (lo < hi) {
-      final mid = (lo + hi + 1) ~/ 2;
-      if (allData[mid].x > xMax + margin) hi = mid - 1; else lo = mid;
-    }
-    endIdx = lo < allData.length - 1 ? lo + 1 : allData.length - 1; // include 1 point after
-    var data = allData.sublist(startIdx, endIdx + 1);
-
-    // 🚀 性能优化：数据抽取（Decimation）
-    // 当数据点数量超过屏幕像素宽度时，进行抽取以减少渲染点数
-    // 每个像素列最多保留1个点
-    if (data.length > w * 1) {  // 如果数据点数超过屏幕宽度
-      data = _decimateData(data, w, ox, xMin, xMax);
     }
 
     switch (ch.lineStyle) {
@@ -2630,33 +2740,19 @@ class _PlotPainter extends CustomPainter {
 
   // 数据抽取：将大量数据点减少到适合屏幕显示的密度
   // 🚀 性能优化：每个像素bucket只保留1个最有代表性的点
-  List<_DataPoint> _decimateData(List<_DataPoint> data, double w, double ox, double xMinData, double xMaxData) {
-    if (data.length <= w) return data;  // 不需要抽取
-
-    final bucketCount = w.toInt();  // 每个像素一个bucket
-    final bucketSize = data.length ~/ bucketCount;
+  /// Uniform subsampling for smooth demo curves (avoids min/max zigzag artifacts)
+  List<_DataPoint> _decimateDataSmooth(List<_DataPoint> data, double w) {
+    if (data.length <= w) return data;
+    final maxPts = w.toInt();
+    final step = data.length / maxPts;
     final result = <_DataPoint>[];
-    
-    // 每个bucket只保留1个最有代表性的点（波峰或波谷）
-    for (int i = 0; i < bucketCount && i * bucketSize < data.length; i++) {
-      final start = i * bucketSize;
-      final end = (i + 1) * bucketSize;
-      
-      if (start >= data.length) break;
-      
-      // 在bucket中找min和max
-      var minPt = data[start];
-      var maxPt = data[start];
-      
-      for (int j = start + 1; j < end && j < data.length; j++) {
-        if (data[j].y < minPt.y) minPt = data[j];
-        if (data[j].y > maxPt.y) maxPt = data[j];
-      }
-      
-      // 只保留绝对值更大的点（更有视觉代表性）
-      result.add(minPt.y.abs() >= maxPt.y.abs() ? minPt : maxPt);
+    // Always include first and last
+    result.add(data.first);
+    for (int i = 1; i < maxPts; i++) {
+      final idx = (i * step).round().clamp(1, data.length - 2);
+      result.add(data[idx]);
     }
-    
+    result.add(data.last);
     return result;
   }
 
@@ -2666,13 +2762,13 @@ class _PlotPainter extends CustomPainter {
     // 🚀 性能优化：使用Path批量绘制，减少draw call次数
     final paint = Paint()
       ..color = ch.color
-      ..strokeWidth = 2.0 / scale
+      ..strokeWidth = 2.0
       ..strokeCap = StrokeCap.round;
     
     for (final pt in data) {
       final sx = _xToScreen(pt.x, w) + ox;
       final sy = yTransform(pt.y) + oy;
-      canvas.drawCircle(Offset(sx, sy), 1.5 / scale, paint);
+      canvas.drawCircle(Offset(sx, sy), 1.5, paint);
     }
   }
 
@@ -2680,7 +2776,7 @@ class _PlotPainter extends CustomPainter {
     // Draw connecting line first (thinner, dimmer)
     final linePaint = Paint()
       ..color = ch.color.withValues(alpha: 0.5)
-      ..strokeWidth = 1.0 / scale
+      ..strokeWidth = 1.0
       ..style = PaintingStyle.stroke;
 
     final path = Path();
@@ -2700,14 +2796,14 @@ class _PlotPainter extends CustomPainter {
     for (final pt in data) {
       final sx = _xToScreen(pt.x, w) + ox;
       final sy = yTransform(pt.y) + oy;
-      canvas.drawCircle(Offset(sx, sy), 2.5 / scale, dotPaint);
+      canvas.drawCircle(Offset(sx, sy), 2.5, dotPaint);
     }
   }
 
   void _drawLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     final paint = Paint()
       ..color = ch.color
-      ..strokeWidth = 1.5 / scale
+      ..strokeWidth = 1.5
       ..style = PaintingStyle.stroke;
 
     final path = Path();
@@ -2843,7 +2939,8 @@ class _PlotPainter extends CustomPainter {
       if (a.visible != b.visible ||
           a.color != b.color ||
           a.lineStyle != b.lineStyle ||
-          a.data.length != b.data.length) {
+          a.data.length != b.data.length ||
+          a.viewportData.length != b.viewportData.length) {
         return true;
       }
       // Only need to check last point for new data

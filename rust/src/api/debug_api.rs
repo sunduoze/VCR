@@ -1,4 +1,4 @@
-use crate::core::app_context::{block_on, DEBUG, REGISTRY, RT, SESSIONS};
+use crate::core::app_context::{block_on, DEBUG, init_logger, REGISTRY, RT, SESSIONS};
 use crate::core::session::debug_session::DebugLogEntry;
 use crate::core::transport::TransportError;
 use crate::core::protocol::parse_csv_line;
@@ -21,6 +21,18 @@ fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
 /// 后台接收任务的 join handle，用于断开时取消
 static RECEIVE_TASKS: LazyLock<Mutex<HashMap<String, tokio::task::JoinHandle<()>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+// ============================================================================
+// Logger 初始化
+// ============================================================================
+
+/// Initialize the Rust logger to output to the debug console window.
+/// Called once at app startup.
+#[flutter_rust_bridge::frb(sync)]
+pub fn debug_init_logger() {
+    init_logger();
+    log::info!("[VCR] Logger initialized — debug console active");
+}
 
 // ============================================================================
 // 数据收发

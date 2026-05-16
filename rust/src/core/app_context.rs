@@ -34,6 +34,16 @@ lazy_static::lazy_static! {
     };
 }
 
+/// Initialize env_logger to output to console.
+/// Must be called once at app startup (e.g. from RustLib.init).
+/// After calling this, log::info!/warn!/error! macros will print to the debug console.
+pub fn init_logger() {
+    env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Info)
+        .format_timestamp_millis()
+        .init();
+}
+
 /// Call this to ensure the panic hook is installed.
 /// Safe to call multiple times — the static init runs only once.
 pub fn ensure_panic_hook() {

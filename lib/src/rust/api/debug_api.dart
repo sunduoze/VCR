@@ -9,6 +9,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
 // These functions are ignored because they are not marked as `pub`: `lock_mutex`, `spawn_receive_loop`
 
+/// Initialize the Rust logger to output to the debug console window.
+/// Called once at app startup.
+void debugInitLogger() =>
+    RustLib.instance.api.crateApiDebugApiDebugInitLogger();
+
 bool debugSendBytes({required String deviceId, required List<int> data}) =>
     RustLib.instance.api.crateApiDebugApiDebugSendBytes(
       deviceId: deviceId,

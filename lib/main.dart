@@ -5,12 +5,16 @@ import 'src/rust/frb_generated.dart';
 import 'src/rust/api/device_api.dart';
 import 'src/rust/api/virtual_api.dart';
 import 'src/rust/api/lua_api.dart';
+import 'src/rust/api/debug_api.dart';
 import 'app/theme.dart';
 import 'app/routes.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await RustLib.init();
+
+  // Initialize Rust logger to output to the debug console window
+  debugInitLogger();
 
   // Pre-init Lua engine at startup so the Rust module is fully initialized
   // before any UI access. This avoids lazy_static initialization timing issues

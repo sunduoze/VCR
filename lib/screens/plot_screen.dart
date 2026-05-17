@@ -454,129 +454,128 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
   }
 
+  /// 分离的数据轮询（策略 B: 减少 FRB 调用）
+  /// 后台快速轮询，不触发 UI 更新
+  void _fetchRealData() {
+    if (!_useRealData) return; // Skip in demo mode
+
+    try {
+      final activeDevices = debugGetActiveSessions();
+      if (activeDevices.isEmpty) return;
+
+      for (final deviceId in activeDevices) {
+        // 策略 B: 批量获取所有通道数据，一次 FRB 调用
+        Map<String, List<PlotPoint>> allData;
+        try {
+          allData = plotGetAllChannels(deviceId: deviceId);
+        } catch (e) {
+          continue;
+        }
+        if (allData.isEmpty) continue;
+
+        // Update channels with data
+        for (final entry in allData.entries) {
+          final chName = entry.key;
+          final points = entry.value;
+          // Find or skip channel
+          final chIdx = _channels.indexWhere(
+            (c) => c.deviceId == deviceId && c.channelName == chName,
+          );
+          if (chIdx == -1) {
+            // Auto-add new channel
+            if (!_autoAddChannels) continue;
+            final colorIdx = _channels.length % _channelColors.length;
+            _channels.add(PlotChannel(
+              deviceId: deviceId,
+              deviceName: deviceId,
+              channelName: chName,
+              color: _channelColors[colorIdx],
+              decimals: 3,
+              lineStyle: LineStyle.line,
+              showYAxis: false,
+              plotGroupId: 'default',
+            ));
+            final newIdx = _channels.length - 1;
+            _channels[newIdx].data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+          } else {
+            _channels[chIdx].data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+          }
+          final ch = _channels[chIdx];
+          if (ch.data.isNotEmpty) {
+            ch.currentValue = ch.data.last.y;
+          }
+          // Trim to max points
+          if (ch.data.length > _maxPoints + _maxPoints ~/ 10) {
+            ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+          }
+        }
+      }
+      _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
+    } catch (e) {
+      // Silently ignore - data fetch errors don't affect UI
+    }
+  }
+
+  /// UI 更新节流（策略 A: 分离数据轮询和 UI 更新）
+  /// 每 33ms 更新一次 UI，而非每次数据轮询都更新
+  DateTime _lastUIUpdate = DateTime.now();
+
+  void _updateRealDataUI() {
+    if (!_useRealData || !mounted || !_isPlaying) return;
+
+    // 策略 A: UI 节流，每 33ms（约 30fps）更新一次
+    final now = DateTime.now();
+    if (now.difference(_lastUIUpdate).inMilliseconds < 33) return;
+    _lastUIUpdate = now;
+
+    // Update X axis range
+    if (_scrollMode) {
+      double latestX = _scrollMinTime + _scrollWindowWidth;
+      for (final ch in _channels.where((c) => c.visible && c.data.isNotEmpty)) {
+        if (ch.data.last.x > latestX) latestX = ch.data.last.x;
+      }
+      _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
+      _xMin = _scrollMinTime;
+      _xMax = latestX;
+    } else {
+      if (_autoScaleX) _fitXAxis();
+      if (_autoScaleY) _fitYAxis();
+    }
+
+    // Fetch viewport data for visible channels (only when needed)
+    if (_xMin != _xMax && _screenWidth > 0) {
+      final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
+      for (final ch in _channels.where((c) => c.visible)) {
+        try {
+          final vpPoints = plotGetChannelViewportData(
+            deviceId: ch.deviceId,
+            channel: ch.channelName,
+            xMin: _xMin,
+            xMax: _xMax,
+            maxPoints: maxPts,
+          );
+          ch.viewportData = vpPoints.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+        } catch (_) {
+          ch.viewportData = [];
+        }
+      }
+    }
+
+    setState(() {});
+  }
+
   void _startRealData() {
     _realDataTimer?.cancel();
-    _realDataTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
-      if (!mounted || !_isPlaying) return;
+    _fetchTimer?.cancel();
 
-      try {
-        // Get active sessions from Rust
-        final activeDevices = debugGetActiveSessions();
-        if (activeDevices.isEmpty) return;
-        
-        for (final deviceId in activeDevices) {
-          // Get channel data from Rust plot API
-          List<String> channels;
-          try {
-            channels = plotGetChannels(deviceId: deviceId);
-          } catch (e) {
-            debugPrint('Failed to get channels for device $deviceId: $e');
-            continue;
-          }
-          if (channels.isEmpty) continue;
-          
-          // Ensure channels exist in our list
-          for (final chName in channels) {
-            final existingIdx = _channels.indexWhere(
-              (ch) => ch.deviceId == deviceId && ch.channelName == chName,
-            );
-            if (existingIdx == -1 && _autoAddChannels) {
-              // Add new channel — auto-assign to a per-device group
-              String groupId = 'default';
-              // Check if there's a group for this device
-              final deviceGroupId = 'device_$deviceId';
-              if (_plotGroups.any((g) => g.id == deviceGroupId)) {
-                groupId = deviceGroupId;
-              } else if (_useRealData && activeDevices.length > 1) {
-                // Auto-create a group per device when multiple devices exist
-                setState(() {
-                  _plotGroups.add(PlotGroup(
-                    id: deviceGroupId,
-                    name: deviceId,
-                  ));
-                });
-                groupId = deviceGroupId;
-              }
-              final colorIdx = _channels.length % _channelColors.length;
-              _channels.add(PlotChannel(
-                deviceId: deviceId,
-                deviceName: deviceId,
-                channelName: chName,
-                color: _channelColors[colorIdx],
-                decimals: 3,
-                lineStyle: LineStyle.line,
-                showYAxis: false, // Real Data Mode default: unified Y axis
-                plotGroupId: groupId,
-              ));
-            }
-          }
-          
-          // Fetch data for each channel
-          final targetChannels = _channels.where((c) => c.deviceId == deviceId).toList();
-          for (final ch in targetChannels) {
-            try {
-              final points = plotGetChannelData(deviceId: deviceId, channel: ch.channelName);
-              ch.data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
-              if (ch.data.isNotEmpty) {
-                ch.currentValue = ch.data.last.y;
-              }
-              // Trim to max points gradually to prevent unbounded growth
-              if (ch.data.length > _maxPoints + _maxPoints ~/ 10) {
-                ch.data = ch.data.sublist(ch.data.length - _maxPoints);
-              }
-            } catch (e) {
-              debugPrint('Failed to get data for channel ${ch.channelName}: $e');
-            }
-          }
-          _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
-
-          if (_scrollMode) {
-            double latestX = _scrollMinTime + _scrollWindowWidth;
-            final visibleChs = _channels.where((c) => c.visible && c.data.isNotEmpty).toList();
-            for (final ch in visibleChs) {
-              if (ch.data.last.x > latestX) latestX = ch.data.last.x;
-            }
-            _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
-            _xMin = _scrollMinTime;
-            _xMax = latestX;
-          } else {
-            if (_autoScaleX) _fitXAxis();
-            if (_autoScaleY) _fitYAxis();
-          }
-
-          // Fetch viewport-decimated data via Rust (same setState call)
-          if (_xMin != _xMax && _screenWidth > 0) {
-            final vxMin = _xMin;
-            final vxMax = _xMax;
-            final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
-            for (final ch in targetChannels) {
-              if (!ch.visible) {
-                ch.viewportData = [];
-                continue;
-              }
-              try {
-                final vpPoints = plotGetChannelViewportData(
-                  deviceId: deviceId,
-                  channel: ch.channelName,
-                  xMin: vxMin,
-                  xMax: vxMax,
-                  maxPoints: maxPts,
-                );
-                ch.viewportData = vpPoints.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
-              } catch (e) {
-                ch.viewportData = [];
-              }
-            }
-          }
-
-          // Single setState for everything
-          setState(() {});
-        }
-      } catch (e) {
-        debugPrint('Error in real data polling: $e');
-      }
-    });
+    // 策略 A: 两个分离的定时器
+    // 1. 数据轮询：快速（20ms），只获取数据，不更新 UI
+    _fetchTimer = Timer.periodic(const Duration(milliseconds: 20), (_) => _fetchRealData());
+    // 2. UI 更新：较慢（通过_updateRealDataUI 节流到 ~30fps）
+    _realDataTimer = Timer.periodic(const Duration(milliseconds: 16), (_) => _updateRealDataUI());
   }
+
+  Timer? _fetchTimer; // Separate from _realDataTimer
 
   void _toggleDataSource() {
     setState(() {
@@ -587,6 +586,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _startRealData();
       } else {
         _realDataTimer?.cancel();
+        _fetchTimer?.cancel();
         _channels.clear();
         _initDemoChannels();
         _startDemoData();
@@ -714,6 +714,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker.dispose();
     _demoTimer?.cancel();
     _realDataTimer?.cancel();
+    _fetchTimer?.cancel();
     super.dispose();
   }
 

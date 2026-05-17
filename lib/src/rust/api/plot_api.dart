@@ -36,8 +36,6 @@ void plotPushData({
 );
 
 /// 批量添加数据点（从协议解析）
-/// channels: 通道名称列表
-/// values: 对应通道的值
 void plotPushBatch({
   required String deviceId,
   required List<String> channels,
@@ -107,8 +105,6 @@ double plotGetTimestampMs() =>
     RustLib.instance.api.crateApiPlotApiPlotGetTimestampMs();
 
 /// 获取通道视口数据：裁剪 + 降采样
-/// 只返回 [x_min, x_max] 范围内的数据，最多 max_points 个点。
-/// 使用 min/max 降采样确保波形轮廓完整，首尾点始终保留。
 List<PlotPoint> plotGetChannelViewportData({
   required String deviceId,
   required String channel,

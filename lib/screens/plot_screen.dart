@@ -458,6 +458,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// 后台快速轮询，不触发 UI 更新
   void _fetchRealData() {
     if (!_useRealData) return; // Skip in demo mode
+    if (!_isPlaying) return; // Pause: stop data fetching
 
     try {
       final activeDevices = debugGetActiveSessions();
@@ -555,6 +556,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             maxPoints: maxPts,
           );
           ch.viewportData = vpPoints.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+          // 调试：打印所有通道的viewportData与data对比
+          debugPrint('[DEBUG] ${ch.channelName}: vpLen=${vpPoints.length} dataLen=${ch.data.length}');
+          if (vpPoints.isNotEmpty && ch.data.isNotEmpty) {
+            debugPrint('[DEBUG]   vpLast=(${vpPoints.last.timestampMs},${vpPoints.last.value}) dataLast=(${ch.data.last.x},${ch.data.last.y})');
+          }
         } catch (_) {
           ch.viewportData = [];
         }
@@ -1188,7 +1194,19 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 size: 20,
               ),
             ),
-            onPressed: () => setState(() => _isPlaying = !_isPlaying),
+            onPressed: () {
+            setState(() {
+              _isPlaying = !_isPlaying;
+            });
+            if (!_isPlaying) {
+              // Pause: cancel timers to stop all updates
+              _fetchTimer?.cancel();
+              _realDataTimer?.cancel();
+            } else if (_useRealData) {
+              // Resume: restart timers
+              _startRealData();
+            }
+          },
             tooltip: _isPlaying ? 'Pause Display' : 'Resume Display',
           ),
           // Export
@@ -2506,7 +2524,7 @@ class _PlotPainter extends CustomPainter {
 
     // ── Per-channel Y axis labels ──
     // If multiple channels show Y-axis, render them on alternating sides with their color
-    if (yAxisChannels.length <= 1) {
+    if (yAxisChannels.length == 1) {
       // Single Y-axis: render on left side as before, use global range
       for (final tick in yTicks) {
         final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
@@ -2741,23 +2759,7 @@ class _PlotPainter extends CustomPainter {
 
   // 数据抽取：将大量数据点减少到适合屏幕显示的密度
   // 🚀 性能优化：每个像素bucket只保留1个最有代表性的点
-  /// Uniform subsampling for smooth demo curves (avoids min/max zigzag artifacts)
-  List<_DataPoint> _decimateDataSmooth(List<_DataPoint> data, double w) {
-    if (data.length <= w) return data;
-    final maxPts = w.toInt();
-    final step = data.length / maxPts;
-    final result = <_DataPoint>[];
-    // Always include first and last
-    result.add(data.first);
-    for (int i = 1; i < maxPts; i++) {
-      final idx = (i * step).round().clamp(1, data.length - 2);
-      result.add(data[idx]);
-    }
-    result.add(data.last);
-    return result;
-  }
-
-  void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
+void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     if (data.isEmpty) return;
     
     // 🚀 性能优化：使用Path批量绘制，减少draw call次数

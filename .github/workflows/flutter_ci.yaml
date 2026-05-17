@@ -151,6 +151,8 @@ jobs:
     needs: [build-windows]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     
     steps:
       - name: Checkout code
@@ -162,11 +164,25 @@ jobs:
           name: vcr-windows-release
           path: artifacts/windows
 
+      - name: Prepare Release Assets
+        run: |
+          # 列出下载的产物，确认结构
+          echo "=== Windows artifact contents ==="
+          find artifacts/windows -type f | head -50
+          
+          # 将产物打包成 zip，方便作为 release asset 上传
+          cd artifacts/windows
+          zip -r ../vcr-windows-release.zip . -x "*.pdb"
+          cd ../..
+          
+          echo "=== vcr-windows-release.zip size ==="
+          ls -lh artifacts/vcr-windows-release.zip
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/windows/**
+            artifacts/vcr-windows-release.zip
           draft: false
           prerelease: false
           generate_release_notes: true

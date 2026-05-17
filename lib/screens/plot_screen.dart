@@ -498,16 +498,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             ));
             final newIdx = _channels.length - 1;
             _channels[newIdx].data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+            if (points.isNotEmpty) {
+              _channels[newIdx].currentValue = points.last.value;
+            }
+            // Trim to max points
+            if (_channels[newIdx].data.length > _maxPoints + _maxPoints ~/ 10) {
+              _channels[newIdx].data = _channels[newIdx].data.sublist(_channels[newIdx].data.length - _maxPoints);
+            }
           } else {
             _channels[chIdx].data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
-          }
-          final ch = _channels[chIdx];
-          if (ch.data.isNotEmpty) {
-            ch.currentValue = ch.data.last.y;
-          }
-          // Trim to max points
-          if (ch.data.length > _maxPoints + _maxPoints ~/ 10) {
-            ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+            if (_channels[chIdx].data.isNotEmpty) {
+              _channels[chIdx].currentValue = _channels[chIdx].data.last.y;
+            }
+            // Trim to max points
+            if (_channels[chIdx].data.length > _maxPoints + _maxPoints ~/ 10) {
+              _channels[chIdx].data = _channels[chIdx].data.sublist(_channels[chIdx].data.length - _maxPoints);
+            }
           }
         }
       }

@@ -581,10 +581,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _fetchTimer?.cancel();
 
     // 策略 A: 两个分离的定时器
-    // 1. 数据轮询：快速（20ms），只获取数据，不更新 UI
-    _fetchTimer = Timer.periodic(const Duration(milliseconds: 20), (_) => _fetchRealData());
-    // 2. UI 更新：较慢（通过_updateRealDataUI 节流到 ~30fps）
-    _realDataTimer = Timer.periodic(const Duration(milliseconds: 16), (_) => _updateRealDataUI());
+    // 1. 数据轮询：慢速（1000ms），只获取数据，不更新 UI
+    //    低频轮询，避免 Dart 侧对象持续堆积导致 GC 压力随时间恶化
+    _fetchTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) => _fetchRealData());
+    // 2. UI 更新：~30fps（33ms），保证画面流畅
+    _realDataTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _updateRealDataUI());
   }
 
   Timer? _fetchTimer; // Separate from _realDataTimer

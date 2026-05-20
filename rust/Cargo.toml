@@ -8,6 +8,14 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 flutter_rust_bridge = "=2.12.0"
+
+# DirectX 11 rendering
+windows = { version = "0.56", features = [
+  "Win32_Graphics_Direct3D11",
+  "Win32_Graphics_Dxgi",
+  "Win32_Foundation",
+  "Win32_Security",
+] }
 tokio = { version = "1", features = ["full"] }
 tokio-serial = "5.4"
 serialport = "4.6"

@@ -9,13 +9,12 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 flutter_rust_bridge = "=2.12.0"
 
-# DirectX 11 rendering
-windows = { version = "0.56", features = [
-  "Win32_Graphics_Direct3D11",
-  "Win32_Graphics_Dxgi",
-  "Win32_Foundation",
-  "Win32_Security",
-] }
+# GPU 加速渲染 (WebGPU)
+wgpu = "23"
+pollster = "0.3"  # 用于异步运行时（阻塞等待 wgpu 初始化）
+
+# 强制统一 windows crate 版本（解决 wgpu-hal 的依赖冲突）
+windows = "0.58"
 tokio = { version = "1", features = ["full"] }
 tokio-serial = "5.4"
 serialport = "4.6"
@@ -28,11 +27,13 @@ uuid = { version = "1", features = ["v4", "serde"] }
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
 lazy_static = "1.4"
+once_cell = "1.19"
 async-trait = "0.1"
 futures = "0.3"
 rand = "0.8"
 mlua = { version = "0.10", features = ["lua53", "vendored", "serialize", "send"] }
 dirs = "5"
+bytemuck = "1.25.0"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

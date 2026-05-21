@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1716792930;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1948671300;
 
 // Section: executor
 
@@ -727,6 +727,112 @@ fn wire__crate__api__virtual_api__get_virtual_infra_status_impl(
             transform_result_sse::<_, ()>((move || {
                 let output_ok =
                     Result::<_, ()>::Ok(crate::api::virtual_api::get_virtual_infra_status())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__gpu_api__gpu_cleanup_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "gpu_cleanup",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::gpu_api::gpu_cleanup();
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__gpu_api__gpu_init_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "gpu_init",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::gpu_api::gpu_init())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__gpu_api__gpu_render_waveform_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "gpu_render_waveform",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_width = <u32>::sse_decode(&mut deserializer);
+            let api_height = <u32>::sse_decode(&mut deserializer);
+            let api_points = <Vec<f32>>::sse_decode(&mut deserializer);
+            let api_point_count = <u32>::sse_decode(&mut deserializer);
+            let api_r = <u8>::sse_decode(&mut deserializer);
+            let api_g = <u8>::sse_decode(&mut deserializer);
+            let api_b = <u8>::sse_decode(&mut deserializer);
+            let api_a = <u8>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok(crate::api::gpu_api::gpu_render_waveform(
+                    api_width,
+                    api_height,
+                    api_points,
+                    api_point_count,
+                    api_r,
+                    api_g,
+                    api_b,
+                    api_a,
+                ))?;
                 Ok(output_ok)
             })())
         },
@@ -2419,6 +2525,13 @@ impl SseDecode for crate::core::device::models::DeviceStatus {
     }
 }
 
+impl SseDecode for f32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        deserializer.cursor.read_f32::<NativeEndian>().unwrap()
+    }
+}
+
 impl SseDecode for f64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2526,6 +2639,18 @@ impl SseDecode for Vec<crate::core::device::models::PortInfo> {
             ans_.push(<crate::core::device::models::PortInfo>::sse_decode(
                 deserializer,
             ));
+        }
+        return ans_;
+    }
+}
+
+impl SseDecode for Vec<f32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = Vec::with_capacity(len_ as usize);
+        for idx_ in 0..len_ {
+            ans_.push(<f32>::sse_decode(deserializer));
         }
         return ans_;
     }
@@ -2766,19 +2891,19 @@ fn pde_ffi_dispatcher_primary_impl(
         17 => {
             wire__crate__api__device_api__disconnect_device_impl(port, ptr, rust_vec_len, data_len)
         }
-        21 => wire__crate__api__lua_api__init_lua_engine_impl(port, ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__device_api__remove_device_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__debug_api__start_receive_loop_if_needed_impl(
+        24 => wire__crate__api__lua_api__init_lua_engine_impl(port, ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__device_api__remove_device_impl(port, ptr, rust_vec_len, data_len),
+        66 => wire__crate__api__debug_api__start_receive_loop_if_needed_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        65 => {
+        68 => {
             wire__crate__api__debug_api__stop_receive_loop_impl(port, ptr, rust_vec_len, data_len)
         }
-        67 => wire__crate__api__lua_api__trigger_callback_impl(port, ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__device_api__update_device_impl(port, ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__lua_api__trigger_callback_impl(port, ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__device_api__update_device_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2822,62 +2947,65 @@ fn pde_ffi_dispatcher_sync_impl(
             rust_vec_len,
             data_len,
         ),
-        22 => wire__crate__api__device_api__is_device_connected_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__virtual_api__is_virtual_serial_running_impl(
+        21 => wire__crate__api__gpu_api__gpu_cleanup_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__gpu_api__gpu_init_impl(ptr, rust_vec_len, data_len),
+        23 => wire__crate__api__gpu_api__gpu_render_waveform_impl(ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__device_api__is_device_connected_impl(ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__virtual_api__is_virtual_serial_running_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        24 => wire__crate__api__device_api__list_devices_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__device_api__load_demo_devices_impl(ptr, rust_vec_len, data_len),
-        26 => {
+        27 => wire__crate__api__device_api__list_devices_impl(ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__device_api__load_demo_devices_impl(ptr, rust_vec_len, data_len),
+        29 => {
             wire__crate__api__device_api__load_persisted_devices_impl(ptr, rust_vec_len, data_len)
         }
-        27 => wire__crate__api__device_api__load_virtual_devices_impl(ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__lua_api__lua_clear_logs_impl(ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__lua_api__lua_delete_script_impl(ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__lua_api__lua_eval_impl(ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__lua_api__lua_execute_script_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__lua_api__lua_get_logs_impl(ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__lua_api__lua_get_scripts_list_impl(ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__lua_api__lua_load_script_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__lua_api__lua_open_scripts_folder_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__lua_api__lua_poll_input_box_impl(ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__lua_api__lua_respond_input_box_impl(ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__lua_api__lua_save_script_impl(ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__lua_api__lua_set_device_id_impl(ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__device_api__parse_csv_batch_impl(ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__device_api__parse_csv_data_impl(ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__plot_api__plot_clear_counter_impl(ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__plot_api__plot_clear_device_impl(ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__plot_api__plot_get_all_channels_impl(ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__plot_api__plot_get_channel_data_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__plot_api__plot_get_channel_viewport_data_impl(
+        30 => wire__crate__api__device_api__load_virtual_devices_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__lua_api__lua_clear_logs_impl(ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__lua_api__lua_delete_script_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__lua_api__lua_eval_impl(ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__lua_api__lua_execute_script_impl(ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__lua_api__lua_get_logs_impl(ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__lua_api__lua_get_scripts_list_impl(ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__lua_api__lua_load_script_impl(ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__lua_api__lua_open_scripts_folder_impl(ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__lua_api__lua_poll_input_box_impl(ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__lua_api__lua_respond_input_box_impl(ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__lua_api__lua_save_script_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__lua_api__lua_set_device_id_impl(ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__device_api__parse_csv_batch_impl(ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__device_api__parse_csv_data_impl(ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__plot_api__plot_clear_counter_impl(ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__plot_api__plot_clear_device_impl(ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__plot_api__plot_get_all_channels_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__plot_api__plot_get_channel_data_impl(ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__plot_api__plot_get_channel_viewport_data_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        47 => wire__crate__api__plot_api__plot_get_channels_impl(ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__plot_api__plot_get_counter_impl(ptr, rust_vec_len, data_len),
-        49 => wire__crate__api__plot_api__plot_get_timestamp_ms_impl(ptr, rust_vec_len, data_len),
-        50 => wire__crate__api__plot_api__plot_push_batch_impl(ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__plot_api__plot_push_csv_impl(ptr, rust_vec_len, data_len),
-        52 => wire__crate__api__plot_api__plot_push_csv_counter_impl(ptr, rust_vec_len, data_len),
-        53 => wire__crate__api__plot_api__plot_push_data_impl(ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__plot_api__plot_register_device_impl(ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__plot_api__plot_unregister_device_impl(ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__device_api__save_devices_impl(ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__device_api__scan_serial_ports_impl(ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__device_api__serial_clear_break_impl(ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__device_api__serial_set_break_impl(ptr, rust_vec_len, data_len),
-        61 => wire__crate__api__device_api__serial_set_dtr_impl(ptr, rust_vec_len, data_len),
-        62 => wire__crate__api__device_api__serial_set_rts_impl(ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__virtual_api__start_virtual_infrastructure_impl(
+        50 => wire__crate__api__plot_api__plot_get_channels_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__plot_api__plot_get_counter_impl(ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__plot_api__plot_get_timestamp_ms_impl(ptr, rust_vec_len, data_len),
+        53 => wire__crate__api__plot_api__plot_push_batch_impl(ptr, rust_vec_len, data_len),
+        54 => wire__crate__api__plot_api__plot_push_csv_impl(ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__plot_api__plot_push_csv_counter_impl(ptr, rust_vec_len, data_len),
+        56 => wire__crate__api__plot_api__plot_push_data_impl(ptr, rust_vec_len, data_len),
+        57 => wire__crate__api__plot_api__plot_register_device_impl(ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__plot_api__plot_unregister_device_impl(ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__device_api__save_devices_impl(ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__device_api__scan_serial_ports_impl(ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__device_api__serial_clear_break_impl(ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__device_api__serial_set_break_impl(ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__device_api__serial_set_dtr_impl(ptr, rust_vec_len, data_len),
+        65 => wire__crate__api__device_api__serial_set_rts_impl(ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__virtual_api__start_virtual_infrastructure_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        66 => wire__crate__api__virtual_api__stop_virtual_infrastructure_impl(
+        69 => wire__crate__api__virtual_api__stop_virtual_infrastructure_impl(
             ptr,
             rust_vec_len,
             data_len,
@@ -3275,6 +3403,13 @@ impl SseEncode for crate::core::device::models::DeviceStatus {
     }
 }
 
+impl SseEncode for f32 {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        serializer.cursor.write_f32::<NativeEndian>(self).unwrap();
+    }
+}
+
 impl SseEncode for f64 {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3369,6 +3504,16 @@ impl SseEncode for Vec<crate::core::device::models::PortInfo> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::core::device::models::PortInfo>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<f32> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <f32>::sse_encode(item, serializer);
         }
     }
 }

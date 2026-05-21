@@ -6,6 +6,7 @@ import '../screens/plot_screen.dart';
 import '../screens/settings_screen.dart';
 import '../screens/debug_console_screen.dart';
 import '../screens/lua_script_screen.dart';
+import '../screens/gpu_test_screen.dart';
 import '../widgets/main_shell.dart';
 
 class AppRoutes {
@@ -16,6 +17,7 @@ class AppRoutes {
   static const String settings = '/settings';
   static const String debugConsole = '/debug';
   static const String luaScript = '/lua';
+  static const String gpuTest = '/gpu-test';
 
   /// 根据路由名称获取导航索引
   static int getNavIndex(String? route) {
@@ -109,6 +111,11 @@ class AppRoutes {
             selectedIndex: navIndex,
             child: const LuaScriptScreen(),
           ),
+        );
+      case gpuTest:
+        return MaterialPageRoute(
+          settings: settings,
+          builder: (_) => const GpuTestScreen(),
         );
       default:
         return MaterialPageRoute(

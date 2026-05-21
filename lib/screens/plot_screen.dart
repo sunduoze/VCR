@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
 import 'dart:ui' as ui;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/gestures.dart';
@@ -11,6 +12,7 @@ import '../app/theme.dart';
 import '../src/rust/api/device_api.dart';
 import '../src/rust/api/debug_api.dart';
 import '../src/rust/api/plot_api.dart';
+import '../src/rust/frb_generated.dart';
 
 // ============================================================================
 // Plot Screen — Oscilloscope-style waveform viewer
@@ -191,7 +193,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Data ──
   List<PlotChannel> _channels = [];
-  final int _maxPoints = 20000;  // 降低最大点数，减少内存占用
+  int _maxPoints = 250000;  // Configurable max points (default 250000, range 1000-500000)
 
   // ── Axis config ──
   bool _autoScaleX = true;
@@ -224,6 +226,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   DateTime _lastFpsTime = DateTime.now();
   int _fpsFrameCount = 0;
 
+  // ── GPU state ──
+  bool _gpuInitialized = false;
+  bool _useGpuAcceleration = true;
+  ui.Image? _gpuWaveformImage;
+  bool _isGpuRendering = false;
+
   // ── Interaction state ──
   Offset? _mousePosition;
   bool _isDragging = false;
@@ -237,6 +245,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Numeric panel ──
   double _panelWidth = 220.0;
+
+  // ── Max points controller ──
+  final _maxPointsController = TextEditingController();
 
   // ── Y axis share ──
   bool _shareYAxis = false; // Each channel uses its own Y range
@@ -285,6 +296,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _initDemoChannels();
     _startDemoData();
     _loadConfig();
+    _initGpu();
+    _maxPointsController.text = _maxPoints.toString();
   }
 
   void _initDemoChannels() {
@@ -573,7 +586,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
     }
 
-    setState(() {});
+    // GPU 𫔰阌缂𰬒缂阌缂
+    if (_useGpuAcceleration && _gpuInitialized) {
+      _renderWaveformOnGpu(); // GPU 缂阌𰬸锅窑𰬒缂阌缂锛𰬸锅窑setState
+    } else {
+      setState(() {}); // CPU 缂阌缂锛𰬸锅窑UI
+    }
   }
 
   void _startRealData() {
@@ -728,6 +746,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _demoTimer?.cancel();
     _realDataTimer?.cancel();
     _fetchTimer?.cancel();
+    // GPU 𫔰阌
+    if (_gpuInitialized) {
+      RustLib.instance.api.crateApiGpuApiGpuCleanup();
+    }
     super.dispose();
   }
 
@@ -780,6 +802,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _scrollMode = json['scrollMode'] as bool? ?? false;
         _scrollWindowWidth = (json['scrollWindowWidth'] as num?)?.toDouble() ?? 10.0;
         _scrollMinTime = (json['scrollMinTime'] as num?)?.toDouble() ?? 0.0;
+        _maxPoints = (json['maxPoints'] as num?)?.toInt() ?? 250000;
         if (mounted) setState(() {});
       }
     } catch (e) {
@@ -801,6 +824,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         'scrollMode': _scrollMode,
         'scrollWindowWidth': _scrollWindowWidth,
         'scrollMinTime': _scrollMinTime,
+        'maxPoints': _maxPoints,
       }));
       // Also sync to app_config.json so settings screen picks it up
       final appData = Platform.environment['APPDATA'] ?? '';
@@ -824,6 +848,76 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _setAALevel(AntiAliasingLevel level) {
     setState(() => _aaLevel = level);
     _saveConfig();
+  }
+
+  // ── GPU Acceleration ──
+  Future<void> _initGpu() async {
+    try {
+      final result = await RustLib.instance.api.crateApiGpuApiGpuInit();
+      setState(() {
+        _gpuInitialized = (result == 0);
+      });
+    } catch (e) {
+      print('GPU init error: $e');
+    }
+  }
+
+  Future<ui.Image> _createImageFromRgba(Uint8List rgbaBytes, int width, int height) {
+    final completer = Completer<ui.Image>();
+    ui.decodeImageFromPixels(
+      rgbaBytes,
+      width,
+      height,
+      ui.PixelFormat.rgba8888,
+      (image) => completer.complete(image),
+    );
+    return completer.future;
+  }
+
+  Future<void> _renderWaveformOnGpu() async {
+    if (!_useGpuAcceleration || !_gpuInitialized || _isGpuRendering) return;
+    if (_channels.isEmpty) return;
+
+    _isGpuRendering = true;
+    try {
+      final points = <double>[];
+      for (final ch in _channels.where((c) => c.visible && c.viewportData.isNotEmpty)) {
+        for (final pt in ch.viewportData) {
+          points.add(pt.x);
+          points.add(pt.y);
+        }
+      }
+
+      if (points.isEmpty) {
+        _isGpuRendering = false;
+        return;
+      }
+
+      final pointCount = points.length ~/ 2;
+      final width = 800;
+      final height = 600;
+
+      final imageData = await RustLib.instance.api.crateApiGpuApiGpuRenderWaveform(
+        width: width,
+        height: height,
+        points: Float32List.fromList(points),
+        pointCount: pointCount,
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 255,
+      );
+
+      final image = await _createImageFromRgba(imageData, width, height);
+
+      setState(() {
+        _gpuWaveformImage = image;
+      });
+    } catch (e) {
+      print('GPU render error: $e');
+    } finally {
+      _isGpuRendering = false;
+    }
   }
 
   // ── CSV Export/Import ──
@@ -1309,7 +1403,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               ),
             ),
           ),
-          // Resize handle
+          // Resize handle (optimized for visibility)
           GestureDetector(
             onHorizontalDragUpdate: (details) {
               setState(() {
@@ -1322,15 +1416,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             child: MouseRegion(
               cursor: SystemMouseCursors.resizeColumn,
               child: Container(
-                width: 6,
-                color: AppTheme.border,
+                width: 8,
+                color: Colors.transparent,
                 child: Center(
                   child: Container(
-                    width: 2,
-                    height: 32,
+                    width: 4,
+                    height: 48,
                     decoration: BoxDecoration(
-                      color: AppTheme.textSecondary.withValues(alpha: 0.4),
-                      borderRadius: BorderRadius.circular(1),
+                      color: AppTheme.primary.withValues(alpha: 0.6),
+                      borderRadius: BorderRadius.circular(2),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.2),
+                          blurRadius: 2,
+                          spreadRadius: 0,
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -1610,6 +1711,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     aaScale: _aaLevel.scale,
                     globalDecimals: _globalDecimals,
                     shareYAxis: _shareYAxis,
+                    gpuWaveformImage: _gpuWaveformImage,
                   ),
                   size: Size.infinite,
                 ),
@@ -1838,6 +1940,34 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   ),
                 ),
               ],
+            ),
+          ),
+          // Max points input box
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 100,
+            height: scrollbarHeight,
+            child: Center(
+              child: TextField(
+                controller: _maxPointsController,
+                onSubmitted: (value) {
+                  final parsed = int.tryParse(value);
+                  if (parsed != null && parsed >= 1000 && parsed <= 500000) {
+                    setState(() {
+                      _maxPoints = parsed;
+                      _maxPointsController.text = parsed.toString();
+                    });
+                    _saveConfig();
+                  }
+                },
+                decoration: const InputDecoration(
+                  labelText: 'Max Pts',
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                ),
+                keyboardType: TextInputType.number,
+                style: const TextStyle(fontSize: 12),
+              ),
             ),
           ),
         ],
@@ -2398,6 +2528,7 @@ class _PlotPainter extends CustomPainter {
   final double aaScale;
   final int globalDecimals;
   final bool shareYAxis; // When true, all channels use global yMin/yMax
+  final ui.Image? gpuWaveformImage; // GPU-accelerated waveform texture (optional)
 
   _PlotPainter({
     required this.channels,
@@ -2409,6 +2540,7 @@ class _PlotPainter extends CustomPainter {
     this.aaScale = 1.0,
     this.globalDecimals = 3,
     this.shareYAxis = false,
+    this.gpuWaveformImage,
   });
 
   double _xToScreen(double x, double w) {
@@ -2425,6 +2557,58 @@ class _PlotPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final w = size.width;
     final h = size.height;
+
+    // ── GPU-accelerated rendering path ──
+    // If we have a GPU-rendered waveform texture, use it directly
+    if (gpuWaveformImage != null) {
+      // Draw background first (matches _paintInternal)
+      canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF0A0E14));
+      
+      // Calculate plot area margins (must match _paintInternal)
+      final yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
+      final leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
+      final rightYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 1).length;
+      final plotLeft = 50.0 + leftYAxes * 45.0;
+      final plotBottom = 40.0;
+      final plotRight = 10.0 + rightYAxes * 45.0;
+      final plotTop = 10.0;
+      final plotW = w - plotLeft - plotRight;
+      final plotH = h - plotTop - plotBottom;
+
+      // Draw plot area background
+      canvas.drawRect(
+        Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
+        Paint()..color = const Color(0xFF0D1117),
+      );
+
+      // Draw GPU waveform image (it already contains grid, waveforms, and axes)
+      final srcRect = Rect.fromLTWH(0, 0, gpuWaveformImage!.width.toDouble(), gpuWaveformImage!.height.toDouble());
+      final dstRect = Rect.fromLTWH(plotLeft, plotTop, plotW, plotH);
+      canvas.drawImageRect(gpuWaveformImage!, srcRect, dstRect, Paint()..filterQuality = FilterQuality.high);
+
+      // Draw border
+      canvas.drawRect(
+        Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
+        Paint()
+          ..color = const Color(0xFF30363D)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1.0,
+      );
+
+      // Draw FPS and point count overlay
+      _drawOverlay(canvas, w, h, fps, totalPoints);
+
+      // Draw crosshair if mouse is in plot area
+      if (mousePosition != null) {
+        final mx = mousePosition!.dx;
+        final my = mousePosition!.dy;
+        if (mx >= plotLeft && mx <= plotLeft + plotW &&
+            my >= plotTop && my <= plotTop + plotH) {
+          _drawCrosshair(canvas, mx, my, plotLeft, plotTop, plotW, plotH, w, h);
+        }
+      }
+      return; // Skip CPU rendering
+    }
 
     // ── Anti-aliasing via supersampling ──
     if (aaScale > 1.0) {
@@ -2930,6 +3114,9 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
   @override
   bool shouldRepaint(covariant _PlotPainter oldDelegate) {
+    // GPU texture changed?
+    if (gpuWaveformImage != oldDelegate.gpuWaveformImage) return true;
+    
     // Only repaint when something actually changed
     if (xMin != oldDelegate.xMin || xMax != oldDelegate.xMax ||
         yMin != oldDelegate.yMin || yMax != oldDelegate.yMax ||
@@ -2963,5 +3150,63 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
       }
     }
     return false;
+  }
+
+  void _drawOverlay(Canvas canvas, double w, double h, int fps, int totalPoints) {
+    // Draw FPS counter (top-right corner)
+    final fpsStyle = TextStyle(
+      color: const Color(0xFF58A6FF),
+      fontSize: 11.0,
+      fontFamily: 'Consolas, monospace',
+    );
+    final fpsText = 'FPS: $fps | Points: $totalPoints';
+    final tp = TextPainter(
+      text: TextSpan(text: fpsText, style: fpsStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(w - tp.width - 8, 8));
+  }
+
+  void _drawCrosshair(Canvas canvas, double mx, double my,
+      double plotLeft, double plotTop, double plotW, double plotH, double w, double h) {
+    final cursorPaint = Paint()
+      ..color = const Color(0x4058A6FF)
+      ..strokeWidth = 0.5;
+
+    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), cursorPaint);
+    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), cursorPaint);
+
+    // Show coordinates
+    final dataX = xMin + (mx - plotLeft) / plotW * (xMax - xMin);
+    final dataY = yMax - (my - plotTop) / plotH * (yMax - yMin);
+
+    // Find max decimals across channels for alignment
+    int maxDecimals = 3;
+    for (final ch in channels) {
+      if (ch.visible && ch.decimals > maxDecimals) maxDecimals = ch.decimals;
+    }
+
+    final coordText = 'X: ${dataX.toStringAsFixed(maxDecimals)}  Y: ${dataY.toStringAsFixed(maxDecimals)}';
+    final tp = TextPainter(
+      text: TextSpan(text: coordText, style: TextStyle(
+        color: const Color(0xFFC9D1D9),
+        fontSize: 11.0,
+        fontFamily: 'Consolas, monospace',
+      )),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    // Position tooltip near cursor but avoid clipping
+    double tx = mx + 10;
+    double ty = my - 20;
+    if (tx + tp.width > w - 10) tx = mx - tp.width - 10;
+    if (ty < 10) ty = my + 20;
+
+    // Background for tooltip
+    canvas.drawRect(
+      Rect.fromLTWH(tx - 4, ty - 2, tp.width + 8, tp.height + 4),
+      Paint()..color = const Color(0xCC0D1117),
+    );
+    tp.paint(canvas, Offset(tx, ty));
   }
 }

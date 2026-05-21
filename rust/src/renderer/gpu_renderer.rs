@@ -229,7 +229,7 @@ impl GpuRenderer {
     
     /// 渲染波形到纹理
     pub fn render_waveform_to_texture(
-        &self,
+        &mut self,
         texture: &Texture,
         width: u32,
         height: u32,
@@ -260,6 +260,9 @@ impl GpuRenderer {
         
         // 3. 上传数据到顶点缓冲区
         queue.write_buffer(&vertex_buffer, 0, bytemuck::cast_slice(&points[0..point_count * 2]));
+        
+        // 4. 存储到 self.vertex_buffer
+        self.vertex_buffer = Some(vertex_buffer);
         
         // 3. 写入颜色到统一缓冲区
         queue.write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&color));

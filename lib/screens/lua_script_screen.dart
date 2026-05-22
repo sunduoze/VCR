@@ -5,19 +5,51 @@ import 'package:vcr/src/rust/api/debug_api.dart';
 // Lua syntax highlighter
 class _LuaSyntaxHighlighter {
   static const _keywords = [
-    'and', 'break', 'do', 'else', 'elseif', 'end', 'false', 'for',
-    'function', 'goto', 'if', 'in', 'local', 'nil', 'not', 'or',
-    'repeat', 'return', 'then', 'true', 'until', 'while',
+    'and',
+    'break',
+    'do',
+    'else',
+    'elseif',
+    'end',
+    'false',
+    'for',
+    'function',
+    'goto',
+    'if',
+    'in',
+    'local',
+    'nil',
+    'not',
+    'or',
+    'repeat',
+    'return',
+    'then',
+    'true',
+    'until',
+    'while',
   ];
   static const _builtins = [
-    'print', 'require', 'ipairs', 'pairs', 'pcall', 'type', 'tostring', 'tonumber',
-    'string', 'table', 'math', 'os', 'debug',
-    'sys', 'api', 'log',
+    'print',
+    'require',
+    'ipairs',
+    'pairs',
+    'pcall',
+    'type',
+    'tostring',
+    'tonumber',
+    'string',
+    'table',
+    'math',
+    'os',
+    'debug',
+    'sys',
+    'api',
+    'log',
   ];
-  static const _keywordColor = Color(0xFFC678DD);     // purple
-  static const _builtinColor = Color(0xFFE5C07B);     // yellow
-  static const _commentColor = Color(0xFF5C6370);     // gray
-  static const _numberColor  = Color(0xFFD19A66);     // orange
+  static const _keywordColor = Color(0xFFC678DD); // purple
+  static const _builtinColor = Color(0xFFE5C07B); // yellow
+  static const _commentColor = Color(0xFF5C6370); // gray
+  static const _numberColor = Color(0xFFD19A66); // orange
 
   static TextSpan highlight(String text) {
     final spans = <TextSpan>[];
@@ -28,12 +60,20 @@ class _LuaSyntaxHighlighter {
 
     void flush([Color? color]) {
       if (buffer.isEmpty) return;
-      spans.add(TextSpan(text: buffer.toString(), style: TextStyle(color: color ?? const Color(0xFFABB2BF))));
+      spans.add(
+        TextSpan(
+          text: buffer.toString(),
+          style: TextStyle(color: color ?? const Color(0xFFABB2BF)),
+        ),
+      );
       buffer.clear();
     }
 
     for (;;) {
-      if (i >= text.length) { flush(); break; }
+      if (i >= text.length) {
+        flush();
+        break;
+      }
       final ch = text[i];
 
       // comment
@@ -41,7 +81,12 @@ class _LuaSyntaxHighlighter {
         flush();
         int start = i;
         while (i < text.length && text[i] != '\n') i++;
-        spans.add(TextSpan(text: text.substring(start, i), style: const TextStyle(color: _commentColor)));
+        spans.add(
+          TextSpan(
+            text: text.substring(start, i),
+            style: const TextStyle(color: _commentColor),
+          ),
+        );
         continue;
       }
 
@@ -57,8 +102,11 @@ class _LuaSyntaxHighlighter {
 
       if (inString) {
         buffer.write(ch);
-        if (ch == '\\' && i + 1 < text.length) { buffer.write(text[++i]); }
-        else if (ch == stringChar) { inString = false; }
+        if (ch == '\\' && i + 1 < text.length) {
+          buffer.write(text[++i]);
+        } else if (ch == stringChar) {
+          inString = false;
+        }
         i++;
         continue;
       }
@@ -67,12 +115,23 @@ class _LuaSyntaxHighlighter {
       if (RegExp(r'[a-zA-Z_]').hasMatch(ch)) {
         flush();
         int start = i;
-        while (i < text.length && RegExp(r'[a-zA-Z0-9_]').hasMatch(text[i])) i++;
+        while (i < text.length && RegExp(r'[a-zA-Z0-9_]').hasMatch(text[i]))
+          i++;
         final word = text.substring(start, i);
         Color? color;
-        if (_keywords.contains(word)) color = _keywordColor;
-        else if (_builtins.contains(word) || word.startsWith('api') || word.startsWith('sys') || word.startsWith('log')) color = _builtinColor;
-        spans.add(TextSpan(text: word, style: TextStyle(color: color ?? const Color(0xFFABB2BF))));
+        if (_keywords.contains(word))
+          color = _keywordColor;
+        else if (_builtins.contains(word) ||
+            word.startsWith('api') ||
+            word.startsWith('sys') ||
+            word.startsWith('log'))
+          color = _builtinColor;
+        spans.add(
+          TextSpan(
+            text: word,
+            style: TextStyle(color: color ?? const Color(0xFFABB2BF)),
+          ),
+        );
         continue;
       }
 
@@ -81,7 +140,12 @@ class _LuaSyntaxHighlighter {
         flush();
         int start = i;
         while (i < text.length && RegExp(r'[0-9.xX]').hasMatch(text[i])) i++;
-        spans.add(TextSpan(text: text.substring(start, i), style: const TextStyle(color: _numberColor)));
+        spans.add(
+          TextSpan(
+            text: text.substring(start, i),
+            style: const TextStyle(color: _numberColor),
+          ),
+        );
         continue;
       }
 
@@ -98,8 +162,22 @@ class _HighlightedTextEditingController extends TextEditingController {
   _HighlightedTextEditingController(String text) : super(text: text);
 
   @override
-  TextSpan buildTextSpan({required BuildContext context, TextStyle? style, required bool withComposing}) {
-    return TextSpan(style: style?.copyWith(fontFamily: 'monospace', fontSize: 14, height: 1.5, color: const Color(0xFFABB2BF)) ?? const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.5), children: [_LuaSyntaxHighlighter.highlight(text)]);
+  TextSpan buildTextSpan({
+    required BuildContext context,
+    TextStyle? style,
+    required bool withComposing,
+  }) {
+    return TextSpan(
+      style:
+          style?.copyWith(
+            fontFamily: 'monospace',
+            fontSize: 14,
+            height: 1.5,
+            color: const Color(0xFFABB2BF),
+          ) ??
+          const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.5),
+      children: [_LuaSyntaxHighlighter.highlight(text)],
+    );
   }
 }
 
@@ -108,7 +186,10 @@ class _LineNumberEditor extends StatefulWidget {
   final TextEditingController scriptController;
   final ValueChanged<String> onChanged;
 
-  const _LineNumberEditor({ required this.scriptController, required this.onChanged });
+  const _LineNumberEditor({
+    required this.scriptController,
+    required this.onChanged,
+  });
 
   @override
   State<_LineNumberEditor> createState() => _LineNumberEditorState();
@@ -122,7 +203,9 @@ class _LineNumberEditorState extends State<_LineNumberEditor> {
   @override
   void initState() {
     super.initState();
-    _controller = _HighlightedTextEditingController(widget.scriptController.text);
+    _controller = _HighlightedTextEditingController(
+      widget.scriptController.text,
+    );
     widget.scriptController.addListener(_onExternalChange);
     _controller.addListener(_onInternalChange);
   }
@@ -131,7 +214,9 @@ class _LineNumberEditorState extends State<_LineNumberEditor> {
     if (_controller.text != widget.scriptController.text) {
       final sel = _controller.selection;
       _controller.text = widget.scriptController.text;
-      if (sel.isValid && sel.start <= _controller.text.length && sel.end <= _controller.text.length) {
+      if (sel.isValid &&
+          sel.start <= _controller.text.length &&
+          sel.end <= _controller.text.length) {
         _controller.selection = sel;
       }
       setState(() {});
@@ -155,12 +240,18 @@ class _LineNumberEditorState extends State<_LineNumberEditor> {
     super.dispose();
   }
 
-  int get _lineCount => _controller.text.isEmpty ? 1 : '\n'.allMatches(_controller.text).length + 1;
+  int get _lineCount => _controller.text.isEmpty
+      ? 1
+      : '\n'.allMatches(_controller.text).length + 1;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: BoxDecoration(color: const Color(0xFF282C34), borderRadius: BorderRadius.circular(4), border: Border.all(color: Colors.grey)),
+      decoration: BoxDecoration(
+        color: const Color(0xFF282C34),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.grey),
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -176,7 +267,17 @@ class _LineNumberEditorState extends State<_LineNumberEditor> {
                   height: 21,
                   child: Align(
                     alignment: Alignment.centerRight,
-                    child: Padding(padding: const EdgeInsets.symmetric(horizontal: 8), child: Text('${idx + 1}', style: const TextStyle(fontFamily: 'monospace', fontSize: 14, color: Color(0xFF5C6370)))),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                      child: Text(
+                        '${idx + 1}',
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 14,
+                          color: Color(0xFF5C6370),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -198,8 +299,17 @@ class _LineNumberEditorState extends State<_LineNumberEditor> {
                 focusNode: _focusNode,
                 maxLines: null,
                 keyboardType: TextInputType.multiline,
-                decoration: const InputDecoration(border: InputBorder.none, isDense: true, contentPadding: EdgeInsets.all(8)),
-                style: const TextStyle(fontFamily: 'monospace', fontSize: 14, height: 1.5, color: Colors.transparent),
+                decoration: const InputDecoration(
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: EdgeInsets.all(8),
+                ),
+                style: const TextStyle(
+                  fontFamily: 'monospace',
+                  fontSize: 14,
+                  height: 1.5,
+                  color: Colors.transparent,
+                ),
                 cursorColor: Colors.white,
               ),
             ),
@@ -297,7 +407,9 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
       final success = luaSetDeviceId(deviceId: deviceId);
       if (success) {
         setState(() {
-          final deviceName = _devices.where((d) => d.$1 == deviceId).fold<String>(deviceId, (prev, d) => d.$2);
+          final deviceName = _devices
+              .where((d) => d.$1 == deviceId)
+              .fold<String>(deviceId, (prev, d) => d.$2);
           _outputController.text += 'Device set to: $deviceName\n';
         });
       } else {
@@ -471,7 +583,6 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
     }
   }
 
-
   // 轮询日志的后台任务
   Future<void> _pollLogs(int durationMs) async {
     const pollInterval = 200; // 每200ms检查一次
@@ -484,7 +595,8 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
         if (logs.isNotEmpty) {
           setState(() {
             for (final log in logs) {
-              final withTimestamp = '[${DateTime.now().toString().substring(11, 19)}] $log';
+              final withTimestamp =
+                  '[${DateTime.now().toString().substring(11, 19)}] $log';
               _outputController.text += '$withTimestamp\n';
               _debugLogController.text += '$withTimestamp\n';
             }
@@ -505,7 +617,8 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
     final script = _scriptController.text;
     try {
       luaClearLogs();
-      _debugLogController.text = '=== Script started at ${DateTime.now()} ===\n';
+      _debugLogController.text =
+          '=== Script started at ${DateTime.now()} ===\n';
       final result = luaExecuteScript(script: script);
       final logs = luaGetLogs();
       setState(() {
@@ -516,7 +629,8 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
         }
         if (result) {
           _outputController.text += '--- Done ---\n';
-          _debugLogController.text += '--- Main script done, polling for async logs... ---\n';
+          _debugLogController.text +=
+              '--- Main script done, polling for async logs... ---\n';
         } else {
           _outputController.text += 'Execution failed.\n';
           _debugLogController.text += 'Execution failed.\n';
@@ -533,7 +647,8 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
     } finally {
       setState(() {
         _isRunning = false;
-        _debugLogController.text += '=== Script finished at ${DateTime.now()} ===\n';
+        _debugLogController.text +=
+            '=== Script finished at ${DateTime.now()} ===\n';
       });
     }
   }
@@ -541,7 +656,9 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
   void _pauseScript() {
     setState(() {
       _isPaused = !_isPaused;
-      _outputController.text += _isPaused ? 'Script paused\n' : 'Script resumed\n';
+      _outputController.text += _isPaused
+          ? 'Script paused\n'
+          : 'Script resumed\n';
     });
   }
 
@@ -590,7 +707,9 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
                   value: _selectedDeviceId,
                   hint: const Text('Select device'),
                   items: _devices
-                      .map((d) => DropdownMenuItem(value: d.$1, child: Text(d.$2)))
+                      .map(
+                        (d) => DropdownMenuItem(value: d.$1, child: Text(d.$2)),
+                      )
                       .toList(),
                   onChanged: _onDeviceChanged,
                 ),
@@ -718,7 +837,9 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
                 Container(
                   decoration: BoxDecoration(
                     border: Border.all(color: Colors.grey),
-                    borderRadius: const BorderRadius.vertical(top: Radius.circular(4)),
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(4),
+                    ),
                   ),
                   child: Row(
                     children: [
@@ -727,7 +848,9 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
                           onTap: () => setState(() => _outputTab = 0),
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 8),
-                            color: _outputTab == 0 ? Colors.blue[100] : Colors.grey[200],
+                            color: _outputTab == 0
+                                ? Colors.blue[100]
+                                : Colors.grey[200],
                             child: const Text(
                               'Output',
                               textAlign: TextAlign.center,
@@ -741,7 +864,9 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
                           onTap: () => setState(() => _outputTab = 1),
                           child: Container(
                             padding: const EdgeInsets.symmetric(vertical: 8),
-                            color: _outputTab == 1 ? Colors.orange[100] : Colors.grey[200],
+                            color: _outputTab == 1
+                                ? Colors.orange[100]
+                                : Colors.grey[200],
                             child: const Text(
                               'Debug Log',
                               textAlign: TextAlign.center,
@@ -758,7 +883,9 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
                   child: Container(
                     decoration: BoxDecoration(
                       border: Border.all(color: Colors.grey),
-                      borderRadius: const BorderRadius.vertical(bottom: Radius.circular(4)),
+                      borderRadius: const BorderRadius.vertical(
+                        bottom: Radius.circular(4),
+                      ),
                     ),
                     child: _outputTab == 0
                         ? TextField(
@@ -770,7 +897,10 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
                               border: InputBorder.none,
                               contentPadding: EdgeInsets.all(8),
                             ),
-                            style: const TextStyle(fontFamily: 'monospace', fontSize: 14),
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 14,
+                            ),
                           )
                         : TextField(
                             controller: _debugLogController,
@@ -781,7 +911,11 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
                               border: InputBorder.none,
                               contentPadding: EdgeInsets.all(8),
                             ),
-                            style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.orange),
+                            style: const TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              color: Colors.orange,
+                            ),
                           ),
                   ),
                 ),

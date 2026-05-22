@@ -70,9 +70,12 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  int get _connectedCount => _devices.where((d) => d.status == DeviceStatus.connected).length;
-  int get _disconnectedCount => _devices.where((d) => d.status == DeviceStatus.disconnected).length;
-  int get _errorCount => _devices.where((d) => d.status == DeviceStatus.error).length;
+  int get _connectedCount =>
+      _devices.where((d) => d.status == DeviceStatus.connected).length;
+  int get _disconnectedCount =>
+      _devices.where((d) => d.status == DeviceStatus.disconnected).length;
+  int get _errorCount =>
+      _devices.where((d) => d.status == DeviceStatus.error).length;
 
   @override
   Widget build(BuildContext context) {
@@ -97,20 +100,47 @@ class _HomeScreenState extends State<HomeScreen> {
                   // Status overview row
                   Row(
                     children: [
-                      _buildStatCard(context, 'Connected', '$_connectedCount', Icons.link, AppTheme.success),
+                      _buildStatCard(
+                        context,
+                        'Connected',
+                        '$_connectedCount',
+                        Icons.link,
+                        AppTheme.success,
+                      ),
                       const SizedBox(width: 16),
-                      _buildStatCard(context, 'Disconnected', '$_disconnectedCount', Icons.link_off, AppTheme.textSecondary),
+                      _buildStatCard(
+                        context,
+                        'Disconnected',
+                        '$_disconnectedCount',
+                        Icons.link_off,
+                        AppTheme.textSecondary,
+                      ),
                       const SizedBox(width: 16),
-                      _buildStatCard(context, 'Errors', '$_errorCount', Icons.error_outline, AppTheme.error),
+                      _buildStatCard(
+                        context,
+                        'Errors',
+                        '$_errorCount',
+                        Icons.error_outline,
+                        AppTheme.error,
+                      ),
                       const SizedBox(width: 16),
-                      _buildStatCard(context, 'Total', '${_devices.length}', Icons.devices, AppTheme.primary),
+                      _buildStatCard(
+                        context,
+                        'Total',
+                        '${_devices.length}',
+                        Icons.devices,
+                        AppTheme.primary,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 24),
                   // Device status overview
                   Row(
                     children: [
-                      Text('Device Status', style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        'Device Status',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ],
                   ),
                   const SizedBox(height: 12),
@@ -122,9 +152,17 @@ class _HomeScreenState extends State<HomeScreen> {
                               children: [
                                 const VcrLogo(size: 64),
                                 const SizedBox(height: 16),
-                                Text('No devices configured', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: AppTheme.textSecondary)),
+                                Text(
+                                  'No devices configured',
+                                  style: Theme.of(context).textTheme.titleMedium
+                                      ?.copyWith(color: AppTheme.textSecondary),
+                                ),
                                 const SizedBox(height: 8),
-                                Text('Click "Devices" in the sidebar to add devices', style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: AppTheme.textSecondary)),
+                                Text(
+                                  'Click "Devices" in the sidebar to add devices',
+                                  style: Theme.of(context).textTheme.bodyMedium
+                                      ?.copyWith(color: AppTheme.textSecondary),
+                                ),
                               ],
                             ),
                           )
@@ -132,10 +170,11 @@ class _HomeScreenState extends State<HomeScreen> {
                             onRefresh: _loadDevices,
                             child: ListView.builder(
                               itemCount: _devices.length,
-                              itemBuilder: (context, index) => _DeviceStatusTile(
-                                device: _devices[index],
-                                onStatusChanged: _loadDevices,
-                              ),
+                              itemBuilder: (context, index) =>
+                                  _DeviceStatusTile(
+                                    device: _devices[index],
+                                    onStatusChanged: _loadDevices,
+                                  ),
                             ),
                           ),
                   ),
@@ -145,7 +184,13 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildStatCard(BuildContext context, String label, String value, IconData icon, Color color) {
+  Widget _buildStatCard(
+    BuildContext context,
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
     return Expanded(
       child: Card(
         child: Padding(
@@ -161,7 +206,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               const SizedBox(height: 8),
-              Text(value, style: Theme.of(context).textTheme.headlineMedium?.copyWith(color: color)),
+              Text(
+                value,
+                style: Theme.of(
+                  context,
+                ).textTheme.headlineMedium?.copyWith(color: color),
+              ),
             ],
           ),
         ),
@@ -183,9 +233,16 @@ class _DeviceStatusTile extends StatelessWidget {
         leading: StatusIndicator(status: device.status),
         title: Text(device.name),
         subtitle: Text(_connTypeLabel(device.connectionType)),
-        trailing: const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+        trailing: const Icon(
+          Icons.chevron_right,
+          color: AppTheme.textSecondary,
+        ),
         onTap: () async {
-          await Navigator.pushNamed(context, '/devices/detail', arguments: device.id);
+          await Navigator.pushNamed(
+            context,
+            '/devices/detail',
+            arguments: device.id,
+          );
           onStatusChanged?.call();
         },
       ),

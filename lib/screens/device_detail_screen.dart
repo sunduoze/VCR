@@ -16,7 +16,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
   DeviceInfo? _device;
   bool _isLoading = true;
   String? _error;
-  
+
   // 配置参数
   final _configFormKey = GlobalKey<FormState>();
   int _sampleRate = 1000;
@@ -35,7 +35,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       _isLoading = true;
       _error = null;
     });
-    
+
     try {
       final device = getDevice(deviceId: widget.deviceId);
       setState(() {
@@ -57,7 +57,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       await _loadDevice();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('设备连接成功'), backgroundColor: AppTheme.success),
+          const SnackBar(
+            content: Text('设备连接成功'),
+            backgroundColor: AppTheme.success,
+          ),
         );
       }
     } catch (e) {
@@ -76,7 +79,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       await _loadDevice();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('设备已断开'), backgroundColor: AppTheme.warning),
+          const SnackBar(
+            content: Text('设备已断开'),
+            backgroundColor: AppTheme.warning,
+          ),
         );
       }
     } catch (e) {
@@ -96,7 +102,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         title: const Text('确认删除'),
         content: Text('确定要删除设备 "${_device!.name}" 吗？'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('取消')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('取消'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: AppTheme.error),
@@ -105,7 +114,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         ],
       ),
     );
-    
+
     if (confirmed == true) {
       try {
         await removeDevice(deviceId: _device!.id);
@@ -113,7 +122,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       } catch (e) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('删除失败: $e'), backgroundColor: AppTheme.error),
+            SnackBar(
+              content: Text('删除失败: $e'),
+              backgroundColor: AppTheme.error,
+            ),
           );
         }
       }
@@ -125,7 +137,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       _configFormKey.currentState!.save();
       // TODO: 调用 Rust API 保存配置
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('配置已保存'), backgroundColor: AppTheme.success),
+        const SnackBar(
+          content: Text('配置已保存'),
+          backgroundColor: AppTheme.success,
+        ),
       );
     }
   }
@@ -137,13 +152,20 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       appBar: AppBar(
         title: Text(_device?.name ?? '设备详情'),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _loadDevice, tooltip: '刷新'),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadDevice,
+            tooltip: '刷新',
+          ),
           PopupMenuButton<String>(
             onSelected: (value) {
               if (value == 'delete') _removeDevice();
             },
             itemBuilder: (context) => [
-              const PopupMenuItem(value: 'delete', child: Text('删除设备', style: TextStyle(color: AppTheme.error))),
+              const PopupMenuItem(
+                value: 'delete',
+                child: Text('删除设备', style: TextStyle(color: AppTheme.error)),
+              ),
             ],
           ),
         ],
@@ -151,14 +173,19 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? Center(child: Text('加载失败: $_error', style: const TextStyle(color: AppTheme.error)))
-              : _buildContent(),
+          ? Center(
+              child: Text(
+                '加载失败: $_error',
+                style: const TextStyle(color: AppTheme.error),
+              ),
+            )
+          : _buildContent(),
     );
   }
 
   Widget _buildContent() {
     if (_device == null) return const Center(child: Text('设备不存在'));
-    
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -167,19 +194,19 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
           // 状态卡片
           _buildStatusCard(),
           const SizedBox(height: 16),
-          
+
           // 连接信息
           _buildConnectionInfo(),
           const SizedBox(height: 16),
-          
+
           // 操作按钮
           _buildActionButtons(),
           const SizedBox(height: 24),
-          
+
           // 配置参数
           _buildConfigSection(),
           const SizedBox(height: 24),
-          
+
           // 数据预览
           _buildDataPreview(),
         ],
@@ -192,7 +219,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
     Color statusColor;
     String statusText;
     IconData statusIcon;
-    
+
     switch (status) {
       case DeviceStatus.connected:
         statusColor = AppTheme.success;
@@ -215,7 +242,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         statusIcon = Icons.circle_outlined;
         break;
     }
-    
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -227,13 +254,22 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_device!.name, style: Theme.of(context).textTheme.headlineMedium),
+                  Text(
+                    _device!.name,
+                    style: Theme.of(context).textTheme.headlineMedium,
+                  ),
                   const SizedBox(height: 4),
                   Row(
                     children: [
                       StatusIndicator(status: status, size: 10),
                       const SizedBox(width: 8),
-                      Text(statusText, style: TextStyle(color: statusColor, fontWeight: FontWeight.w500)),
+                      Text(
+                        statusText,
+                        style: TextStyle(
+                          color: statusColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
                     ],
                   ),
                 ],
@@ -242,8 +278,17 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                Text('类型: ${_device!.deviceType}', style: const TextStyle(color: AppTheme.textSecondary)),
-                Text('ID: ${_device!.id.substring(0, 8)}...', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                Text(
+                  '类型: ${_device!.deviceType}',
+                  style: const TextStyle(color: AppTheme.textSecondary),
+                ),
+                Text(
+                  'ID: ${_device!.id.substring(0, 8)}...',
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                  ),
+                ),
               ],
             ),
           ],
@@ -266,7 +311,11 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
             if (_device!.lastSeen != null)
               _buildInfoRow('最后通信', _device!.lastSeen!),
             if (_device!.errorMessage != null)
-              _buildInfoRow('错误信息', _device!.errorMessage!, valueColor: AppTheme.error),
+              _buildInfoRow(
+                '错误信息',
+                _device!.errorMessage!,
+                valueColor: AppTheme.error,
+              ),
           ],
         ),
       ),
@@ -279,8 +328,19 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          SizedBox(width: 100, child: Text(label, style: const TextStyle(color: AppTheme.textSecondary))),
-          Expanded(child: Text(value, style: TextStyle(color: valueColor ?? AppTheme.textPrimary))),
+          SizedBox(
+            width: 100,
+            child: Text(
+              label,
+              style: const TextStyle(color: AppTheme.textSecondary),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: TextStyle(color: valueColor ?? AppTheme.textPrimary),
+            ),
+          ),
         ],
       ),
     );
@@ -288,7 +348,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   Widget _buildActionButtons() {
     final isConnected = _device!.status == DeviceStatus.connected;
-    
+
     return Column(
       children: [
         Row(
@@ -299,7 +359,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 icon: Icon(isConnected ? Icons.link_off : Icons.link),
                 label: Text(isConnected ? '断开连接' : '连接'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: isConnected ? AppTheme.warning : AppTheme.primaryDim,
+                  backgroundColor: isConnected
+                      ? AppTheme.warning
+                      : AppTheme.primaryDim,
                 ),
               ),
             ),
@@ -309,7 +371,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                 onPressed: _removeDevice,
                 icon: const Icon(Icons.delete_outline),
                 label: const Text('删除设备'),
-                style: OutlinedButton.styleFrom(foregroundColor: AppTheme.error),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: AppTheme.error,
+                ),
               ),
             ),
           ],
@@ -371,7 +435,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                     title: const Text('自动重连'),
                     subtitle: const Text('连接断开时自动尝试重连'),
                     value: _autoReconnect,
-                    onChanged: (value) => setState(() => _autoReconnect = value),
+                    onChanged: (value) =>
+                        setState(() => _autoReconnect = value),
                     activeThumbColor: AppTheme.primary,
                   ),
                   _buildConfigField(
@@ -407,7 +472,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
         onSaved: onSaved,
         validator: (value) {
           if (value == null || value.isEmpty) return '不能为空';
-          if (keyboardType == TextInputType.number && int.tryParse(value) == null) {
+          if (keyboardType == TextInputType.number &&
+              int.tryParse(value) == null) {
             return '请输入有效数字';
           }
           return null;
@@ -418,7 +484,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
 
   Widget _buildDataPreview() {
     final isConnected = _device!.status == DeviceStatus.connected;
-    
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -444,7 +510,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
               const Center(
                 child: Padding(
                   padding: EdgeInsets.all(32),
-                  child: Text('连接设备后可查看实时数据', style: TextStyle(color: AppTheme.textSecondary)),
+                  child: Text(
+                    '连接设备后可查看实时数据',
+                    style: TextStyle(color: AppTheme.textSecondary),
+                  ),
                 ),
               )
             else
@@ -454,9 +523,16 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.show_chart, size: 48, color: AppTheme.textSecondary),
+                      const Icon(
+                        Icons.show_chart,
+                        size: 48,
+                        color: AppTheme.textSecondary,
+                      ),
                       const SizedBox(height: 8),
-                      const Text('数据图表区域', style: TextStyle(color: AppTheme.textSecondary)),
+                      const Text(
+                        '数据图表区域',
+                        style: TextStyle(color: AppTheme.textSecondary),
+                      ),
                       TextButton(
                         onPressed: () {
                           // TODO: 导航到数据监控页

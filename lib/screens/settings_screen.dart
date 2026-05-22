@@ -85,12 +85,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   String get _aaLevelLabel {
     switch (_plotAALevel) {
-      case 0: return 'Off';
-      case 1: return '2×';
-      case 2: return '4×';
-      case 3: return '8×';
-      case 4: return '16×';
-      default: return 'Off';
+      case 0:
+        return 'Off';
+      case 1:
+        return '2×';
+      case 2:
+        return '4×';
+      case 3:
+        return '8×';
+      case 4:
+        return '16×';
+      default:
+        return 'Off';
     }
   }
 
@@ -115,7 +121,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 SwitchListTile(
                   title: const Text('Auto Reconnect on Startup'),
-                  subtitle: const Text('Reconnect previously connected devices when app starts'),
+                  subtitle: const Text(
+                    'Reconnect previously connected devices when app starts',
+                  ),
                   value: _autoReconnect,
                   onChanged: _saveAutoReconnect,
                   activeThumbColor: AppTheme.primary,
@@ -154,7 +162,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       max: 10000,
                       divisions: 99,
                       label: '$_samplingRate Hz',
-                      onChanged: (v) => setState(() => _samplingRate = v.round()),
+                      onChanged: (v) =>
+                          setState(() => _samplingRate = v.round()),
                       activeColor: AppTheme.primary,
                     ),
                   ),
@@ -206,7 +215,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: Text(_language == 'zh_CN' ? '简体中文' : 'English'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () {
-                    setState(() => _language = _language == 'zh_CN' ? 'en_US' : 'zh_CN');
+                    setState(
+                      () =>
+                          _language = _language == 'zh_CN' ? 'en_US' : 'zh_CN',
+                    );
                   },
                 ),
               ],
@@ -247,9 +259,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: Text(
                     'Higher AA improves line smoothness but increases GPU load. '
                     '4× is recommended for most displays.',
-                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary,
+                    ),
                   ),
-                  leading: Icon(Icons.info_outline, size: 16, color: AppTheme.textSecondary),
+                  leading: Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: AppTheme.textSecondary,
+                  ),
                 ),
               ],
             ),
@@ -260,9 +279,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             child: Column(
               children: [
-                const ListTile(title: Text('Version'), trailing: Text('0.1.0-alpha')),
+                const ListTile(
+                  title: Text('Version'),
+                  trailing: Text('0.1.0-alpha'),
+                ),
                 const Divider(height: 1),
-                const ListTile(title: Text('Flutter'), trailing: Text('3.41.7')),
+                const ListTile(
+                  title: Text('Flutter'),
+                  trailing: Text('3.41.7'),
+                ),
                 const Divider(height: 1),
                 const ListTile(title: Text('Rust'), trailing: Text('1.95.0')),
                 const Divider(height: 1),
@@ -289,7 +314,12 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
-      child: Text(title, style: Theme.of(context).textTheme.titleMedium?.copyWith(color: AppTheme.primary)),
+      child: Text(
+        title,
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(color: AppTheme.primary),
+      ),
     );
   }
 }

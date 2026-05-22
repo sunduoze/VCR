@@ -1,0 +1,85 @@
+    Checking vcr_lib v0.1.0 (D:\AI\upper_computer_tools\VCR\rust)
+warning: field `phase` is never read
+ --> src\core\virtual_device\data_generator.rs:9:5
+  |
+4 | pub struct DataGenerator {
+  |            ------------- field in this struct
+...
+9 |     phase: f64,
+  |     ^^^^^
+  |
+  = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: fields `render_pipeline`, `shader_module`, and `max_points` are never read
+  --> src\renderer\gpu_renderer.rs:11:5
+   |
+ 8 | pub struct GpuRenderer {
+   |            ----------- fields in this struct
+...
+11 |     render_pipeline: Option<RenderPipeline>,  // 测试用三角形管道
+   |     ^^^^^^^^^^^^^^^
+12 |     shader_module: Option<ShaderModule>,     // 测试用 shader
+   |     ^^^^^^^^^^^^^
+...
+17 |     max_points: usize,  // 当前顶点缓冲区大小（点数）
+   |     ^^^^^^^^^^
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> src\api\debug_api.rs:11:25
+   |
+11 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+   |                         ^^^^^^^^^     ^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                         |
+   |                         the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+   = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+   |
+11 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+   |                                                  +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+  --> src\api\lua_api.rs:15:25
+   |
+15 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+   |                         ^^^^^^^^^     ^^^^^^^^^^^^^ the same lifetime is hidden here
+   |                         |
+   |                         the lifetime is elided here
+   |
+   = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+   |
+15 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+   |                                                  +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+ --> src\core\session\debug_session.rs:6:25
+  |
+6 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+  |                         ^^^^^^^^^     ^^^^^^^^^^^^^ the same lifetime is hidden here
+  |                         |
+  |                         the lifetime is elided here
+  |
+  = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+  |
+6 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+  |                                                  +++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+ --> src\core\plot\data_buffer.rs:8:25
+  |
+8 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+  |                         ^^^^^^^^^     ^^^^^^^^^^^^^ the same lifetime is hidden here
+  |                         |
+  |                         the lifetime is elided here
+  |
+  = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+  |
+8 | fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+  |                                                  +++
+
+warning: `vcr_lib` (lib) generated 6 warnings (run `cargo fix --lib -p vcr_lib` to apply 4 suggestions)
+    Finished `release` profile [optimized] target(s) in 2.16s

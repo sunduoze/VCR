@@ -12,33 +12,45 @@ import '../src/rust/core/device/models.dart';
 
 DataBits _parseDataBits(String s) {
   switch (s) {
-    case '5': return DataBits.five;
-    case '6': return DataBits.six;
-    case '7': return DataBits.seven;
-    default: return DataBits.eight;
+    case '5':
+      return DataBits.five;
+    case '6':
+      return DataBits.six;
+    case '7':
+      return DataBits.seven;
+    default:
+      return DataBits.eight;
   }
 }
 
 StopBits _parseStopBits(String s) {
   switch (s) {
-    case '2': return StopBits.two;
-    default: return StopBits.one;
+    case '2':
+      return StopBits.two;
+    default:
+      return StopBits.one;
   }
 }
 
 Parity _parseParity(String s) {
   switch (s.toUpperCase()) {
-    case 'O': return Parity.odd;
-    case 'E': return Parity.even;
-    default: return Parity.none;
+    case 'O':
+      return Parity.odd;
+    case 'E':
+      return Parity.even;
+    default:
+      return Parity.none;
   }
 }
 
 FlowControl _parseFlowControl(String s) {
   switch (s.toUpperCase()) {
-    case 'H': return FlowControl.hardware;
-    case 'S': return FlowControl.software;
-    default: return FlowControl.none;
+    case 'H':
+      return FlowControl.hardware;
+    case 'S':
+      return FlowControl.software;
+    default:
+      return FlowControl.none;
   }
 }
 
@@ -154,11 +166,21 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
             if (connType == ConnectionType.serial) {
               final parts = address.split(':');
               final port = parts[0];
-              final baudRate = parts.length > 1 ? int.tryParse(parts[1]) ?? 9600 : 9600;
-              final dataBits = parts.length > 2 ? _parseDataBits(parts[2]) : DataBits.eight;
-              final stopBits = parts.length > 3 ? _parseStopBits(parts[3]) : StopBits.one;
-              final parity = parts.length > 4 ? _parseParity(parts[4]) : Parity.none;
-              final flowControl = parts.length > 5 ? _parseFlowControl(parts[5]) : FlowControl.none;
+              final baudRate = parts.length > 1
+                  ? int.tryParse(parts[1]) ?? 9600
+                  : 9600;
+              final dataBits = parts.length > 2
+                  ? _parseDataBits(parts[2])
+                  : DataBits.eight;
+              final stopBits = parts.length > 3
+                  ? _parseStopBits(parts[3])
+                  : StopBits.one;
+              final parity = parts.length > 4
+                  ? _parseParity(parts[4])
+                  : Parity.none;
+              final flowControl = parts.length > 5
+                  ? _parseFlowControl(parts[5])
+                  : FlowControl.none;
               // 解析硬件流控制设置
               final dtrEnabled = parts.length > 7 && parts[7] == '1';
               final rtsEnabled = parts.length > 8 && parts[8] == '1';
@@ -181,8 +203,15 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
             } else if (connType == ConnectionType.tcp) {
               final parts = address.split(':');
               final host = parts[0];
-              final port = parts.length > 1 ? int.tryParse(parts[1]) ?? 502 : 502;
-              addTcpDevice(name: name, host: host, port: port, protocol: protocol);
+              final port = parts.length > 1
+                  ? int.tryParse(parts[1]) ?? 502
+                  : 502;
+              addTcpDevice(
+                name: name,
+                host: host,
+                port: port,
+                protocol: protocol,
+              );
               saveDevices(); // 持久化新设备
             }
             await _loadDevices();
@@ -190,7 +219,10 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
             debugPrint('Failed to add device: $e');
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Failed to add device: $e'), backgroundColor: AppTheme.error),
+                SnackBar(
+                  content: Text('Failed to add device: $e'),
+                  backgroundColor: AppTheme.error,
+                ),
               );
             }
           }
@@ -208,14 +240,22 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         editDevice: device,
         onConfirm: (name, connType, address, protocol) async {
           try {
-            await updateDevice(deviceId: device.id, name: name, address: address, protocol: protocol);
+            await updateDevice(
+              deviceId: device.id,
+              name: name,
+              address: address,
+              protocol: protocol,
+            );
             saveDevices(); // 持久化更新
             await _loadDevices();
           } catch (e) {
             debugPrint('Failed to update device: $e');
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Failed to update device: $e'), backgroundColor: AppTheme.error),
+                SnackBar(
+                  content: Text('Failed to update device: $e'),
+                  backgroundColor: AppTheme.error,
+                ),
               );
             }
           }
@@ -226,11 +266,7 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
 
   // 从列表点击设备 → 直接跳转到 Console 并自动选中该设备
   void _navigateToConsole(DeviceInfo device) {
-    Navigator.pushNamed(
-      context,
-      AppRoutes.debugConsole,
-      arguments: device.id,
-    );
+    Navigator.pushNamed(context, AppRoutes.debugConsole, arguments: device.id);
   }
 
   Future<void> _navigateToDetail(DeviceInfo device) async {
@@ -254,7 +290,10 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
       debugPrint('Failed to remove device $deviceId: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to remove device: $e'), backgroundColor: AppTheme.error),
+          SnackBar(
+            content: Text('Failed to remove device: $e'),
+            backgroundColor: AppTheme.error,
+          ),
         );
       }
     }
@@ -285,9 +324,17 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
                 children: [
                   const VcrLogo(size: 64),
                   const SizedBox(height: 16),
-                  Text('No devices configured', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: AppTheme.textSecondary)),
+                  Text(
+                    'No devices configured',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
                   const SizedBox(height: 8),
-                  Text('Click + to add a device', style: Theme.of(context).textTheme.bodyMedium),
+                  Text(
+                    'Click + to add a device',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
                 ],
               ),
             )
@@ -353,11 +400,16 @@ class _DeviceCard extends StatelessWidget {
                   ),
                   if (device.isVirtual) ...[
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.purple.withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.purple.withValues(alpha: 0.5)),
+                        border: Border.all(
+                          color: Colors.purple.withValues(alpha: 0.5),
+                        ),
                       ),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -377,17 +429,26 @@ class _DeviceCard extends StatelessWidget {
                     ),
                     const SizedBox(width: 8),
                   ],
-                  Icon(Icons.chevron_right, size: 20, color: AppTheme.textSecondary.withValues(alpha: 0.5)),
+                  Icon(
+                    Icons.chevron_right,
+                    size: 20,
+                    color: AppTheme.textSecondary.withValues(alpha: 0.5),
+                  ),
                 ],
               ),
               const SizedBox(height: 12),
               // 第二行：连接信息醒目展示
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: AppTheme.surfaceLight.withValues(alpha: 0.5),
                   borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: AppTheme.primary.withValues(alpha: 0.2)),
+                  border: Border.all(
+                    color: AppTheme.primary.withValues(alpha: 0.2),
+                  ),
                 ),
                 child: Row(
                   children: [
@@ -409,7 +470,8 @@ class _DeviceCard extends StatelessWidget {
                               color: AppTheme.primary,
                             ),
                           ),
-                          if (device.serverInfo != null && device.serverInfo!.isNotEmpty)
+                          if (device.serverInfo != null &&
+                              device.serverInfo!.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(top: 2),
                               child: Text(
@@ -441,7 +503,11 @@ class _DeviceCard extends StatelessWidget {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.error_outline, size: 16, color: AppTheme.error),
+                      Icon(
+                        Icons.error_outline,
+                        size: 16,
+                        color: AppTheme.error,
+                      ),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
@@ -542,7 +608,14 @@ class _TypeChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         border: Border.all(color: AppTheme.primary.withValues(alpha: 0.3)),
       ),
-      child: Text(label, style: const TextStyle(color: AppTheme.primary, fontSize: 11, fontWeight: FontWeight.w600)),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: AppTheme.primary,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
 }
@@ -560,7 +633,14 @@ class _ProtocolChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(4),
         border: Border.all(color: AppTheme.secondary.withValues(alpha: 0.3)),
       ),
-      child: Text(label, style: const TextStyle(color: AppTheme.secondary, fontSize: 11, fontWeight: FontWeight.w600)),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: AppTheme.secondary,
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
     );
   }
 }
@@ -570,7 +650,13 @@ class _DeviceDialog extends StatefulWidget {
   final List<PortInfo> availablePorts;
   final List<String> protocols; // protocol labels
   final DeviceInfo? editDevice; // null = 新增, 非null = 编辑
-  final void Function(String name, ConnectionType connType, String address, Protocol protocol) onConfirm;
+  final void Function(
+    String name,
+    ConnectionType connType,
+    String address,
+    Protocol protocol,
+  )
+  onConfirm;
 
   const _DeviceDialog({
     required this.availablePorts,
@@ -588,7 +674,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
   late final TextEditingController _hostController;
   late final TextEditingController _portController;
   final _customBaudRateController = TextEditingController();
-  
+
   late ConnectionType _connType;
   late Protocol _protocol;
   String? _selectedPort;
@@ -606,17 +692,27 @@ class _DeviceDialogState extends State<_DeviceDialog> {
   List<PortInfo> _ports = [];
   bool _scanning = false;
 
-  final List<int> _baudRateOptions = [9600, 38400, 115200, 500000, 1000000, 5000000];
+  final List<int> _baudRateOptions = [
+    9600,
+    38400,
+    115200,
+    500000,
+    1000000,
+    5000000,
+  ];
   bool get _isEditing => widget.editDevice != null;
 
-  late String _selectedProtocolLabel; // selected protocol label (for UI dropdown)
+  late String
+  _selectedProtocolLabel; // selected protocol label (for UI dropdown)
 
   @override
   void initState() {
     super.initState();
     _ports = List.from(widget.availablePorts);
-    _selectedProtocolLabel = widget.protocols.isNotEmpty ? widget.protocols.first : 'SCPI';
-    
+    _selectedProtocolLabel = widget.protocols.isNotEmpty
+        ? widget.protocols.first
+        : 'SCPI';
+
     if (widget.editDevice != null) {
       // 编辑模式：从现有设备填充
       final d = widget.editDevice!;
@@ -627,15 +723,18 @@ class _DeviceDialogState extends State<_DeviceDialog> {
       _selectedStopBits = StopBits.one;
       _selectedParity = Parity.none;
       _selectedFlowControl = FlowControl.none;
-      
+
       final parts = d.address.split(':');
       if (_connType == ConnectionType.serial) {
         _selectedPort = parts.isNotEmpty ? parts[0] : null;
-        _selectedBaudRate = parts.length > 1 ? int.tryParse(parts[1]) ?? 115200 : 115200;
+        _selectedBaudRate = parts.length > 1
+            ? int.tryParse(parts[1]) ?? 115200
+            : 115200;
         if (parts.length > 2) _selectedDataBits = _parseDataBits(parts[2]);
         if (parts.length > 3) _selectedStopBits = _parseStopBits(parts[3]);
         if (parts.length > 4) _selectedParity = _parseParity(parts[4]);
-        if (parts.length > 5) _selectedFlowControl = _parseFlowControl(parts[5]);
+        if (parts.length > 5)
+          _selectedFlowControl = _parseFlowControl(parts[5]);
         // 解析硬件流控制设置 (dtr:rts:bk)
         _dtrEnabled = parts.length > 7 && parts[7] == '1';
         _rtsEnabled = parts.length > 8 && parts[8] == '1';
@@ -646,8 +745,12 @@ class _DeviceDialogState extends State<_DeviceDialog> {
           _selectedBaudRate = 115200;
         }
       } else {
-        _hostController = TextEditingController(text: parts.isNotEmpty ? parts[0] : '192.168.1.1');
-        _portController = TextEditingController(text: parts.length > 1 ? parts[1] : '502');
+        _hostController = TextEditingController(
+          text: parts.isNotEmpty ? parts[0] : '192.168.1.1',
+        );
+        _portController = TextEditingController(
+          text: parts.length > 1 ? parts[1] : '502',
+        );
       }
     } else {
       // 新增模式：默认值为空
@@ -673,14 +776,24 @@ class _DeviceDialogState extends State<_DeviceDialog> {
       final baud = _customBaudRate && _customBaudRateController.text.isNotEmpty
           ? _customBaudRateController.text
           : _selectedBaudRate.toString();
-      final db = _selectedDataBits == DataBits.eight ? '8'
-          : _selectedDataBits == DataBits.seven ? '7'
-          : _selectedDataBits == DataBits.six ? '6' : '5';
+      final db = _selectedDataBits == DataBits.eight
+          ? '8'
+          : _selectedDataBits == DataBits.seven
+          ? '7'
+          : _selectedDataBits == DataBits.six
+          ? '6'
+          : '5';
       final sb = _selectedStopBits == StopBits.two ? '2' : '1';
-      final pr = _selectedParity == Parity.odd ? 'O'
-          : _selectedParity == Parity.even ? 'E' : 'N';
-      final fc = _selectedFlowControl == FlowControl.hardware ? 'H'
-          : _selectedFlowControl == FlowControl.software ? 'S' : 'N';
+      final pr = _selectedParity == Parity.odd
+          ? 'O'
+          : _selectedParity == Parity.even
+          ? 'E'
+          : 'N';
+      final fc = _selectedFlowControl == FlowControl.hardware
+          ? 'H'
+          : _selectedFlowControl == FlowControl.software
+          ? 'S'
+          : 'N';
       return '$_selectedPort:$baud:$db:$sb:$pr:$fc:100:${_dtrEnabled ? '1' : '0'}:${_rtsEnabled ? '1' : '0'}:${_breakEnabled ? '1' : '0'}';
     } else {
       return '${_hostController.text}:${_portController.text}';
@@ -721,7 +834,11 @@ class _DeviceDialogState extends State<_DeviceDialog> {
           if (_connType == ConnectionType.serial)
             IconButton(
               icon: _scanning
-                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.refresh),
               onPressed: _scanning ? null : _scanPorts,
               tooltip: 'Refresh Ports',
@@ -744,19 +861,27 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                 ),
               ),
               const SizedBox(height: 16),
-              
+
               // 连接类型（编辑模式下不可更改）
               DropdownButtonFormField<ConnectionType>(
                 initialValue: _connType,
                 decoration: const InputDecoration(labelText: 'Connection Type'),
                 items: const [
-                  DropdownMenuItem(value: ConnectionType.serial, child: Text('Serial / COM')),
-                  DropdownMenuItem(value: ConnectionType.tcp, child: Text('TCP/IP')),
+                  DropdownMenuItem(
+                    value: ConnectionType.serial,
+                    child: Text('Serial / COM'),
+                  ),
+                  DropdownMenuItem(
+                    value: ConnectionType.tcp,
+                    child: Text('TCP/IP'),
+                  ),
                 ],
-                onChanged: _isEditing ? null : (v) => setState(() => _connType = v!),
+                onChanged: _isEditing
+                    ? null
+                    : (v) => setState(() => _connType = v!),
               ),
               const SizedBox(height: 16),
-              
+
               // 协议选择
               DropdownButtonFormField<String>(
                 initialValue: _selectedProtocolLabel,
@@ -764,89 +889,119 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                   labelText: 'Protocol',
                   helperText: 'Select communication protocol',
                 ),
-                items: widget.protocols.map((label) => DropdownMenuItem<String>(
-                  value: label,
-                  child: Text(label),
-                )).toList(),
+                items: widget.protocols
+                    .map(
+                      (label) => DropdownMenuItem<String>(
+                        value: label,
+                        child: Text(label),
+                      ),
+                    )
+                    .toList(),
                 onChanged: (v) => setState(() {
                   _selectedProtocolLabel = v!;
                   _protocol = Protocol.values.firstWhere(
-                    (p) => p.name.toLowerCase() == v.toLowerCase() || p.name == v,
+                    (p) =>
+                        p.name.toLowerCase() == v.toLowerCase() || p.name == v,
                     orElse: () => Protocol.scpi,
                   );
                 }),
               ),
               const SizedBox(height: 16),
-              
+
               // 串口配置
               if (_connType == ConnectionType.serial) ...[
                 DropdownButtonFormField<String>(
                   initialValue: _selectedPort,
                   decoration: InputDecoration(
                     labelText: 'Serial Port',
-                    suffixIcon: _ports.isEmpty 
+                    suffixIcon: _ports.isEmpty
                         ? const Icon(Icons.warning, color: AppTheme.warning)
                         : null,
                   ),
                   hint: Text(
-                    _ports.isEmpty 
-                        ? 'No ports found - click refresh' 
+                    _ports.isEmpty
+                        ? 'No ports found - click refresh'
                         : 'Select a port',
                   ),
-                  items: _ports.map((p) => DropdownMenuItem(
-                    value: p.name,
-                    child: Row(
-                      children: [
-                        Icon(
-                          p.isVirtual ? Icons.memory : Icons.usb,
-                          size: 16,
-                          color: p.isVirtual ? Colors.purple : AppTheme.textSecondary,
-                        ),
-                        const SizedBox(width: 8),
-                        Flexible(
-                          child: Text(
-                            p.isVirtual
-                                ? p.name
-                                : '${p.name} (${p.description})',
-                            overflow: TextOverflow.ellipsis,
+                  items: _ports
+                      .map(
+                        (p) => DropdownMenuItem(
+                          value: p.name,
+                          child: Row(
+                            children: [
+                              Icon(
+                                p.isVirtual ? Icons.memory : Icons.usb,
+                                size: 16,
+                                color: p.isVirtual
+                                    ? Colors.purple
+                                    : AppTheme.textSecondary,
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  p.isVirtual
+                                      ? p.name
+                                      : '${p.name} (${p.description})',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (p.isVirtual) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 4,
+                                    vertical: 1,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: Colors.purple.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'VIRTUAL',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: Colors.purple,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                         ),
-                        if (p.isVirtual) ...[
-                          const SizedBox(width: 6),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: Colors.purple.withValues(alpha: 0.2),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: const Text(
-                              'VIRTUAL',
-                              style: TextStyle(fontSize: 9, color: Colors.purple, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  )).toList(),
+                      )
+                      .toList(),
                   onChanged: (v) {
                     setState(() => _selectedPort = v);
                   },
                 ),
                 const SizedBox(height: 16),
-                
+
                 // Baud rate
                 Row(
                   children: [
                     Expanded(
                       child: DropdownButtonFormField<int>(
-                        initialValue: _customBaudRate ? null : _selectedBaudRate,
-                        decoration: const InputDecoration(labelText: 'Baud Rate'),
-                        items: _baudRateOptions.map((br) => DropdownMenuItem(
-                          value: br,
-                          child: Text(br >= 1000000 ? '${br ~/ 1000000}M' : br.toString()),
-                        )).toList(),
-                        onChanged: _customBaudRate 
-                            ? null 
+                        initialValue: _customBaudRate
+                            ? null
+                            : _selectedBaudRate,
+                        decoration: const InputDecoration(
+                          labelText: 'Baud Rate',
+                        ),
+                        items: _baudRateOptions
+                            .map(
+                              (br) => DropdownMenuItem(
+                                value: br,
+                                child: Text(
+                                  br >= 1000000
+                                      ? '${br ~/ 1000000}M'
+                                      : br.toString(),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: _customBaudRate
+                            ? null
                             : (v) => setState(() => _selectedBaudRate = v!),
                       ),
                     ),
@@ -885,15 +1040,31 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                         decoration: const InputDecoration(
                           labelText: 'Data Bits',
                           isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                         items: const [
-                          DropdownMenuItem(value: DataBits.eight, child: Text('8')),
-                          DropdownMenuItem(value: DataBits.seven, child: Text('7')),
-                          DropdownMenuItem(value: DataBits.six, child: Text('6')),
-                          DropdownMenuItem(value: DataBits.five, child: Text('5')),
+                          DropdownMenuItem(
+                            value: DataBits.eight,
+                            child: Text('8'),
+                          ),
+                          DropdownMenuItem(
+                            value: DataBits.seven,
+                            child: Text('7'),
+                          ),
+                          DropdownMenuItem(
+                            value: DataBits.six,
+                            child: Text('6'),
+                          ),
+                          DropdownMenuItem(
+                            value: DataBits.five,
+                            child: Text('5'),
+                          ),
                         ],
-                        onChanged: (v) => setState(() => _selectedDataBits = v!),
+                        onChanged: (v) =>
+                            setState(() => _selectedDataBits = v!),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -903,13 +1074,23 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                         decoration: const InputDecoration(
                           labelText: 'Stop Bits',
                           isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                         items: const [
-                          DropdownMenuItem(value: StopBits.one, child: Text('1')),
-                          DropdownMenuItem(value: StopBits.two, child: Text('2')),
+                          DropdownMenuItem(
+                            value: StopBits.one,
+                            child: Text('1'),
+                          ),
+                          DropdownMenuItem(
+                            value: StopBits.two,
+                            child: Text('2'),
+                          ),
                         ],
-                        onChanged: (v) => setState(() => _selectedStopBits = v!),
+                        onChanged: (v) =>
+                            setState(() => _selectedStopBits = v!),
                       ),
                     ),
                   ],
@@ -923,12 +1104,24 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                         decoration: const InputDecoration(
                           labelText: 'Parity',
                           isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                         items: const [
-                          DropdownMenuItem(value: Parity.none, child: Text('None')),
-                          DropdownMenuItem(value: Parity.odd, child: Text('Odd')),
-                          DropdownMenuItem(value: Parity.even, child: Text('Even')),
+                          DropdownMenuItem(
+                            value: Parity.none,
+                            child: Text('None'),
+                          ),
+                          DropdownMenuItem(
+                            value: Parity.odd,
+                            child: Text('Odd'),
+                          ),
+                          DropdownMenuItem(
+                            value: Parity.even,
+                            child: Text('Even'),
+                          ),
                         ],
                         onChanged: (v) => setState(() => _selectedParity = v!),
                       ),
@@ -940,20 +1133,33 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                         decoration: const InputDecoration(
                           labelText: 'Flow Control',
                           isDense: true,
-                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 12,
+                          ),
                         ),
                         items: const [
-                          DropdownMenuItem(value: FlowControl.none, child: Text('None')),
-                          DropdownMenuItem(value: FlowControl.hardware, child: Text('Hardware (RTS/CTS)')),
-                          DropdownMenuItem(value: FlowControl.software, child: Text('Software (XON/XOFF)')),
+                          DropdownMenuItem(
+                            value: FlowControl.none,
+                            child: Text('None'),
+                          ),
+                          DropdownMenuItem(
+                            value: FlowControl.hardware,
+                            child: Text('Hardware (RTS/CTS)'),
+                          ),
+                          DropdownMenuItem(
+                            value: FlowControl.software,
+                            child: Text('Software (XON/XOFF)'),
+                          ),
                         ],
-                        onChanged: (v) => setState(() => _selectedFlowControl = v!),
+                        onChanged: (v) =>
+                            setState(() => _selectedFlowControl = v!),
                       ),
                     ),
                   ],
                 ),
               ],
-              
+
               // 硬件流控制信号配置 (DTR/RTS/Break)
               if (_connType == ConnectionType.serial) ...[
                 const SizedBox(height: 8),
@@ -961,10 +1167,17 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                   children: [
                     Expanded(
                       child: CheckboxListTile(
-                        title: const Text('DTR', style: TextStyle(fontSize: 13)),
-                        subtitle: const Text('Data Terminal Ready', style: TextStyle(fontSize: 10)),
+                        title: const Text(
+                          'DTR',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        subtitle: const Text(
+                          'Data Terminal Ready',
+                          style: TextStyle(fontSize: 10),
+                        ),
                         value: _dtrEnabled,
-                        onChanged: (v) => setState(() => _dtrEnabled = v ?? false),
+                        onChanged: (v) =>
+                            setState(() => _dtrEnabled = v ?? false),
                         dense: true,
                         controlAffinity: ListTileControlAffinity.leading,
                         contentPadding: EdgeInsets.zero,
@@ -972,10 +1185,17 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                     ),
                     Expanded(
                       child: CheckboxListTile(
-                        title: const Text('RTS', style: TextStyle(fontSize: 13)),
-                        subtitle: const Text('Request To Send', style: TextStyle(fontSize: 10)),
+                        title: const Text(
+                          'RTS',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        subtitle: const Text(
+                          'Request To Send',
+                          style: TextStyle(fontSize: 10),
+                        ),
                         value: _rtsEnabled,
-                        onChanged: (v) => setState(() => _rtsEnabled = v ?? false),
+                        onChanged: (v) =>
+                            setState(() => _rtsEnabled = v ?? false),
                         dense: true,
                         controlAffinity: ListTileControlAffinity.leading,
                         contentPadding: EdgeInsets.zero,
@@ -983,10 +1203,17 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                     ),
                     Expanded(
                       child: CheckboxListTile(
-                        title: const Text('BREAK', style: TextStyle(fontSize: 13)),
-                        subtitle: const Text('Break Signal', style: TextStyle(fontSize: 10)),
+                        title: const Text(
+                          'BREAK',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                        subtitle: const Text(
+                          'Break Signal',
+                          style: TextStyle(fontSize: 10),
+                        ),
                         value: _breakEnabled,
-                        onChanged: (v) => setState(() => _breakEnabled = v ?? false),
+                        onChanged: (v) =>
+                            setState(() => _breakEnabled = v ?? false),
                         dense: true,
                         controlAffinity: ListTileControlAffinity.leading,
                         contentPadding: EdgeInsets.zero,
@@ -995,7 +1222,7 @@ class _DeviceDialogState extends State<_DeviceDialog> {
                   ],
                 ),
               ],
-              
+
               // TCP 配置
               if (_connType == ConnectionType.tcp) ...[
                 Row(
@@ -1043,14 +1270,14 @@ class _DeviceDialogState extends State<_DeviceDialog> {
               );
               return;
             }
-            
+
             if (_connType == ConnectionType.serial && _selectedPort == null) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(content: Text('Please select a serial port')),
               );
               return;
             }
-            
+
             widget.onConfirm(name, _connType, _currentAddress, _protocol);
             Navigator.pop(context);
           },

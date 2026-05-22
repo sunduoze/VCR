@@ -1,4 +1,4 @@
-﻿// gpu_test_screen.dart - GPU 渲染器测试页面
+// gpu_test_screen.dart - GPU 渲染器测试页面
 
 import 'dart:typed_data';
 import 'dart:ui' as ui;
@@ -52,8 +52,8 @@ class _GpuTestScreenState extends State<GpuTestScreen> {
       const pointCount = 1000;
       final points = Float32List(pointCount * 2);
       for (int i = 0; i < pointCount; i++) {
-        final x = i / (pointCount - 1);  // [0, 1]
-        final y = sin(2.0 * pi * 5.0 * x) * 0.5 + 0.5;  // sine wave in [0, 1]
+        final x = i / (pointCount - 1); // [0, 1]
+        final y = sin(2.0 * pi * 5.0 * x) * 0.5 + 0.5; // sine wave in [0, 1]
         points[i * 2] = x;
         points[i * 2 + 1] = y;
       }
@@ -85,7 +85,11 @@ class _GpuTestScreenState extends State<GpuTestScreen> {
   }
 
   /// 将 RGBA 字节数据转换为 ui.Image 对象
-  Future<ui.Image> _createImageFromRgba(Uint8List rgbaBytes, int width, int height) {
+  Future<ui.Image> _createImageFromRgba(
+    Uint8List rgbaBytes,
+    int width,
+    int height,
+  ) {
     final completer = Completer<ui.Image>();
     ui.decodeImageFromPixels(
       rgbaBytes,
@@ -100,9 +104,7 @@ class _GpuTestScreenState extends State<GpuTestScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('GPU Renderer Test'),
-      ),
+      appBar: AppBar(title: const Text('GPU Renderer Test')),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -121,9 +123,7 @@ class _GpuTestScreenState extends State<GpuTestScreen> {
                 decoration: BoxDecoration(
                   border: Border.all(color: Colors.grey),
                 ),
-                child: CustomPaint(
-                  painter: _GpuImagePainter(_image!),
-                ),
+                child: CustomPaint(painter: _GpuImagePainter(_image!)),
               ),
           ],
         ),

@@ -1,4 +1,4 @@
-import 'dart:math';
+﻿import 'dart:math';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
@@ -296,8 +296,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _initDemoChannels();
     _startDemoData();
     _loadConfig();
-    _initGpu();
+    // _initGpu();  // 临时禁用，排查崩溃问题
     _maxPointsController.text = _maxPoints.toString();
+    // 启动 Rust 独立线程接收数据（方案3）
+    try {
+      RustLib.instance.api.crateApiDataReceiverStartDataReceiver();
+      print('✅ 数据接收线程启动成功');
+    } catch (e) {
+      print('❌ 数据接收线程启动失败: $e');
+    }
   }
 
   void _initDemoChannels() {
@@ -599,9 +606,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _fetchTimer?.cancel();
 
     // 策略 A: 两个分离的定时器
-    // 1. 数据轮询：慢速（1000ms），只获取数据，不更新 UI
-    //    低频轮询，避免 Dart 侧对象持续堆积导致 GC 压力随时间恶化
-    _fetchTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) => _fetchRealData());
+    // 1. 数据轮询：33ms（~30fps），匹配 UI 更新频率
+    //    与 _updateRealDataUI 同步，保证数据实时性
+    _fetchTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _fetchRealData());
     // 2. UI 更新：~30fps（33ms），保证画面流畅
     _realDataTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _updateRealDataUI());
   }
@@ -750,6 +757,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_gpuInitialized) {
       RustLib.instance.api.crateApiGpuApiGpuCleanup();
     }
+    // 停止 Rust 独立线程（方案3）
+    RustLib.instance.api.crateApiDataReceiverStopDataReceiver();
     super.dispose();
   }
 

@@ -48,10 +48,8 @@ class AppRoutes {
       case home:
         return MaterialPageRoute(
           settings: settings,
-          builder: (_) => MainShell(
-            selectedIndex: navIndex,
-            child: const HomeScreen(),
-          ),
+          builder: (_) =>
+              MainShell(selectedIndex: navIndex, child: const HomeScreen()),
         );
       case deviceList:
         return MaterialPageRoute(
@@ -67,9 +65,7 @@ class AppRoutes {
           return MaterialPageRoute(
             builder: (_) => MainShell(
               selectedIndex: navIndex,
-              child: const Scaffold(
-                body: Center(child: Text('设备 ID 缺失')),
-              ),
+              child: const Scaffold(body: Center(child: Text('设备 ID 缺失'))),
             ),
           );
         }
@@ -83,18 +79,14 @@ class AppRoutes {
       case dataMonitor:
         return MaterialPageRoute(
           settings: settings,
-          builder: (_) => MainShell(
-            selectedIndex: navIndex,
-            child: const PlotScreen(),
-          ),
+          builder: (_) =>
+              MainShell(selectedIndex: navIndex, child: const PlotScreen()),
         );
       case AppRoutes.settings:
         return MaterialPageRoute(
           settings: settings,
-          builder: (_) => MainShell(
-            selectedIndex: navIndex,
-            child: const SettingsScreen(),
-          ),
+          builder: (_) =>
+              MainShell(selectedIndex: navIndex, child: const SettingsScreen()),
         );
       case debugConsole:
         return MaterialPageRoute(
@@ -121,9 +113,7 @@ class AppRoutes {
         return MaterialPageRoute(
           builder: (_) => MainShell(
             selectedIndex: 0,
-            child: const Scaffold(
-              body: Center(child: Text('Page not found')),
-            ),
+            child: const Scaffold(body: Center(child: Text('Page not found'))),
           ),
         );
     }

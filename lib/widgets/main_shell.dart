@@ -13,11 +13,7 @@ class VcrLogo extends StatelessWidget {
   final double size;
   final BorderRadius? borderRadius;
 
-  const VcrLogo({
-    super.key,
-    this.size = 40,
-    this.borderRadius,
-  });
+  const VcrLogo({super.key, this.size = 40, this.borderRadius});
 
   @override
   Widget build(BuildContext context) {
@@ -72,16 +68,30 @@ class _MainShellState extends State<MainShell> {
             backgroundColor: AppTheme.surface,
             indicatorColor: AppTheme.primary.withValues(alpha: 0.2),
             selectedIconTheme: const IconThemeData(color: AppTheme.primary),
-            unselectedIconTheme: const IconThemeData(color: AppTheme.textSecondary),
-            selectedLabelTextStyle: const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w500),
-            unselectedLabelTextStyle: const TextStyle(color: AppTheme.textSecondary),
+            unselectedIconTheme: const IconThemeData(
+              color: AppTheme.textSecondary,
+            ),
+            selectedLabelTextStyle: const TextStyle(
+              color: AppTheme.primary,
+              fontWeight: FontWeight.w500,
+            ),
+            unselectedLabelTextStyle: const TextStyle(
+              color: AppTheme.textSecondary,
+            ),
             leading: Padding(
               padding: const EdgeInsets.symmetric(vertical: 16),
               child: Column(
                 children: [
                   const VcrLogo(size: 40),
                   const SizedBox(height: 8),
-                  const Text('VCR', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.textPrimary)),
+                  const Text(
+                    'VCR',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -134,16 +144,17 @@ class _MainShellState extends State<MainShell> {
 
   void _navigateTo(int index) {
     if (index == widget.selectedIndex) return;
-    
+
     // Save Console state before switching away from it
-    if (widget.selectedIndex == 3) { // Console tab index
+    if (widget.selectedIndex == 3) {
+      // Console tab index
       try {
         DebugConsoleScreen.saveCurrentState();
       } catch (e) {
         debugPrint('Failed to save console state: $e');
       }
     }
-    
+
     final routes = [
       AppRoutes.home,
       AppRoutes.deviceList,

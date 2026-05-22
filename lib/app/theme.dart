@@ -50,9 +50,7 @@ class AppTheme {
         style: ElevatedButton.styleFrom(
           backgroundColor: primaryDim,
           foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(6),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         ),
       ),
@@ -60,9 +58,7 @@ class AppTheme {
         style: OutlinedButton.styleFrom(
           foregroundColor: primary,
           side: const BorderSide(color: border),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(6),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
@@ -83,18 +79,35 @@ class AppTheme {
         labelStyle: const TextStyle(color: textSecondary),
         hintStyle: const TextStyle(color: textSecondary),
       ),
-      dividerTheme: const DividerThemeData(
-        color: border,
-        thickness: 1,
-      ),
+      dividerTheme: const DividerThemeData(color: border, thickness: 1),
       textTheme: const TextTheme(
-        headlineLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.bold, fontSize: 28),
-        headlineMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 22),
-        titleLarge: TextStyle(color: textPrimary, fontWeight: FontWeight.w600, fontSize: 18),
-        titleMedium: TextStyle(color: textPrimary, fontWeight: FontWeight.w500, fontSize: 16),
+        headlineLarge: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.bold,
+          fontSize: 28,
+        ),
+        headlineMedium: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 22,
+        ),
+        titleLarge: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w600,
+          fontSize: 18,
+        ),
+        titleMedium: TextStyle(
+          color: textPrimary,
+          fontWeight: FontWeight.w500,
+          fontSize: 16,
+        ),
         bodyLarge: TextStyle(color: textPrimary, fontSize: 15),
         bodyMedium: TextStyle(color: textSecondary, fontSize: 14),
-        labelLarge: TextStyle(color: primary, fontWeight: FontWeight.w600, fontSize: 14),
+        labelLarge: TextStyle(
+          color: primary,
+          fontWeight: FontWeight.w600,
+          fontSize: 14,
+        ),
       ),
       iconTheme: const IconThemeData(color: textSecondary, size: 22),
       bottomNavigationBarTheme: const BottomNavigationBarThemeData(

@@ -20,26 +20,47 @@ pub struct GpuRenderer {
 impl GpuRenderer {
     /// 初始化 WebGPU
     pub fn new() -> Result<Self, String> {
+        // 0. 初始化日志（输出到终端和控制台）
+        let _ = env_logger::try_init();
+        log::info!("[GPU] ========== GPU Renderer Initializing ==========");
+        
         // 1. 创建 wgpu Instance
+        log::info!("[GPU] Step 1: Creating wgpu instance...");
         let instance = Instance::new(InstanceDescriptor {
             backends: Backends::all(),  // 自动选择最佳后端（DX12/Metal/Vulkan）
             ..Default::default()
         });
+        log::info!("[GPU] Step 1 completed: Instance created");
         
         // 2. 请求 GPU adapter
-        let adapter = block_on(instance.request_adapter(&RequestAdapterOptions {
+        log::info!("[GPU] Step 2: Requesting GPU adapter...");
+        let adapter = match block_on(instance.request_adapter(&RequestAdapterOptions {
             power_preference: PowerPreference::HighPerformance,
             compatible_surface: None,  // 离屏渲染，不需要 surface
             force_fallback_adapter: false,
-        })).ok_or("Failed to find GPU adapter")?;
+        })) {
+            Some(adapter) => {
+                log::info!("[GPU] Step 2 completed: GPU adapter found: {:?}", adapter.get_info());
+                adapter
+            }
+            None => {
+                log::error!("[GPU] Step 2 FAILED: No GPU adapter found!");
+                return Err("Failed to find GPU adapter".to_string());
+            }
+        };
         
         // 3. 请求设备（Device）和队列（Queue）
+        log::info!("[GPU] Step 3: Requesting GPU device...");
         let (device, queue) = block_on(adapter.request_device(&DeviceDescriptor {
             label: Some("VCR GPU Device"),
             required_limits: Limits::default(),
             required_features: Features::empty(),
             memory_hints: MemoryHints::Performance,
-        }, None)).map_err(|e| format!("Failed to create device: {}", e))?;
+        }, None)).map_err(|e| {
+            log::error!("[GPU] Step 3 FAILED: Failed to create device: {}", e);
+            format!("Failed to create device: {}", e)
+        })?;
+        log::info!("[GPU] Step 3 completed: GPU device created");
         
         // 将 device 和 queue 包装为 Arc（线程安全共享）
         let device = Arc::new(device);
@@ -52,15 +73,31 @@ impl GpuRenderer {
             source: ShaderSource::Wgsl(std::borrow::Cow::Borrowed(shader_code)),
         });
         
+        log::info!("[GPU] Step 4: Creating render pipeline...");
         // 7. 创建渲染管道（测试用三角形）
-        let render_pipeline = Self::create_render_pipeline(&device, &shader_module)?;
+        let render_pipeline = match Self::create_render_pipeline(&device, &shader_module) {
+            Ok(pipeline) => {
+                log::info!("[GPU] Step 4 completed: Render pipeline created");
+                pipeline
+            }
+            Err(e) => {
+                log::error!("[GPU] Step 4 FAILED: Failed to create render pipeline: {}", e);
+                return Err(format!("Failed to create render pipeline: {}", e));
+            }
+        };
         
+        log::info!("[GPU] Step 5: Creating waveform shader module...");
         // 8. 加载波形渲染 shader
         let waveform_shader_code = include_str!("shader_waveform.wgsl");
-        let waveform_shader_module = device.create_shader_module(ShaderModuleDescriptor {
+        let waveform_shader_module = match device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Waveform Shader"),
             source: ShaderSource::Wgsl(std::borrow::Cow::Borrowed(waveform_shader_code)),
-        });
+        }) {
+            module => {
+                log::info!("[GPU] Step 5 completed: Waveform shader module created");
+                module
+            }
+        };
         
         // 9. 创建统一缓冲区（颜色）
         let uniform_buffer = device.create_buffer(&BufferDescriptor {
@@ -302,7 +339,7 @@ impl GpuRenderer {
             render_pass.set_pipeline(waveform_pipeline);
             
             // 8. 设置顶点缓冲区
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.as_ref().unwrap().slice(..));
             
             // 9. 设置统一缓冲区（绑定组）
             render_pass.set_bind_group(0, &self.bind_group, &[]);

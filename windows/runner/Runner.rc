@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "VCR" "\0"
-            VALUE "FileDescription", "VCR" "\0"
+            VALUE "CompanyName", "com.example" "\0"
+            VALUE "FileDescription", "vcr" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "VCR" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 VCR. All rights reserved." "\0"
-            VALUE "OriginalFilename", "VCR.exe" "\0"
-            VALUE "ProductName", "VCR" "\0"
+            VALUE "InternalName", "vcr" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 com.example. All rights reserved." "\0"
+            VALUE "OriginalFilename", "vcr.exe" "\0"
+            VALUE "ProductName", "vcr" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

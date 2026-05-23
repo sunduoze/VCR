@@ -38,12 +38,3 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
-
-# Copy vcr_lib.dll from plugins directory to runner directory after build
-# This fixes the "module not found" error when running the app
-add_custom_command(TARGET ${BINARY_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_BINARY_DIR}/plugins/rust_lib_vcr/Release/vcr_lib.dll"
-    "${CMAKE_BINARY_DIR}/runner/Release/vcr_lib.dll"
-  COMMENT "Copying vcr_lib.dll to runner Release directory"
-  )

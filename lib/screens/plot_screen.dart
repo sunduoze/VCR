@@ -1770,7 +1770,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final scrollbarHeight = 36.0;
     final trackPadding = 16.0; // Padding on each side so handles are always visible
     final plotLeft = trackPadding;
-    final plotRight = trackPadding;
+    // plotRight must leave room for the Max Pts input box (100px) + gap (8px) on the right
+    final plotRight = 124.0;
     final trackWidth = constraints.maxWidth - plotLeft - plotRight;
     if (trackWidth <= 0) return const SizedBox.shrink();
 

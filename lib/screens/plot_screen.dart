@@ -199,14 +199,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _autoScaleX = true;
   bool _autoScaleY = true; // Global Y auto-scale (fallback)
   double _xMin = 0;
-  double _xMax = 10;
+  double _xMax = 1000;
   double _yMin = -1; // Global Y range (used when no per-channel axis)
   double _yMax = 1;
   int _globalDecimals = 3; // Global decimal precision for axes
 
   // ── Scroll (oscilloscope) mode ──
   bool _scrollMode = false;         // true = oscilloscope sweep mode
-  double _scrollWindowWidth = 100.0;  // visible X range in seconds
+  double _scrollWindowWidth = 1000.0;  // visible X range in samples (points)
   double _scrollMinTime = 0.0;       // left edge of visible window
   double _screenWidth = 800.0;       // plot area width for viewport decimation
 
@@ -1166,7 +1166,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Scroll mode settings dialog ──
   void _showScrollModeSettings() {
-    final widthCtrl = TextEditingController(text: _scrollWindowWidth.toStringAsFixed(1));
+    final widthCtrl = TextEditingController(text: _scrollWindowWidth.round().toString());
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1213,8 +1213,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             const SizedBox(height: 8),
             Wrap(
               spacing: 6, runSpacing: 6,
-              children: [1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 60.0, 120.0].map((w) => ActionChip(
-                label: Text('${w.toStringAsFixed(w == w.roundToDouble() ? 0 : 1)}s', style: const TextStyle(fontSize: 12)),
+              children: [100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0].map((w) => ActionChip(
+                label: Text(w.round().toString(), style: const TextStyle(fontSize: 12)),
                 onPressed: () { widthCtrl.text = w.toStringAsFixed(w == w.roundToDouble() ? 0 : 1); },
               )).toList(),
             ),
@@ -2743,7 +2743,7 @@ class _PlotPainter extends CustomPainter {
       final sx = _xToScreen(tick, plotW) + plotLeft;
       if (sx < plotLeft || sx > plotLeft + plotW) continue;
       final tp = TextPainter(
-        text: TextSpan(text: _formatTick(tick), style: labelStyle),
+        text: TextSpan(text: _formatXTick(tick), style: labelStyle),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(sx - tp.width / 2, h - plotBottom + 4));
@@ -3139,6 +3139,11 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
       tick += niceStep;
     }
     return ticks;
+  }
+
+  /// X轴刻度格式化：显示整数点号
+  String _formatXTick(double val) {
+    return val.round().toString();
   }
 
   String _formatTick(double val, [int decimals = 3]) {

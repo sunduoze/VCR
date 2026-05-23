@@ -124,6 +124,7 @@ pub fn plot_get_channel_viewport_data(
     max_points: u32,
 ) -> Vec<PlotPoint> {
     let result = PLOT_DATA.get_channel_viewport_data(&device_id, &channel, x_min, x_max, max_points as usize);
+    eprintln!("🧪 [DEBUG] [数据链路] 步骤4: Dart 请求数据: device={}, channel={}, 返回 {} 个点", device_id, channel, result.len());
     log::debug!("[Plot] plot_get_channel_viewport_data: device={}, ch={}, x=[{:.1},{:.1}], max_pts={}, result={}", device_id, channel, x_min, x_max, max_points, result.len());
     result.into_iter().map(|p| PlotPoint { timestamp_ms: p.timestamp_ms, value: p.value }).collect()
 }

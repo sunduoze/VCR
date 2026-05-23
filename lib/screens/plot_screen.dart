@@ -491,6 +491,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// 分离的数据轮询（策略 B: 减少 FRB 调用）
   /// 后台快速轮询，不触发 UI 更新
   void _fetchRealData() {
+    print('🧪 [DEBUG] [数据链路] 步骤5: _fetchRealData() 开始');
     if (!_useRealData) return; // Skip in demo mode
     if (!_isPlaying) return; // Pause: stop data fetching
 
@@ -556,6 +557,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   DateTime _lastUIUpdate = DateTime.now();
 
   void _updateRealDataUI() {
+    print('🧪 [DEBUG] [数据链路] 步骤6: _updateRealDataUI() 开始');
     if (!_useRealData || !mounted || !_isPlaying) return;
 
     // 策略 A: UI 节流，每 33ms（约 30fps）更新一次

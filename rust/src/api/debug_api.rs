@@ -168,7 +168,7 @@ fn spawn_receive_loop(device_id: String) {
             // Phase 1: receive (tokio I/O — no panic risk here)
             let data: Result<Vec<u8>, TransportError> = match SESSIONS.receive(&id).await {
                 Ok(data) if !data.is_empty() => {
-                    println!("🧪 [DEBUG] 收到数据: {} 字节", data.len());
+                    eprintln!("🧪 [DEBUG] [数据链路] 步骤1: 收到数据: {} 字节", data.len());
                     Ok(data)
                 },
                 Ok(_) => {
@@ -220,11 +220,15 @@ fn spawn_receive_loop(device_id: String) {
                     for line in lines {
                         let result = parse_csv_line(line);
                         if result.success && !result.channels.is_empty() {
-                    // Use counter-based X axis (from 0, incrementing)
+                            eprintln!("🧪 [DEBUG] [数据链路] 步骤2: 解析成功, 通道数: {}", result.channels.len());
+                            // Use counter-based X axis (from 0, incrementing)
                             let counter = PLOT_DATA.next_counter() as f64;
                             // Channel naming: first value → prefix (or "ch0"), others → ch1, ch2...
                             let prefix = result.metadata.get("prefix").map(|s| s.as_str());
                             PLOT_DATA.push_batch_with_names(&id, counter, prefix, &result.channels);
+                            eprintln!("🧪 [DEBUG] [数据链路] 步骤3: 数据已存储到 PLOT_DATA");
+                        } else {
+                            eprintln!("🧪 [DEBUG] [数据链路] 步骤2: 解析失败: {:?}", line);
                         }
                     }
                 })).is_ok();

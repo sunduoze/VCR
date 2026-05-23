@@ -119,6 +119,22 @@ List<PlotPoint> plotGetChannelViewportData({
   maxPoints: maxPoints,
 );
 
+/// 获取通道的最新数据点
+///
+/// # 参数
+/// - `device_id`: 设备 ID
+/// - `channel`: 通道名称
+///
+/// # 返回
+/// 最新数据点（如果没有数据，返回空列表）
+List<PlotPoint> plotGetChannelLatestData({
+  required String deviceId,
+  required String channel,
+}) => RustLib.instance.api.crateApiPlotApiPlotGetChannelLatestData(
+  deviceId: deviceId,
+  channel: channel,
+);
+
 /// 数据点（FRB 兼容）
 class PlotPoint {
   final double timestampMs;

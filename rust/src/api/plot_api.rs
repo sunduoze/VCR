@@ -1,4 +1,4 @@
-// Plot API - 波形数据接口
+﻿// Plot API - 波形数据接口
 // 提供设备数据注册、推送、查询功能
 
 use crate::core::plot::PLOT_DATA;
@@ -127,3 +127,34 @@ pub fn plot_get_channel_viewport_data(
     log::debug!("[Plot] plot_get_channel_viewport_data: device={}, ch={}, x=[{:.1},{:.1}], max_pts={}, result={}", device_id, channel, x_min, x_max, max_points, result.len());
     result.into_iter().map(|p| PlotPoint { timestamp_ms: p.timestamp_ms, value: p.value }).collect()
 }
+// ============================================================================
+// 获取通道最新数据（轻量级 API，用于 currentValue 显示）
+// ============================================================================
+
+/// 获取通道的最新数据点
+/// 
+/// # 参数
+/// - `device_id`: 设备 ID
+/// - `channel`: 通道名称
+/// 
+/// # 返回
+/// 最新数据点（如果没有数据，返回空列表）
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_get_channel_latest_data(
+    device_id: String,
+    channel: String,
+) -> Vec<PlotPoint> {
+    let result = PLOT_DATA.get_latest_data(&device_id, &channel);
+    
+    if let Some(point) = result {
+        vec![PlotPoint {
+            timestamp_ms: point.timestamp_ms,
+            value: point.value,
+        }]
+    } else {
+        vec![]
+    }
+}
+
+
+// ============================================================================

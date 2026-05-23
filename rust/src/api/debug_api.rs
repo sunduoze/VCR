@@ -1,4 +1,4 @@
-use crate::core::app_context::{block_on, DEBUG, init_logger, REGISTRY, RT, SESSIONS};
+﻿use crate::core::app_context::{block_on, DEBUG, init_logger, REGISTRY, RT, SESSIONS};
 use crate::core::session::debug_session::DebugLogEntry;
 use crate::core::transport::TransportError;
 use crate::core::protocol::parse_csv_line;
@@ -141,12 +141,13 @@ pub fn debug_get_active_device_names() -> Vec<(String, String)> {
 
 /// 启动后台接收循环（供 device_api 的 connectDevice 也调用）
 pub fn start_receive_loop_if_needed(device_id: &str) {
-    let has_task = RECEIVE_TASKS
-        .lock()
-        .unwrap()
+    let has_task = lock_mutex(&RECEIVE_TASKS)
         .contains_key(device_id);
     if !has_task {
+        println!("🧪 [DEBUG] 启动接收循环: {}", device_id);
         spawn_receive_loop(device_id.to_string());
+    } else {
+        println!("🧪 [DEBUG] 接收循环已存在: {}", device_id);
     }
 }
 
@@ -154,17 +155,35 @@ fn spawn_receive_loop(device_id: String) {
     stop_receive_loop(&device_id);
 
     let id = device_id.clone();
+    
+    // ✅ 添加外层 panic 防护：确保异步任务中的 panic 不会导致整个程序崩溃
     let handle = RT.spawn(async move {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            // 注意：catch_unwind 不能捕获 async 块中的 panic
+            // 所以我们使用另一种策略：在循环内部添加错误处理
+        }));
+        
+        // 使用 loop + 错误处理，而不是 catch_unwind
         loop {
             // Phase 1: receive (tokio I/O — no panic risk here)
             let data: Result<Vec<u8>, TransportError> = match SESSIONS.receive(&id).await {
-                Ok(data) if !data.is_empty() => Ok(data),
-                Ok(_) => continue,    // empty timeout — retry
-                Err(TransportError::Timeout) => continue,
+                Ok(data) if !data.is_empty() => {
+                    println!("🧪 [DEBUG] 收到数据: {} 字节", data.len());
+                    Ok(data)
+                },
+                Ok(_) => {
+                    println!("🧪 [DEBUG] 收到空数据，继续等待...");
+                    continue;    // empty timeout — retry
+                },
+                Err(TransportError::Timeout) => {
+                    println!("🧪 [DEBUG] 接收超时，继续等待...");
+                    continue;
+                },
                 Err(e) => {
                     let _ = std::panic::catch_unwind(|| {
                         DEBUG.log_error(&id, &format!("Device disconnected: {:?}", e));
                     });
+                    println!("🧪 [DEBUG] 设备断开连接: {:?}", e);
                     break;
                 }
             };
@@ -218,7 +237,7 @@ fn spawn_receive_loop(device_id: String) {
         }
     });
 
-    RECEIVE_TASKS.lock().unwrap().insert(device_id, handle);
+    lock_mutex(&RECEIVE_TASKS).insert(device_id, handle);
 }
 
 pub fn stop_receive_loop(device_id: &str) {

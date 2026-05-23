@@ -86,7 +86,7 @@ Future<bool> removeDevice({required String deviceId}) =>
 List<PortInfo> scanSerialPorts() =>
     RustLib.instance.api.crateApiDeviceApiScanSerialPorts();
 
-/// 连接设备
+/// 连接设备 (专家调试版本：添加详细日志)
 Future<bool> connectDevice({required String deviceId}) =>
     RustLib.instance.api.crateApiDeviceApiConnectDevice(deviceId: deviceId);
 

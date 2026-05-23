@@ -1,4 +1,4 @@
-// Plot Data Buffer - 环形缓冲区存储通道数据
+﻿// Plot Data Buffer - 环形缓冲区存储通道数据
 // 用于 Plot Screen 实时波形显示
 
 use std::collections::HashMap;
@@ -275,6 +275,35 @@ impl PlotDataManager {
         }
         log::warn!("[PlotBuffer] get_channel_data: device={}, ch={} -> NOT FOUND", device_id, channel);
         vec![]
+    }
+/// 获取通道最新数据点（O(1) 查询）
+    /// 
+    /// # 参数
+    /// - `device_id`: 设备 ID
+    /// - `channel`: 通道名称
+    /// 
+    /// # 返回
+    /// 最新数据点（如果通道不存在或没有数据，返回 None）
+    /// 获取通道最新数据点（O(1) 查询）
+    /// 
+    /// # 参数
+    /// - `device_id`: 设备 ID
+    /// - `channel`: 通道名称
+    /// 
+    /// # 返回
+    /// 最新数据点（如果通道不存在或没有数据，返回 None）
+    pub fn get_latest_data(&self, device_id: &str, channel: &str) -> Option<DataPoint> {
+        let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
+        
+        devices.get(device_id)
+            .and_then(|channels| {
+                channels.get(channel)
+                    .map(|buffer| {
+                        let data = buffer.lock().unwrap();
+                        data.data.last().cloned()
+                    })
+            })
+            .flatten()
     }
 
     /// 获取通道数据：视口裁剪 + min/max 降采样

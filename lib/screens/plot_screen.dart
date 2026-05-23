@@ -183,7 +183,7 @@ class PlotScreen extends StatefulWidget {
 
 class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateMixin {
   // ── Data source ──
-  bool _useRealData = true; // false = demo, true = real device
+  bool _useRealData = false; // false = demo, true = real device
   Timer? _realDataTimer;
   
   // ── Plot Groups ──
@@ -291,12 +291,25 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    print('🧪 [DEBUG] initState() 开始');
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initDemoChannels();
     _startDemoData();
     _loadConfig();
-    // _initGpu();  // 临时禁用，排查崩溃问题
+    
+    // 启动真实数据定时器（方案 B: 分离数据轮询和 UI 更新）
+    _fetchTimer = Timer.periodic(const Duration(milliseconds: 20), (_) => _fetchRealData());
+    _realDataTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _updateRealDataUI());
+    // GPU 加速初始化（添加 try-catch 避免崩溃）
+    try {
+      _initGpu();
+    } catch (e) {
+      print('⚠️ GPU 初始化失败，将使用 CPU 渲染: $e');
+      setState(() {
+        _gpuInitialized = false;
+      });
+    }
     _maxPointsController.text = _maxPoints.toString();
     // 启动 Rust 独立线程接收数据（方案3）
     try {
@@ -400,6 +413,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   DateTime _lastDemoUpdate = DateTime.now();
   
   void _startDemoData() {
+    print('🧪 [DEBUG] _startDemoData() 开始');
     _demoTimer?.cancel();
     final dt = 0.008 / _demoSubSamples; // sub-sample interval
     _demoTimer = Timer.periodic(const Duration(milliseconds: 8), (_) {  // ~120fps timer
@@ -485,23 +499,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (activeDevices.isEmpty) return;
 
       for (final deviceId in activeDevices) {
-        // 策略 B: 批量获取所有通道数据，一次 FRB 调用
-        Map<String, List<PlotPoint>> allData;
-        try {
-          allData = plotGetAllChannels(deviceId: deviceId);
-        } catch (e) {
-          continue;
-        }
-        if (allData.isEmpty) continue;
-
-        // Update channels with data
-        for (final entry in allData.entries) {
-          final chName = entry.key;
-          final points = entry.value;
+        // 优化：只获取通道列表，不获取全部数据
+        // 全部数据由 _refreshViewportData() 负责（已降采样）
+        final channelNames = plotGetChannels(deviceId: deviceId);
+        
+        for (final chName in channelNames) {
           // Find or skip channel
           final chIdx = _channels.indexWhere(
             (c) => c.deviceId == deviceId && c.channelName == chName,
           );
+          
           if (chIdx == -1) {
             // Auto-add new channel
             if (!_autoAddChannels) continue;
@@ -516,27 +523,28 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               showYAxis: false,
               plotGroupId: 'default',
             ));
-            final newIdx = _channels.length - 1;
-            _channels[newIdx].data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
-            if (points.isNotEmpty) {
-              _channels[newIdx].currentValue = points.last.value;
+          }
+          
+          // 只获取最新值（用于 currentValue 显示）
+          // 不获取全部数据！
+          try {
+            final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
+            if (latestData.isNotEmpty) {
+              final idx = _channels.indexWhere(
+                (c) => c.deviceId == deviceId && c.channelName == chName,
+              );
+              if (idx != -1) {
+                _channels[idx].currentValue = latestData.last.value;
+              }
             }
-            // Trim to max points
-            if (_channels[newIdx].data.length > _maxPoints + _maxPoints ~/ 10) {
-              _channels[newIdx].data = _channels[newIdx].data.sublist(_channels[newIdx].data.length - _maxPoints);
-            }
-          } else {
-            _channels[chIdx].data = points.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
-            if (_channels[chIdx].data.isNotEmpty) {
-              _channels[chIdx].currentValue = _channels[chIdx].data.last.y;
-            }
-            // Trim to max points
-            if (_channels[chIdx].data.length > _maxPoints + _maxPoints ~/ 10) {
-              _channels[chIdx].data = _channels[chIdx].data.sublist(_channels[chIdx].data.length - _maxPoints);
-            }
+          } catch (_) {
+            // 忽略错误
           }
         }
       }
+      
+      // _totalPoints 现在由 _refreshViewportData() 更新
+      // 或者从 Rust 侧获取总点数（轻量级调用）
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
     } catch (e) {
       // Silently ignore - data fetch errors don't affect UI
@@ -2483,6 +2491,7 @@ class _MinimapPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    print('🧪 [DEBUG] _PlotPainter.paint() 被调用, size=\$size');
     final rangeX = dataXMax - dataXMin;
     if (rangeX <= 0) return;
 
@@ -2564,6 +2573,7 @@ class _PlotPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    print('🧪 [DEBUG] _PlotPainter.paint() 被调用, size=\$size');
     final w = size.width;
     final h = size.height;
 

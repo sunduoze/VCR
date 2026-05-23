@@ -500,18 +500,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (activeDevices.isEmpty) return;
 
       for (final deviceId in activeDevices) {
-        // 优化：只获取通道列表，不获取全部数据
-        // 全部数据由 _refreshViewportData() 负责（已降采样）
+        // 只获取通道列表（轻量级）
         final channelNames = plotGetChannels(deviceId: deviceId);
         
         for (final chName in channelNames) {
-          // Find or skip channel
+          // Find or create channel
           final chIdx = _channels.indexWhere(
             (c) => c.deviceId == deviceId && c.channelName == chName,
           );
           
           if (chIdx == -1) {
-            // Auto-add new channel
             if (!_autoAddChannels) continue;
             final colorIdx = _channels.length % _channelColors.length;
             _channels.add(PlotChannel(
@@ -526,29 +524,37 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             ));
           }
           
-          // 只获取最新值（用于 currentValue 显示）
-          // 不获取全部数据！
-          try {
-            final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
-            if (latestData.isNotEmpty) {
-              final idx = _channels.indexWhere(
-                (c) => c.deviceId == deviceId && c.channelName == chName,
-              );
-              if (idx != -1) {
-                _channels[idx].currentValue = latestData.last.value;
-              }
+          // 获取该通道全量数据（首次或数据量少时）
+          final targetIdx = _channels.indexWhere(
+            (c) => c.deviceId == deviceId && c.channelName == chName,
+          );
+          if (targetIdx == -1) continue;
+          
+          final ch = _channels[targetIdx];
+          // 只在 ch.data 为空时拉一次全量（避免每帧传输 250K 点）
+          if (ch.data.isEmpty) {
+            final allPoints = plotGetAllChannels(deviceId: deviceId);
+            final pts = allPoints[chName];
+            if (pts != null && pts.isNotEmpty) {
+              ch.data = pts.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+              ch.currentValue = pts.last.value;
+              print('🧪 [DEBUG] [数据链路] 步骤5a: ch=${chName} initial data.len=${pts.length}');
             }
-          } catch (_) {
-            // 忽略错误
+          } else {
+            // ch.data 有数据，追加最新点
+            try {
+              final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
+              if (latestData.isNotEmpty) {
+                ch.currentValue = latestData.last.value;
+              }
+            } catch (_) {}
           }
         }
       }
       
-      // _totalPoints 现在由 _refreshViewportData() 更新
-      // 或者从 Rust 侧获取总点数（轻量级调用）
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
     } catch (e) {
-      // Silently ignore - data fetch errors don't affect UI
+      print('🧪 [DEBUG] [数据链路] 步骤5 ERROR: $e');
     }
   }
 
@@ -579,6 +585,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (_autoScaleY) _fitYAxis();
     }
 
+    // 调试：X轴范围
+    print('🧪 [DEBUG] [数据链路] 步骤6a: _xMin=$_xMin _xMax=$_xMax _autoScaleX=$_autoScaleX _channels.len=${_channels.length}');
+
     // Fetch viewport data for visible channels (only when needed)
     if (_xMin != _xMax && _screenWidth > 0) {
       final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
@@ -595,12 +604,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           // 调试：打印所有通道的viewportData与data对比
           debugPrint('[DEBUG] ${ch.channelName}: vpLen=${vpPoints.length} dataLen=${ch.data.length}');
           if (vpPoints.isNotEmpty && ch.data.isNotEmpty) {
-            debugPrint('[DEBUG]   vpLast=(${vpPoints.last.timestampMs},${vpPoints.last.value}) dataLast=(${ch.data.last.x},${ch.data.last.y})');
+            debugPrint('[DEBUG]   vpFirst=(${vpPoints.first.timestampMs},${vpPoints.first.value}) vpLast=(${vpPoints.last.timestampMs},${vpPoints.last.value})');
+            debugPrint('[DEBUG]   dataFirst=(${ch.data.first.x},${ch.data.first.y}) dataLast=(${ch.data.last.x},${ch.data.last.y})');
+          } else if (vpPoints.isEmpty) {
+            debugPrint('[DEBUG]   ⚠️ vpPoints为空！ch.data.len=${ch.data.length}');
           }
-        } catch (_) {
+        } catch (e) {
+          debugPrint('[DEBUG] ⚠️ vpPoints ERROR: $e');
           ch.viewportData = [];
         }
       }
+    } else {
+      print('🧪 [DEBUG] [数据链路] 步骤6b: 跳过！_xMin=$_xMin _xMax=$_xMax _screenWidth=$_screenWidth');
     }
 
     // GPU 𫔰阌缂𰬒缂阌缂

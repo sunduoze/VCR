@@ -3,6 +3,7 @@ use crate::core::session::debug_session::DebugLogEntry;
 use crate::core::transport::TransportError;
 use crate::core::protocol::parse_csv_line;
 use crate::core::plot::PLOT_DATA;
+use crate::api::plot_api::plot_get_timestamp_ms;
 use super::lua_api::trigger_callback;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
@@ -222,11 +223,11 @@ fn spawn_receive_loop(device_id: String) {
                         if result.success && !result.channels.is_empty() {
                             eprintln!("🧪 [DEBUG] [数据链路] 步骤2: 解析成功, 通道数: {}", result.channels.len());
                             // Use counter-based X axis (from 0, incrementing)
-                            let counter = PLOT_DATA.next_counter() as f64;
+                            let timestamp = plot_get_timestamp_ms();
                             // Channel naming: first value → prefix (or "ch0"), others → ch1, ch2...
                             let prefix = result.metadata.get("prefix").map(|s| s.as_str());
-                            PLOT_DATA.push_batch_with_names(&id, counter, prefix, &result.channels);
-                            eprintln!("🧪 [DEBUG] [数据链路] 步骤3: 数据已存储到 PLOT_DATA");
+                            PLOT_DATA.push_batch_with_names(&id, timestamp, prefix, &result.channels);
+                            eprintln!("🧪 [DEBUG] [数据链路] 步骤3: 数据已存储到 PLOT_DATA, ts={:.3}", timestamp);
                         } else {
                             eprintln!("🧪 [DEBUG] [数据链路] 步骤2: 解析失败: {:?}", line);
                         }

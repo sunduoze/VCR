@@ -431,9 +431,21 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // 帧率控制：防止setState调用过于频繁
   DateTime _lastDemoUpdate = DateTime.now();
   
+  // 每通道独立的样本索引，确保X值连续
+  final List<int> _demoSampleIndices = <int>[];
+  
   void _startDemoData() {
     print('🧪 [DEBUG] _startDemoData() 开始');
+    _debugLog('[START] _startDemoData called, _useRealData=$_useRealData, _isPlaying=$_isPlaying, _maxPoints=$_maxPoints');
+    _debugLog('[START] _demoChannels.length=${_demoChannels.length}, _realChannels.length=${_realChannels.length}');
     _demoTimer?.cancel();
+    
+    // 初始化每通道样本索引
+    _demoSampleIndices.clear();
+    for (int i = 0; i < _channels.length; i++) {
+      _demoSampleIndices.add(0);
+    }
+    
     final dt = 0.008 / _demoSubSamples; // sub-sample interval
     _demoTimer = Timer.periodic(const Duration(milliseconds: 8), (_) {  // ~120fps timer
       if (!mounted || !_isPlaying) return;
@@ -452,17 +464,27 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final noise = 0.05 * (rng.nextDouble() - 0.5);
           final val = _demoEval(i, t, noise);
           // Append at end: data[0]=oldest, data[last]=newest
-          // Store absolute sample index; displayed X = pt.x - data.last.x (offset from newest)
-          _channels[i].data.add(_DataPoint(_sampleIndex.toDouble(), val));
+          // Store per-channel sample index (continuous); displayed X = pt.x - data.last.x (offset from newest)
+          _channels[i].data.add(_DataPoint(_demoSampleIndices[i].toDouble(), val));
           _channels[i].currentValue = val;
-          // Trim old data: keep at most _maxPoints points
-          if (_channels[i].data.length > _maxPoints) {
-            _channels[i].data = _channels[i].data.sublist(_channels[i].data.length - _maxPoints);
+          _demoSampleIndices[i]++;
+        }
+      }
+      // Trim: only when data exceeds _maxPoints by a safe margin to avoid O(n) per tick.
+      // Using sublist() on a large list is O(n) — we defer trimming until 110% capacity.
+      if (_channels.isNotEmpty && _channels.first.data.length > _maxPoints * 11 ~/ 10) {
+        _debugLog('[TRIM] Trimming data: first.data.length=${_channels.first.data.length}, _maxPoints=$_maxPoints');
+        for (final ch in _channels) {
+          if (ch.data.length > _maxPoints) {
+            ch.data = ch.data.sublist(ch.data.length - _maxPoints);
           }
         }
-        _sampleIndex++;
       }
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
+      // 每100帧输出一次调试信息
+      if (_sampleIndex % 100 == 0) {
+        _debugLog('[TICK] sampleIndex=$_sampleIndex, totalPoints=$_totalPoints, first.ch.data.length=${_channels.isNotEmpty ? _channels.first.data.length : 0}');
+      }
 
       if (_scrollMode) {
         // Auto-track: always show the latest data at the right edge (x=0)
@@ -477,9 +499,36 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // 根据帧率控制决定是否更新UI
       if (shouldUpdateUI) {
         _lastDemoUpdate = now;
+        _refreshViewportData(); // ← 修复：timer回调中刷新viewportData，否则绘制回退到ch.data(250K点)导致卡顿
         setState(() {});
       }
     });
+  }
+
+  // ── Helper: binary search for viewport data ──
+  // Returns first index where data[i].x >= target.
+  // If no such index, returns data.length.
+  int _binarySearch(List<_DataPoint> data, double target) {
+    int lo = 0, hi = data.length;
+    while (lo < hi) {
+      final mid = (lo + hi) ~/ 2;
+      if (data[mid].x < target) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    return lo;
+  }
+
+  // Debug log to file
+  void _debugLog(String msg) {
+    try {
+      final file = File('debug_log.txt');
+      file.writeAsStringSync('${DateTime.now()}: $msg\n', mode: FileMode.append);
+    } catch (_) {
+      // Ignore file write errors
+    }
   }
 
   /// Refresh viewportData for all channels using current _xMin/_xMax.
@@ -487,6 +536,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
+    // 调试：打印关键参数
+    if (_channels.isNotEmpty && _channels.first.data.isNotEmpty) {
+      _debugLog('[DEBUG] _refreshViewportData: _xMin=$_xMin _xMax=$_xMax _screenWidth=$_screenWidth maxPts=$maxPts');
+      _debugLog('[DEBUG]   first ch.data.length=${_channels.first.data.length} newestAbsX=${_channels.first.data.last.x}');
+    }
     for (final ch in _channels) {
       if (!ch.visible) {
         ch.viewportData = [];
@@ -494,29 +548,44 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
 
       // Demo mode: build viewportData from ch.data with adjusted X
+      // OPTIMIZED: use binary search (O(log n)) instead of full traversal (O(n))
       if (ch.deviceId.startsWith('demo_')) {
         if (ch.data.isEmpty) { ch.viewportData = []; continue; }
         final newestAbsX = ch.data.last.x; // absolute index of newest point
-        // Viewport clip: keep points whose adjusted X is within [_xMin-1, _xMax+1]
-        final visible = <_DataPoint>[];
-        for (final pt in ch.data) {
-          final adjustedX = pt.x - newestAbsX;
-          if (adjustedX >= _xMin - 1 && adjustedX <= _xMax + 1) {
-            visible.add(_DataPoint(adjustedX, pt.y));
-          }
-        }
+        final targetMin = newestAbsX + _xMin;
+        final targetMax = newestAbsX + _xMax;
+        
+        // Binary search for targetMin (first index where x >= targetMin)
+        int startIdx = _binarySearch(ch.data, targetMin);
+        // Binary search for targetMax (first index where x > targetMax)
+        int endIdx = _binarySearch(ch.data, targetMax) + 1;
+        
+        startIdx = startIdx.clamp(0, ch.data.length);
+        endIdx = endIdx.clamp(startIdx, ch.data.length);
+        
+        if (startIdx >= endIdx) { ch.viewportData = []; continue; }
+        
+        final visible = ch.data.sublist(startIdx, endIdx);
         if (visible.isEmpty) { ch.viewportData = []; continue; }
+        
+        // 调试：打印 visible.length 和 maxPts
+        _debugLog('[VPD] ${ch.channelName}: visible.length=${visible.length} maxPts=$maxPts');
+        
+        // Adjust X values: relative to newest (newest = 0, older = negative)
         // Decimate to ≤ maxPts
         final step = (visible.length / maxPts).ceil().clamp(1, visible.length);
         ch.viewportData = [
           for (int i = 0; i < visible.length; i += step)
-            visible[i],
+            _DataPoint(visible[i].x - newestAbsX, visible[i].y),
         ];
+        // 调试：打印 viewportData.length
+        _debugLog('[VPD]   viewportData.length=${ch.viewportData.length}');
         continue;
       }
 
       // Real mode: use Rust FFI for efficient viewport + decimation
       try {
+        debugPrint('[DEBUG] ${ch.channelName}: calling plotGetChannelViewportData');
         final vpPoints = plotGetChannelViewportData(
           deviceId: ch.deviceId,
           channel: ch.channelName,
@@ -528,6 +597,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final xStep = (vpPoints.length > 1) ? (_xMax - _xMin) / (vpPoints.length - 1) : 0.0;
           return _DataPoint(_xMin + i * xStep, vpPoints[i].value);
         });
+        debugPrint('[DEBUG]   Real mode: vpPoints.length=${vpPoints.length} viewportData.length=${ch.viewportData.length}');
       } catch (_) {
         ch.viewportData = [];
       }
@@ -694,11 +764,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _fetchTimer?.cancel();
 
     // 策略 A: 两个分离的定时器
-    // 1. 数据轮询：33ms（~30fps），匹配 UI 更新频率
-    //    与 _updateRealDataUI 同步，保证数据实时性
-    _fetchTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _fetchRealData());
-    // 2. UI 更新：~30fps（33ms），保证画面流畅
-    _realDataTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _updateRealDataUI());
+    // 1. 数据轮询：100ms（~10fps），降低频率避免FPS下降
+    //    与 _updateRealDataUI 解耦，允许数据轮询更快
+    _fetchTimer = Timer.periodic(const Duration(milliseconds: 100), (_) => _fetchRealData());
+    // 2. UI 更新：100ms（~10fps），保证画面流畅不卡顿
+    _realDataTimer = Timer.periodic(const Duration(milliseconds: 100), (_) => _updateRealDataUI());
   }
 
   Timer? _fetchTimer; // Separate from _realDataTimer
@@ -733,8 +803,30 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   void _fitXAxis() {
+    _debugLog('[FITX] called, _scrollMode=$_scrollMode, _useRealData=$_useRealData, _maxPoints=$_maxPoints');
     if (_scrollMode) return; // X axis is controlled by scroll window
     final bufMin = -_maxPoints.toDouble();
+    
+    // Demo 模式：X 轴范围固定为 [-_maxPoints, 0]
+    // viewportData 中的 X 值是相对值（相对于最新样本），范围始终是 [-data.length+1, 0]
+    if (!_useRealData && _channels.isNotEmpty) {
+      final firstCh = _channels.first;
+      if (firstCh.data.isNotEmpty) {
+        // 使用实际数据点数计算范围，而不是绝对样本索引差值
+        final numPoints = firstCh.data.length;
+        _xMin = (-numPoints).toDouble().clamp(bufMin, 0.0);
+        _xMax = 0.0;
+        _debugLog('[FITX] Demo mode: numPoints=$numPoints, bufMin=$bufMin, xMin=$_xMin, _maxPoints=$_maxPoints');
+        return;
+      }
+      // 数据为空，使用默认范围
+      _debugLog('[FITX] Demo mode: no data, setting xMin=$bufMin, _maxPoints=$_maxPoints');
+      _xMin = bufMin;
+      _xMax = 0.0;
+      return;
+    }
+    
+    // Real 模式：使用 viewportData
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
     for (final ch in _channels) {
@@ -753,8 +845,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final padding = (maxVal - minVal) * 0.02;
     _xMin = (minVal - padding).clamp(bufMin, 0.0);
     _xMax = (maxVal + padding).clamp(bufMin, 0.0);
-    if (_xMax - _xMin < _minVisibleRange) {
-      _xMin = (0.0 - _minVisibleRange).clamp(bufMin, 0.0);
+    // Real 模式下才使用最小范围约束
+    if (_xMax - _xMin < 1.0) {  // 至少显示 1 个样本宽度
+      _xMin = -1.0.clamp(-bufMin, 1.0);
       _xMax = 0.0;
     }
   }
@@ -1944,11 +2037,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       thumbWidth = trackWidth;
     }
     // Ensure minimum thumb width so it's always interactable
-    if (thumbWidth < 20) {
+    // Minimum = 50 points per channel (in pixels)
+    final minPoints = 50.0 * _channels.length;  // 50 points per channel
+    final minThumbWidthPixels = max(30.0, (minPoints / _maxPoints) * trackWidth);
+    if (thumbWidth < minThumbWidthPixels) {
       final center = (thumbLeft + thumbRight) / 2;
-      thumbLeft = (center - 10).clamp(plotLeft, plotLeft + trackWidth - 20);
-      thumbRight = thumbLeft + 20;
-      thumbWidth = 20.0;
+      thumbLeft = (center - minThumbWidthPixels / 2).clamp(plotLeft, plotLeft + trackWidth - minThumbWidthPixels);
+      thumbRight = thumbLeft + minThumbWidthPixels;
+      thumbWidth = minThumbWidthPixels;
     }
     // Final clamp: never let thumb extend beyond track bounds
     thumbLeft = thumbLeft.clamp(plotLeft, plotLeft + trackWidth - 20);
@@ -2038,9 +2134,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   ),
                 ),
                 // Left edge handle — always inside thumb left edge, white on blue
+                // Width reduced to 20% of original (12.0 → 2.4, using 4.0 for usability)
                 Positioned(
                   left: thumbLeft,
-                  width: thumbWidth > 40 ? 12.0 : (thumbWidth / 3).clamp(6.0, 12.0),
+                  width: 4.0,
                   top: 2,
                   bottom: 2,
                   child: MouseRegion(
@@ -2080,16 +2177,17 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                           borderRadius: BorderRadius.circular(2),
                         ),
                         child: Center(
-                          child: Icon(Icons.chevron_left, size: 10, color: Colors.black87),
+                          child: Icon(Icons.chevron_left, size: 6, color: Colors.black87),
                         ),
                       ),
                     ),
                   ),
                 ),
                 // Right edge handle — always inside thumb right edge, white on blue
+                // Width reduced to 20% of original (12.0 → 2.4, using 4.0 for usability)
                 Positioned(
-                  left: thumbRight - (thumbWidth > 40 ? 12.0 : (thumbWidth / 3).clamp(6.0, 12.0)),
-                  width: thumbWidth > 40 ? 12.0 : (thumbWidth / 3).clamp(6.0, 12.0),
+                  left: thumbRight - 4.0,
+                  width: 4.0,
                   top: 2,
                   bottom: 2,
                   child: MouseRegion(
@@ -2128,7 +2226,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                           borderRadius: BorderRadius.circular(2),
                         ),
                         child: Center(
-                          child: Icon(Icons.chevron_right, size: 10, color: Colors.black87),
+                          child: Icon(Icons.chevron_right, size: 6, color: Colors.black87),
                         ),
                       ),
                     ),

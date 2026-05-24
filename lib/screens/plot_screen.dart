@@ -196,15 +196,21 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   ];
 
   // ── Data ──
-  List<PlotChannel> _channels = [];
+  List<PlotChannel> _demoChannels = [];
+  List<PlotChannel> _realChannels = [];
+  /// Active channel list based on current mode
+  List<PlotChannel> get _channels => _useRealData ? _realChannels : _demoChannels;
+  set _channels(List<PlotChannel> value) {
+    if (_useRealData) { _realChannels = value; } else { _demoChannels = value; }
+  }
   int _maxPoints = 250000;  // Configurable max points (default 250000, range 1000-500000)
   double _deltaTime = 1.0;  // Time per sample in ms (default 1ms, connects sample index to time)
 
   // ── Axis config ──
   bool _autoScaleX = true;
   bool _autoScaleY = true; // Global Y auto-scale (fallback)
-  double _xMin = 0;
-  double _xMax = 1000;
+  double _xMin = -1000;
+  double _xMax = 0;
   double _yMin = -1; // Global Y range (used when no per-channel axis)
   double _yMax = 1;
   int _globalDecimals = 3; // Global decimal precision for axes
@@ -438,35 +444,30 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final rng = Random();
       
       // Generate sub-samples per tick for smooth curves
+      // Performance: use append (O(1)) + relative X offset to avoid O(n) renumbering
       for (int s = 0; s < _demoSubSamples; s++) {
         _demoPhase += dt;
-        final t = _demoPhase;  // Keep phase for waveform generation
-        // X value: starts at 0, goes negative as more data accumulates
-        // This simulates oscilloscope: new data at x=0, old data scrolls left
-        final xValue = -(_sampleIndex.toDouble());  // 0, -1, -2, ...
-        _sampleIndex++;
+        final t = _demoPhase;
         for (int i = 0; i < _channels.length; i++) {
           final noise = 0.05 * (rng.nextDouble() - 0.5);
           final val = _demoEval(i, t, noise);
-          _channels[i].data.add(_DataPoint(xValue, val));  // X = negative sample index
+          // Append at end: data[0]=oldest, data[last]=newest
+          // Store absolute sample index; displayed X = pt.x - data.last.x (offset from newest)
+          _channels[i].data.add(_DataPoint(_sampleIndex.toDouble(), val));
           _channels[i].currentValue = val;
           // Trim old data: keep at most _maxPoints points
-          if (_channels[i].data.length > _maxPoints + _maxPoints ~/ 10) {
+          if (_channels[i].data.length > _maxPoints) {
             _channels[i].data = _channels[i].data.sublist(_channels[i].data.length - _maxPoints);
           }
         }
+        _sampleIndex++;
       }
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
 
       if (_scrollMode) {
-        // Oscilloscope mode: newest data at x=0 (or close to it), old data scrolls left
-        // Auto-track: always show the latest data at the right edge
-        final latestX = _channels.isNotEmpty && _channels.first.data.isNotEmpty
-            ? _channels.first.data.last.x
-            : 0.0;
-        _xMax = 0.0;  // Right edge always at 0
-        // Left edge follows the data: show the most recent samples
-        _xMin = (latestX - _effectiveScrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
+        // Auto-track: always show the latest data at the right edge (x=0)
+        _xMax = 0.0;
+        _xMin = -_effectiveScrollWindowWidth;
         _scrollMinTime = _xMin;
       } else {
         if (_autoScaleX) _fitXAxis();
@@ -484,7 +485,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Refresh viewportData for all channels using current _xMin/_xMax.
   /// Called after scrollbar drag, zoom, or any viewport change.
   void _refreshViewportData() {
-    if (!_useRealData) return; // Demo mode: data lives in Dart, no Rust query needed
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
     for (final ch in _channels) {
@@ -492,6 +492,30 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.viewportData = [];
         continue;
       }
+
+      // Demo mode: build viewportData from ch.data with adjusted X
+      if (ch.deviceId.startsWith('demo_')) {
+        if (ch.data.isEmpty) { ch.viewportData = []; continue; }
+        final newestAbsX = ch.data.last.x; // absolute index of newest point
+        // Viewport clip: keep points whose adjusted X is within [_xMin-1, _xMax+1]
+        final visible = <_DataPoint>[];
+        for (final pt in ch.data) {
+          final adjustedX = pt.x - newestAbsX;
+          if (adjustedX >= _xMin - 1 && adjustedX <= _xMax + 1) {
+            visible.add(_DataPoint(adjustedX, pt.y));
+          }
+        }
+        if (visible.isEmpty) { ch.viewportData = []; continue; }
+        // Decimate to ≤ maxPts
+        final step = (visible.length / maxPts).ceil().clamp(1, visible.length);
+        ch.viewportData = [
+          for (int i = 0; i < visible.length; i += step)
+            visible[i],
+        ];
+        continue;
+      }
+
+      // Real mode: use Rust FFI for efficient viewport + decimation
       try {
         final vpPoints = plotGetChannelViewportData(
           deviceId: ch.deviceId,
@@ -500,7 +524,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           xMax: _xMax,
           maxPoints: maxPts,
         );
-        // Use sample-index-based X values matching viewport range
         ch.viewportData = List.generate(vpPoints.length, (i) {
           final xStep = (vpPoints.length > 1) ? (_xMax - _xMin) / (vpPoints.length - 1) : 0.0;
           return _DataPoint(_xMin + i * xStep, vpPoints[i].value);
@@ -574,17 +597,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
                 ch.currentValue = latestData.last.value;
-                // Append new data points (X values will be renumbered below)
-                for (final pt in latestData) {
-                  ch.data.add(_DataPoint(0.0, pt.value)); // placeholder X
+                // Append new data points (no renumbering — O(n) per tick is too expensive)
+                final baseX = ch.data.isNotEmpty ? ch.data.last.x + 1 : 0.0;
+                for (int k = 0; k < latestData.length; k++) {
+                  ch.data.add(_DataPoint(baseX + k, latestData[k].value));
                 }
-                // Keep only _maxPoints points
+                ch.currentValue = latestData.last.value;
+                // Keep only _maxPoints points (trim from front, keep newest)
                 if (ch.data.length > _maxPoints) {
                   ch.data = ch.data.sublist(ch.data.length - _maxPoints);
-                }
-                // Renumber: oldest = -(len-1), newest = 0
-                for (int i = 0; i < ch.data.length; i++) {
-                  ch.data[i] = _DataPoint((i - ch.data.length + 1).toDouble(), ch.data[i].y);
                 }
               }
             } catch (_) {}
@@ -613,12 +634,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     // Update X axis range
     if (_scrollMode) {
-      // X-axis: newest data at x=0, auto-track the data
+      // Newest data at x=0, auto-track
       _xMax = 0.0;
-      // Show the most recent samples
-      final latestX = _channels.where((c) => c.visible && c.data.isNotEmpty)
-          .map((c) => c.data.last.x).fold(0.0, max);
-      _xMin = (latestX - _effectiveScrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
+      _xMin = -_effectiveScrollWindowWidth;
       _scrollMinTime = _xMin;
     } else {
       if (_autoScaleX) _fitXAxis();
@@ -691,13 +709,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (_useRealData) {
         // Switch to real data: stop demo timer, start real data timers
         _demoTimer?.cancel();
-        _startRealData();
+        // Init real channels if empty
+        if (_realChannels.isEmpty) {
+          _startRealData();
+        } else {
+          // Resume real data timers
+          _realDataTimer?.cancel();
+          _fetchTimer?.cancel();
+          _fetchTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _fetchRealData());
+          _realDataTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _updateRealDataUI());
+        }
       } else {
         // Switch to demo: stop real data timers, start demo timer
         _realDataTimer?.cancel();
         _fetchTimer?.cancel();
-        // If no demo channels exist, init them (preserve existing data)
-        if (_channels.every((c) => c.deviceId != 'demo_ch1')) {
+        // Init demo channels if empty
+        if (_demoChannels.isEmpty) {
           _initDemoChannels();
         }
         _startDemoData();
@@ -711,12 +738,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
     for (final ch in _channels) {
-      if (!ch.visible || ch.data.isEmpty) continue;
-      minVal = min(minVal, ch.data.first.x);
-      maxVal = max(maxVal, ch.data.last.x);
+      if (!ch.visible || (ch.data.isEmpty && ch.viewportData.isEmpty)) continue;
+      // Use viewportData if available (has adjusted X for demo mode)
+      final data = ch.viewportData.isNotEmpty ? ch.viewportData : ch.data;
+      // data sorted by x: first=oldest, last=newest
+      minVal = min(minVal, data.first.x);
+      maxVal = max(maxVal, data.last.x);
     }
     if (minVal.isInfinite) {
-      // No data: use buffer range
       _xMin = bufMin;
       _xMax = 0.0;
       return;
@@ -724,7 +753,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final padding = (maxVal - minVal) * 0.02;
     _xMin = (minVal - padding).clamp(bufMin, 0.0);
     _xMax = (maxVal + padding).clamp(bufMin, 0.0);
-    // Ensure visible range is valid
     if (_xMax - _xMin < _minVisibleRange) {
       _xMin = (0.0 - _minVisibleRange).clamp(bufMin, 0.0);
       _xMax = 0.0;
@@ -1022,6 +1050,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // Reset sample counter so X axis starts from 0 again
     plotClearCounter();
     setState(() {
+      _sampleIndex = 0;
+      _demoPhase = 0;
       for (final ch in _channels) {
         ch.data.clear();
         ch.currentValue = 0.0;
@@ -2641,6 +2671,9 @@ class _MinimapPainter extends CustomPainter {
 
     for (final ch in channels) {
       if (!ch.visible || ch.data.isEmpty) continue;
+      // Use viewportData if available (already decimated, 500-4000 pts)
+      final data = ch.viewportData.isNotEmpty ? ch.viewportData : ch.data;
+      if (data.isEmpty) continue;
       // Each channel uses its own Y range so all are visible in the minimap
       final chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
       final chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
@@ -2654,10 +2687,8 @@ class _MinimapPainter extends CustomPainter {
 
       final path = Path();
       var started = false;
-      // Downsample for minimap performance: max ~500 points per channel
-      final step = (ch.data.length / 500).ceil().clamp(1, ch.data.length);
-      for (int i = 0; i < ch.data.length; i += step) {
-        final pt = ch.data[i];
+      for (int i = 0; i < data.length; i++) {
+        final pt = data[i];
         final x = ((pt.x - dataXMin) / rangeX) * size.width;
         final y = size.height - ((pt.y - chYMin) / rangeY) * size.height;
         if (!started) {

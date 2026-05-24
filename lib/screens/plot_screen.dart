@@ -101,6 +101,7 @@ class PlotChannel {
   int decimals;
   bool showYAxis;
   LineStyle lineStyle;
+  double lineWidth;
   List<_DataPoint> data; // Full data (for scale/cursor)
   List<_DataPoint> viewportData; // Decimated viewport data (for painting)
   double currentValue;
@@ -120,6 +121,7 @@ class PlotChannel {
     this.decimals = 3,
     this.showYAxis = true,
     this.lineStyle = LineStyle.line,
+    this.lineWidth = 1.5,
     List<_DataPoint>? data,
     List<_DataPoint>? viewportData,
     this.currentValue = 0.0,
@@ -140,6 +142,7 @@ class PlotChannel {
     'decimals': decimals,
     'showYAxis': showYAxis,
     'lineStyle': lineStyle.name,
+    'lineWidth': lineWidth,
     'autoScaleY': autoScaleY,
     'yMinManual': yMinManual,
     'yMaxManual': yMaxManual,
@@ -155,6 +158,7 @@ class PlotChannel {
     showYAxis: json['showYAxis'] as bool? ?? true,
     lineStyle: LineStyle.values.firstWhere(
       (e) => e.name == json['lineStyle'], orElse: () => LineStyle.line),
+    lineWidth: (json['lineWidth'] as num?)?.toDouble() ?? 1.5,
     autoScaleY: json['autoScaleY'] as bool? ?? true,
     yMinManual: (json['yMinManual'] as num?)?.toDouble() ?? -1,
     yMaxManual: (json['yMaxManual'] as num?)?.toDouble() ?? 1,
@@ -207,7 +211,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Scroll (oscilloscope) mode ──
   bool _scrollMode = false;         // true = oscilloscope sweep mode
-  double _scrollWindowWidth = 1000.0;  // visible X range in samples (points)
+  double _scrollWindowWidth = 0.0;  // visible X range in samples; 0 means auto (= _maxPoints)
+  double get _effectiveScrollWindowWidth => _scrollWindowWidth > 0 ? _scrollWindowWidth : _maxPoints.toDouble();
   double _scrollMinTime = 0.0;       // left edge of visible window
   double _screenWidth = 800.0;       // plot area width for viewport decimation
 
@@ -432,16 +437,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       for (int s = 0; s < _demoSubSamples; s++) {
         _demoPhase += dt;
         final t = _demoPhase;  // Keep phase for waveform generation
-        final idx = _sampleIndex;  // Sample index counter
+        // X value: starts at 0, goes negative as more data accumulates
+        // This simulates oscilloscope: new data at x=0, old data scrolls left
+        final xValue = -(_sampleIndex.toDouble());  // 0, -1, -2, ...
         _sampleIndex++;
-        // X value: negative range from -_maxPoints to 0
-        final xValue = idx.toDouble() - _maxPoints.toDouble();
         for (int i = 0; i < _channels.length; i++) {
           final noise = 0.05 * (rng.nextDouble() - 0.5);
           final val = _demoEval(i, t, noise);
           _channels[i].data.add(_DataPoint(xValue, val));  // X = negative sample index
           _channels[i].currentValue = val;
-          // Trim old data
+          // Trim old data: keep at most _maxPoints points
           if (_channels[i].data.length > _maxPoints + _maxPoints ~/ 10) {
             _channels[i].data = _channels[i].data.sublist(_channels[i].data.length - _maxPoints);
           }
@@ -450,13 +455,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
 
       if (_scrollMode) {
-        // Oscilloscope mode: newest data at x=0, scroll left to right
-        // X-axis range is fixed [-Max Pts, 0], window slides to show latest data
+        // Oscilloscope mode: newest data at x=0 (or close to it), old data scrolls left
+        // Auto-track: always show the latest data at the right edge
         final latestX = _channels.isNotEmpty && _channels.first.data.isNotEmpty
             ? _channels.first.data.last.x
             : 0.0;
-        _xMax = 0.0;  // Newest data always at x=0
-        _xMin = (-_scrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
+        _xMax = 0.0;  // Right edge always at 0
+        // Left edge follows the data: show the most recent samples
+        _xMin = (latestX - _effectiveScrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
         _scrollMinTime = _xMin;
       } else {
         if (_autoScaleX) _fitXAxis();
@@ -490,7 +496,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           xMax: _xMax,
           maxPoints: maxPts,
         );
-        ch.viewportData = vpPoints.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+        // Use sample-index-based X values matching viewport range
+        ch.viewportData = List.generate(vpPoints.length, (i) {
+          final xStep = (vpPoints.length > 1) ? (_xMax - _xMin) / (vpPoints.length - 1) : 0.0;
+          return _DataPoint(_xMin + i * xStep, vpPoints[i].value);
+        });
       } catch (_) {
         ch.viewportData = [];
       }
@@ -533,7 +543,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             ));
           }
           
-          // 获取该通道全量数据（首次或数据量少时）
+          // 获取该通道全量数据（首次）
           final targetIdx = _channels.indexWhere(
             (c) => c.deviceId == deviceId && c.channelName == chName,
           );
@@ -545,7 +555,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             final allPoints = plotGetAllChannels(deviceId: deviceId);
             final pts = allPoints[chName];
             if (pts != null && pts.isNotEmpty) {
-              ch.data = pts.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+              // Use sample index as X value: newest point at x=0, older points negative
+              final totalPts = pts.length;
+              ch.data = List.generate(totalPts, (i) {
+                final sampleIdx = i - totalPts + 1; // -N+1, ..., -1, 0
+                return _DataPoint(sampleIdx.toDouble(), pts[i].value);
+              });
               ch.currentValue = pts.last.value;
               print('🧪 [DEBUG] [数据链路] 步骤5a: ch=${chName} initial data.len=${pts.length}');
             }
@@ -555,6 +570,20 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
                 ch.currentValue = latestData.last.value;
+                // Append new data points with sample-index X values
+                // Current data ends at x=0 (newest), new data goes negative
+                final nextX = ch.data.last.x - 1.0;  // Continue from last X - 1
+                for (int j = 0; j < latestData.length; j++) {
+                  ch.data.add(_DataPoint(nextX - j, latestData[j].value));
+                }
+                // Keep only _maxPoints points, renumber X values
+                if (ch.data.length > _maxPoints) {
+                  ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+                  // Renumber: oldest = -maxPoints+1, newest = 0
+                  for (int i = 0; i < ch.data.length; i++) {
+                    ch.data[i] = _DataPoint((i - ch.data.length + 1).toDouble(), ch.data[i].y);
+                  }
+                }
               }
             } catch (_) {}
           }
@@ -582,10 +611,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     // Update X axis range
     if (_scrollMode) {
-      // X-axis range fixed at [-Max Pts, 0], newest data at x=0
-      // Window slides left/right based on scrollbar position (_scrollWindowWidth)
+      // X-axis: newest data at x=0, auto-track the data
       _xMax = 0.0;
-      _xMin = (-_scrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
+      // Show the most recent samples
+      final latestX = _channels.where((c) => c.visible && c.data.isNotEmpty)
+          .map((c) => c.data.last.x).fold(0.0, max);
+      _xMin = (latestX - _effectiveScrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
       _scrollMinTime = _xMin;
     } else {
       if (_autoScaleX) _fitXAxis();
@@ -607,7 +638,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             xMax: _xMax,
             maxPoints: maxPts,
           );
-          ch.viewportData = vpPoints.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+          // Use sample-index-based X values matching viewport range
+          final vpLen = vpPoints.length;
+          ch.viewportData = List.generate(vpLen, (i) {
+            final xStep = (vpLen > 1) ? (_xMax - _xMin) / (vpLen - 1) : 0.0;
+            return _DataPoint(_xMin + i * xStep, vpPoints[i].value);
+          });
           // 调试：打印所有通道的viewportData与data对比
           debugPrint('[DEBUG] ${ch.channelName}: vpLen=${vpPoints.length} dataLen=${ch.data.length}');
           if (vpPoints.isNotEmpty && ch.data.isNotEmpty) {
@@ -840,7 +876,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _panelWidth = (json['panelWidth'] as num?)?.toDouble() ?? 220.0;
         _shareYAxis = json['shareYAxis'] as bool? ?? true;
         _scrollMode = json['scrollMode'] as bool? ?? false;
-        _scrollWindowWidth = (json['scrollWindowWidth'] as num?)?.toDouble() ?? 10.0;
+        _scrollWindowWidth = (json['scrollWindowWidth'] as num?)?.toDouble() ?? 0.0;
         _scrollMinTime = (json['scrollMinTime'] as num?)?.toDouble() ?? 0.0;
         _maxPoints = (json['maxPoints'] as num?)?.toInt() ?? 250000;
         _deltaTime = (json['deltaTime'] as num?)?.toDouble() ?? 1.0;
@@ -1176,7 +1212,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Scroll mode settings dialog ──
   void _showScrollModeSettings() {
-    final widthCtrl = TextEditingController(text: _scrollWindowWidth.round().toString());
+    final widthCtrl = TextEditingController(text: _effectiveScrollWindowWidth.round().toString());
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -1232,7 +1268,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               const SizedBox(height: 16),
               const Divider(),
               const SizedBox(height: 8),
-              Text('Current window: ${_scrollMinTime.toStringAsFixed(2)}s → ${(_scrollMinTime + _scrollWindowWidth).toStringAsFixed(2)}s',
+              Text('Current window: ${_scrollMinTime.toStringAsFixed(2)}s → ${(_scrollMinTime + _effectiveScrollWindowWidth).toStringAsFixed(2)}s',
                 style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             ],
           ],
@@ -1258,7 +1294,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   // Reset window to show latest data
                   if (_channels.isNotEmpty && _channels.first.data.isNotEmpty) {
                     final latest = _channels.first.data.last.x;
-                    _scrollMinTime = (latest - _scrollWindowWidth).clamp(0.0, latest);
+                    _scrollMinTime = (latest - _effectiveScrollWindowWidth).clamp(0.0, latest);
                     _xMin = _scrollMinTime;
                     _xMax = latest;
                   }
@@ -1446,7 +1482,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             ),
             onPressed: _showScrollModeSettings,
             tooltip: _scrollMode
-                ? 'Scroll Mode ON — ${_scrollWindowWidth.toStringAsFixed(1)}s window'
+                ? 'Scroll Mode ON — ${_effectiveScrollWindowWidth.toStringAsFixed(1)}s window'
                 : 'Scroll Mode (Oscilloscope Sweep)',
           ),
           // Channel config
@@ -2239,6 +2275,30 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   ],
                 ),
                 const SizedBox(height: 8),
+                // Line Width
+                Row(
+                  children: [
+                    SizedBox(
+                      width: 120,
+                      child: DropdownButtonFormField<double>(
+                        initialValue: ch.lineWidth,
+                        decoration: const InputDecoration(
+                          labelText: 'Line Width',
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        ),
+                        items: [0.5, 1.0, 1.5, 2.0, 3.0, 4.0].map((w) => DropdownMenuItem(value: w, child: Text(w.toStringAsFixed(1)))).toList(),
+                        onChanged: (v) {
+                          if (v != null) {
+                            setDialogState(() => ch.lineWidth = v);
+                            setState(() {});
+                          }
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
                 // Show Y axis
                 SwitchListTile(
                   value: ch.showYAxis,
@@ -3010,7 +3070,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     // 🚀 性能优化：使用Path批量绘制，减少draw call次数
     final paint = Paint()
       ..color = ch.color
-      ..strokeWidth = 2.0
+      ..strokeWidth = ch.lineWidth
       ..strokeCap = StrokeCap.round;
     
     for (final pt in data) {
@@ -3024,7 +3084,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     // Draw connecting line first (thinner, dimmer)
     final linePaint = Paint()
       ..color = ch.color.withValues(alpha: 0.5)
-      ..strokeWidth = 1.0
+      ..strokeWidth = ch.lineWidth
       ..style = PaintingStyle.stroke;
 
     final path = Path();
@@ -3051,7 +3111,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
   void _drawLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     final paint = Paint()
       ..color = ch.color
-      ..strokeWidth = 1.5
+      ..strokeWidth = ch.lineWidth
       ..style = PaintingStyle.stroke;
 
     final path = Path();

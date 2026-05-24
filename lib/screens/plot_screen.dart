@@ -432,12 +432,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       for (int s = 0; s < _demoSubSamples; s++) {
         _demoPhase += dt;
         final t = _demoPhase;  // Keep phase for waveform generation
-        final idx = _sampleIndex;  // Use sample index for X-axis
+        final idx = _sampleIndex;  // Sample index counter
         _sampleIndex++;
+        // X value: negative range from -_maxPoints to 0
+        final xValue = idx.toDouble() - _maxPoints.toDouble();
         for (int i = 0; i < _channels.length; i++) {
           final noise = 0.05 * (rng.nextDouble() - 0.5);
           final val = _demoEval(i, t, noise);
-          _channels[i].data.add(_DataPoint(idx.toDouble(), val));  // X = sample index
+          _channels[i].data.add(_DataPoint(xValue, val));  // X = negative sample index
           _channels[i].currentValue = val;
           // Trim old data
           if (_channels[i].data.length > _maxPoints + _maxPoints ~/ 10) {
@@ -448,13 +450,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
 
       if (_scrollMode) {
-        // Oscilloscope mode: auto-scroll window to latest data
+        // Oscilloscope mode: newest data at x=0, scroll left to right
+        // X-axis range is fixed [-Max Pts, 0], window slides to show latest data
         final latestX = _channels.isNotEmpty && _channels.first.data.isNotEmpty
             ? _channels.first.data.last.x
-            : _demoPhase;
-        _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
-        _xMin = _scrollMinTime;
-        _xMax = latestX;
+            : 0.0;
+        _xMax = 0.0;  // Newest data always at x=0
+        _xMin = (-_scrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
+        _scrollMinTime = _xMin;
       } else {
         if (_autoScaleX) _fitXAxis();
         if (_autoScaleY) _fitYAxis();
@@ -579,13 +582,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     // Update X axis range
     if (_scrollMode) {
-      double latestX = _scrollMinTime + _scrollWindowWidth;
-      for (final ch in _channels.where((c) => c.visible && c.data.isNotEmpty)) {
-        if (ch.data.last.x > latestX) latestX = ch.data.last.x;
-      }
-      _scrollMinTime = (latestX - _scrollWindowWidth).clamp(0.0, latestX);
-      _xMin = _scrollMinTime;
-      _xMax = latestX;
+      // X-axis range fixed at [-Max Pts, 0], newest data at x=0
+      // Window slides left/right based on scrollbar position (_scrollWindowWidth)
+      _xMax = 0.0;
+      _xMin = (-_scrollWindowWidth).clamp(-_maxPoints.toDouble(), 0.0);
+      _scrollMinTime = _xMin;
     } else {
       if (_autoScaleX) _fitXAxis();
       if (_autoScaleY) _fitYAxis();
@@ -729,19 +730,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Get total X data range (earliest → latest across all visible channels)
   /// Data X values are sample indices (0, 1, 2, ...)
   /// X axis displays time = sample_index * Δt (in ms)
+  /// X axis range: [-Max Pts, 0] to show negative time relative to latest sample
   (double, double) _getDataXRange() {
-    // 找到最大数据长度
-    int maxLen = 0;
-    for (final ch in _channels) {
-      if (!ch.visible || ch.data.isEmpty) continue;
-      maxLen = max(maxLen, ch.data.length);
-    }
-    
-    if (maxLen == 0) return (0.0, 1000.0);
-    
-    // X 轴范围基于实际数据：0 到 maxLen（样本索引）
-    // X 轴标签会乘以 Δt 显示为时间值
-    return (0.0, maxLen.toDouble());
+    // X轴范围固定为 [-Max Pts, 0]
+    // 无论数据多少，范围始终固定，用户通过滑块宽度控制显示范围
+    if (_maxPoints <= 0) _maxPoints = 250000;
+    return (-_maxPoints.toDouble(), 0.0);
   }
 
   /// Find which channel's Y-axis is closest to cursor X position.
@@ -1290,50 +1284,56 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           mainAxisSize: MainAxisSize.min,
           children: [
             // Δt 输入框
-            SizedBox(
-              width: 70,
-              height: 32,
-              child: TextField(
-                controller: _deltaTimeController,
-                decoration: const InputDecoration(
-                  labelText: 'Δt (ms)',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            Tooltip(
+              message: 'Sampling interval (Δt): Time between samples in milliseconds. X-axis shows -Max Pts × Δt to 0.',
+              child: SizedBox(
+                width: 70,
+                height: 32,
+                child: TextField(
+                  controller: _deltaTimeController,
+                  decoration: const InputDecoration(
+                    labelText: 'Δt (ms)',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  ),
+                  style: const TextStyle(fontSize: 11),
+                  onSubmitted: (value) {
+                    final parsed = double.tryParse(value);
+                    if (parsed != null && parsed > 0) {
+                      setState(() => _deltaTime = parsed);
+                      _saveConfig();
+                    }
+                  },
                 ),
-                style: const TextStyle(fontSize: 11),
-                onSubmitted: (value) {
-                  final parsed = double.tryParse(value);
-                  if (parsed != null && parsed > 0) {
-                    setState(() => _deltaTime = parsed);
-                    _saveConfig();
-                  }
-                },
               ),
             ),
             const SizedBox(width: 6),
             // Max Pts 输入框
-            SizedBox(
-              width: 90,
-              height: 32,
-              child: TextField(
-                controller: _maxPointsController,
-                decoration: const InputDecoration(
-                  labelText: 'Max Pts',
-                  border: OutlineInputBorder(),
-                  isDense: true,
-                  contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            Tooltip(
+              message: 'Max Points: Maximum number of data points to display. Controls buffer size and X-axis range.',
+              child: SizedBox(
+                width: 90,
+                height: 32,
+                child: TextField(
+                  controller: _maxPointsController,
+                  decoration: const InputDecoration(
+                    labelText: 'Max Pts',
+                    border: OutlineInputBorder(),
+                    isDense: true,
+                    contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  ),
+                  style: const TextStyle(fontSize: 11),
+                  onSubmitted: (value) {
+                    final parsed = int.tryParse(value);
+                    if (parsed != null && parsed > 0) {
+                      setState(() {});
+                      _saveConfig();
+                      // 同步到 Rust 缓冲区
+                      RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(parsed));
+                    }
+                  },
                 ),
-                style: const TextStyle(fontSize: 11),
-                onSubmitted: (value) {
-                  final parsed = int.tryParse(value);
-                  if (parsed != null && parsed > 0) {
-                    setState(() {});
-                    _saveConfig();
-                    // 同步到 Rust 缓冲区
-                    RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(parsed));
-                  }
-                },
               ),
             ),
           ],
@@ -1689,37 +1689,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
                 setState(() {
                   if (_scrollMode) {
-                    // In scroll mode: only X-axis panning (drag viewport left/right)
-                    final xRange = _dragStartXMax - _dragStartXMin;
-                    _scrollMinTime = _dragStartScrollMin - dx / w * xRange;
+                    // In scroll mode: drag viewport left/right within fixed range [-Max Pts, 0]
+                    final xRange = _getDataXRange().$2 - _getDataXRange().$1; // Total X range
+                    _scrollMinTime = (_dragStartScrollMin - dx / w * xRange)
+                        .clamp(-_maxPoints.toDouble(), 0.0);
                     _xMin = _scrollMinTime;
-                    _xMax = _scrollMinTime + _scrollWindowWidth;
-                    // Clamp: don't drag window before earliest data point
-                    double earliestX = double.infinity;
-                    for (final ch in _channels.where((c) => c.data.isNotEmpty)) {
-                      if (ch.data.first.x < earliestX) earliestX = ch.data.first.x;
-                    }
-                    if (earliestX.isFinite) {
-                      final minScrollMin = earliestX;
-                      if (_scrollMinTime < minScrollMin) {
-                        _scrollMinTime = minScrollMin;
-                        _xMin = _scrollMinTime;
-                        _xMax = _scrollMinTime + _scrollWindowWidth;
-                      }
-                    }
-                    // Clamp: don't drag window beyond latest data
-                    double latestX = double.negativeInfinity;
-                    for (final ch in _channels.where((c) => c.data.isNotEmpty)) {
-                      if (ch.data.last.x > latestX) latestX = ch.data.last.x;
-                    }
-                    if (latestX.isFinite) {
-                      final maxScrollMin = latestX - _scrollWindowWidth;
-                      if (_scrollMinTime > maxScrollMin) {
-                        _scrollMinTime = maxScrollMin;
-                        _xMin = _scrollMinTime;
-                        _xMax = _scrollMinTime + _scrollWindowWidth;
-                      }
-                    }
+                    _xMax = 0.0;  // Newest data always at x=0
                   } else {
                     // Normal mode: pan X and Y freely
                     final xRange = _dragStartXMax - _dragStartXMin;

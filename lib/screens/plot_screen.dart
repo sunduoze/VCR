@@ -305,6 +305,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _initDemoChannels();
     _startDemoData();
     _loadConfig();
+    // Apply buffer size to Rust immediately when page loads
+    try {
+      RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(_maxPoints));
+    } catch (_) {}
     
     // 启动真实数据定时器（方案 B: 分离数据轮询和 UI 更新）
     _fetchTimer = Timer.periodic(const Duration(milliseconds: 20), (_) => _fetchRealData());
@@ -565,24 +569,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               print('🧪 [DEBUG] [数据链路] 步骤5a: ch=${chName} initial data.len=${pts.length}');
             }
           } else {
-            // ch.data 有数据，追加最新点
+            // ch.data has data, append latest points
             try {
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
                 ch.currentValue = latestData.last.value;
-                // Append new data points with sample-index X values
-                // Current data ends at x=0 (newest), new data goes negative
-                final nextX = ch.data.last.x - 1.0;  // Continue from last X - 1
-                for (int j = 0; j < latestData.length; j++) {
-                  ch.data.add(_DataPoint(nextX - j, latestData[j].value));
+                // Append new data points (X values will be renumbered below)
+                for (final pt in latestData) {
+                  ch.data.add(_DataPoint(0.0, pt.value)); // placeholder X
                 }
-                // Keep only _maxPoints points, renumber X values
+                // Keep only _maxPoints points
                 if (ch.data.length > _maxPoints) {
                   ch.data = ch.data.sublist(ch.data.length - _maxPoints);
-                  // Renumber: oldest = -maxPoints+1, newest = 0
-                  for (int i = 0; i < ch.data.length; i++) {
-                    ch.data[i] = _DataPoint((i - ch.data.length + 1).toDouble(), ch.data[i].y);
-                  }
+                }
+                // Renumber: oldest = -(len-1), newest = 0
+                for (int i = 0; i < ch.data.length; i++) {
+                  ch.data[i] = _DataPoint((i - ch.data.length + 1).toDouble(), ch.data[i].y);
                 }
               }
             } catch (_) {}
@@ -687,14 +689,17 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     setState(() {
       _useRealData = !_useRealData;
       if (_useRealData) {
+        // Switch to real data: stop demo timer, start real data timers
         _demoTimer?.cancel();
-        _channels.clear();
         _startRealData();
       } else {
+        // Switch to demo: stop real data timers, start demo timer
         _realDataTimer?.cancel();
         _fetchTimer?.cancel();
-        _channels.clear();
-        _initDemoChannels();
+        // If no demo channels exist, init them (preserve existing data)
+        if (_channels.every((c) => c.deviceId != 'demo_ch1')) {
+          _initDemoChannels();
+        }
         _startDemoData();
       }
     });
@@ -702,6 +707,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   void _fitXAxis() {
     if (_scrollMode) return; // X axis is controlled by scroll window
+    final bufMin = -_maxPoints.toDouble();
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
     for (final ch in _channels) {
@@ -709,10 +715,20 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       minVal = min(minVal, ch.data.first.x);
       maxVal = max(maxVal, ch.data.last.x);
     }
-    if (minVal.isInfinite) { minVal = 0; maxVal = 10; }
+    if (minVal.isInfinite) {
+      // No data: use buffer range
+      _xMin = bufMin;
+      _xMax = 0.0;
+      return;
+    }
     final padding = (maxVal - minVal) * 0.02;
-    _xMin = minVal - padding;
-    _xMax = maxVal + padding;
+    _xMin = (minVal - padding).clamp(bufMin, 0.0);
+    _xMax = (maxVal + padding).clamp(bufMin, 0.0);
+    // Ensure visible range is valid
+    if (_xMax - _xMin < _minVisibleRange) {
+      _xMin = (0.0 - _minVisibleRange).clamp(bufMin, 0.0);
+      _xMax = 0.0;
+    }
   }
 
   void _fitYAxisForChannel(PlotChannel ch) {
@@ -766,9 +782,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Get total X data range (earliest → latest across all visible channels)
   /// Data X values are sample indices (0, 1, 2, ...)
   /// X axis displays time = sample_index * Δt (in ms)
-  /// X axis range: [-Max Pts, 0] to show negative time relative to latest sample
+  /// X axis range: [-缓冲区大小, 0]
   (double, double) _getDataXRange() {
-    // X轴范围固定为 [-Max Pts, 0]
+    // X轴范围固定为 [-缓冲区大小, 0]
     // 无论数据多少，范围始终固定，用户通过滑块宽度控制显示范围
     if (_maxPoints <= 0) _maxPoints = 250000;
     return (-_maxPoints.toDouble(), 0.0);
@@ -1321,7 +1337,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           children: [
             // Δt 输入框
             Tooltip(
-              message: 'Sampling interval (Δt): Time between samples in milliseconds. X-axis shows -Max Pts × Δt to 0.',
+              message: '采样间隔(Δt): 相邻采样点之间的时间间隔(毫秒)。X轴显示范围 = -缓冲区大小 × Δt 到 0。',
               child: SizedBox(
                 width: 70,
                 height: 32,
@@ -1345,16 +1361,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               ),
             ),
             const SizedBox(width: 6),
-            // Max Pts 输入框
+            // 缓冲区大小输入框
             Tooltip(
-              message: 'Max Points: Maximum number of data points to display. Controls buffer size and X-axis range.',
+              message: '缓冲区大小(点/通道): 每个通道的最大数据点数。控制缓冲区大小和X轴范围。',
               child: SizedBox(
-                width: 90,
+                width: 140,
                 height: 32,
                 child: TextField(
                   controller: _maxPointsController,
                   decoration: const InputDecoration(
-                    labelText: 'Max Pts',
+                    labelText: '缓冲区大小(点/通道)',
                     border: OutlineInputBorder(),
                     isDense: true,
                     contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -1363,10 +1379,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   onSubmitted: (value) {
                     final parsed = int.tryParse(value);
                     if (parsed != null && parsed > 0) {
-                      setState(() {});
+                      setState(() {
+                        _maxPoints = parsed.clamp(1000, 500000);
+                        _maxPointsController.text = _maxPoints.toString();
+                        // If scroll window was auto, it auto-adjusts via _effectiveScrollWindowWidth
+                        // If manual, update proportionally
+                        // Reset X range to new [-MaxPoints, 0]
+                        _xMin = -_maxPoints.toDouble();
+                        _xMax = 0.0;
+                      });
                       _saveConfig();
                       // 同步到 Rust 缓冲区
-                      RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(parsed));
+                      RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(_maxPoints));
                     }
                   },
                 ),
@@ -1725,18 +1749,25 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
                 setState(() {
                   if (_scrollMode) {
-                    // In scroll mode: drag viewport left/right within fixed range [-Max Pts, 0]
+                    // In scroll mode: drag viewport left/right within fixed range [-缓冲区大小, 0]
                     final xRange = _getDataXRange().$2 - _getDataXRange().$1; // Total X range
                     _scrollMinTime = (_dragStartScrollMin - dx / w * xRange)
                         .clamp(-_maxPoints.toDouble(), 0.0);
                     _xMin = _scrollMinTime;
                     _xMax = 0.0;  // Newest data always at x=0
                   } else {
-                    // Normal mode: pan X and Y freely
+                    // Normal mode: pan X and Y, but X clamped to [-_maxPoints, 0]
                     final xRange = _dragStartXMax - _dragStartXMin;
                     final yRange = _dragStartYMax - _dragStartYMin;
-                    _xMin = _dragStartXMin - dx / w * xRange;
-                    _xMax = _dragStartXMax - dx / w * xRange;
+                    var newXMin = _dragStartXMin - dx / w * xRange;
+                    var newXMax = _dragStartXMax - dx / w * xRange;
+                    // Clamp X pan: never exceed [-_maxPoints, 0]
+                    final bufMin = -_maxPoints.toDouble();
+                    if (newXMin < bufMin) { final shift = bufMin - newXMin; newXMin += shift; newXMax += shift; }
+                    if (newXMax > 0.0) { final shift = newXMax - 0.0; newXMin -= shift; newXMax -= shift; }
+                    if (newXMin < bufMin) newXMin = bufMin;
+                    _xMin = newXMin;
+                    _xMax = newXMax;
                     _yMin = _dragStartYMin + dy / h * yRange;
                     _yMax = _dragStartYMax + dy / h * yRange;
                   }
@@ -1770,12 +1801,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         _autoScaleX = false;
                         final center = (_xMin + _xMax) / 2;
                         final range = (_xMax - _xMin) * factor;
-                        // Clamp: zoom out max 3× data range, zoom in min _minVisibleRange
-                        final (dataXMin2, dataXMax2) = _getDataXRange();
-                        final maxRange = (dataXMax2 - dataXMin2) * 3.0;
-                        final clampedRange = range.clamp(_minVisibleRange, maxRange.isFinite && maxRange > 0 ? maxRange : range);
-                        _xMin = center - clampedRange / 2;
-                        _xMax = center + clampedRange / 2;
+                        // Clamp: zoom range must stay within [-_maxPoints, 0]
+                        final bufMin = -_maxPoints.toDouble();
+                        final maxRange = 0.0 - bufMin;  // full range
+                        final clampedRange = range.clamp(_minVisibleRange, maxRange);
+                        _xMin = (center - clampedRange / 2).clamp(bufMin, 0.0 - _minVisibleRange);
+                        _xMax = (center + clampedRange / 2).clamp(bufMin + _minVisibleRange, 0.0);
+                        // Ensure still within bounds after centering
+                        if (_xMin < bufMin) { _xMin = bufMin; _xMax = bufMin + clampedRange; }
+                        if (_xMax > 0.0) { _xMax = 0.0; _xMin = 0.0 - clampedRange; }
                       } else if (targetCh != null && !_shareYAxis) {
                         // Per-channel Y zoom (near specific channel's Y axis) — only when NOT sharing Y axis
                         final ch = targetCh;
@@ -1798,12 +1832,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         _autoScaleY = false;
                         final xCenter = (_xMin + _xMax) / 2;
                         final xRange = (_xMax - _xMin) * factor;
-                        // Clamp X zoom range same as X-axis-only zoom
-                        final (dataXMin2, dataXMax2) = _getDataXRange();
-                        final maxXRange = (dataXMax2 - dataXMin2) * 3.0;
-                        final clampedXRange = xRange.clamp(_minVisibleRange, maxXRange.isFinite && maxXRange > 0 ? maxXRange : xRange);
+                        // Clamp X zoom: range must stay within [-_maxPoints, 0]
+                        final bufMin = -_maxPoints.toDouble();
+                        final maxXRange = 0.0 - bufMin;
+                        final clampedXRange = xRange.clamp(_minVisibleRange, maxXRange);
                         _xMin = xCenter - clampedXRange / 2;
                         _xMax = xCenter + clampedXRange / 2;
+                        if (_xMin < bufMin) { _xMin = bufMin; _xMax = bufMin + clampedXRange; }
+                        if (_xMax > 0.0) { _xMax = 0.0; _xMin = 0.0 - clampedXRange; }
                         final yCenter = (_yMin + _yMax) / 2;
                         final yRange = _yMax - _yMin;
                         _yMin = yCenter - yRange / 2 * factor;
@@ -1839,12 +1875,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Build waveform scrollbar with minimap preview
   Widget _buildWaveformScrollbar(BoxConstraints constraints) {
-    final (dataXMin, dataXMax) = _getDataXRange();
-    if (dataXMin.isNaN || dataXMax.isNaN || dataXMin.isInfinite || dataXMax.isInfinite) {
-      return const SizedBox.shrink();
-    }
-    
-    final totalRange = dataXMax - dataXMin;
+    // Scrollbar always shows the full buffer range [-maxPoints, 0]
+    final effDataXMin = -_maxPoints.toDouble();
+    final effDataXMax = 0.0;
+    final totalRange = effDataXMax - effDataXMin; // = _maxPoints
     if (totalRange <= 0) return const SizedBox.shrink();
 
     final scrollbarHeight = 36.0;
@@ -1856,12 +1890,20 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     // Current visible window position and size
     // Clamp visible range to data range for scrollbar display
-    final visibleMin = _xMin.clamp(dataXMin, dataXMax);
-    final visibleMax = _xMax.clamp(dataXMin, dataXMax);
-    if (visibleMin >= visibleMax) return const SizedBox.shrink();
+    final visibleMin = _xMin.clamp(effDataXMin, effDataXMax);
+    final visibleMax = _xMax.clamp(effDataXMin, effDataXMax);
+    if (visibleMin >= visibleMax) {
+      // Fallback: show full range
+      return SizedBox(
+        height: scrollbarHeight,
+        child: Row(children: [Expanded(child: Container(
+          decoration: BoxDecoration(color: Colors.grey[900], border: Border.all(color: Colors.grey[700]!, width: 1)),
+        ))]),
+      );
+    }
 
-    var thumbLeft = plotLeft + ((visibleMin - dataXMin) / totalRange) * trackWidth;
-    var thumbRight = plotLeft + ((visibleMax - dataXMin) / totalRange) * trackWidth;
+    var thumbLeft = plotLeft + ((visibleMin - effDataXMin) / totalRange) * trackWidth;
+    var thumbRight = plotLeft + ((visibleMax - effDataXMin) / totalRange) * trackWidth;
     var thumbWidth = thumbRight - thumbLeft;
 
     // If visible window exceeds data range (zoomed out past data),
@@ -1911,8 +1953,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   child: CustomPaint(
                     painter: _MinimapPainter(
                       channels: _channels,
-                      dataXMin: dataXMin,
-                      dataXMax: dataXMax,
+                      dataXMin: effDataXMin,
+                      dataXMax: effDataXMax,
                       shareYAxis: _shareYAxis,
                       globalYMin: _yMin,
                       globalYMax: _yMax,
@@ -1937,8 +1979,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       final dx = d.globalPosition.dx - _scrollbarDragStartX;
                       final dxRatio = dx / trackWidth;
                       final range = _scrollbarDragStartXMax - _scrollbarDragStartXMin;
-                      final newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
-                      final newMax = newMin + range;
+                      var newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
+                      var newMax = newMin + range;
+                      // Clamp: never exceed [-_maxPoints, 0]
+                      final bufMin = -_maxPoints.toDouble();
+                      if (newMin < bufMin) { newMin = bufMin; newMax = bufMin + range; }
+                      if (newMax > 0.0) { newMax = 0.0; newMin = 0.0 - range; }
+                      if (newMin < bufMin) newMin = bufMin;  // re-clamp after adjustment
                       _xMin = newMin;
                       _xMax = newMax;
                       if (_scrollMode) {
@@ -1983,6 +2030,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         if (newMin >= _scrollbarDragStartXMax - _minVisibleRange) {
                           newMin = _scrollbarDragStartXMax - _minVisibleRange;
                         }
+                        // Clamp: left edge cannot go below -_maxPoints
+                        newMin = newMin.clamp(-_maxPoints.toDouble(), _scrollbarDragStartXMax - _minVisibleRange);
                         _xMin = newMin;
                         if (_scrollMode) {
                           _scrollMinTime = newMin.clamp(0.0, double.maxFinite);
@@ -2030,6 +2079,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         if (newMax <= _scrollbarDragStartXMin + _minVisibleRange) {
                           newMax = _scrollbarDragStartXMin + _minVisibleRange;
                         }
+                        // Clamp: right edge cannot exceed 0
+                        newMax = newMax.clamp(_scrollbarDragStartXMin + _minVisibleRange, 0.0);
                         _xMax = newMax;
                         if (_scrollMode) {
                           _scrollWindowWidth = newMax - _scrollbarDragStartXMin;

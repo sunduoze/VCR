@@ -194,6 +194,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── Data ──
   List<PlotChannel> _channels = [];
   int _maxPoints = 250000;  // Configurable max points (default 250000, range 1000-500000)
+  double _deltaTime = 1.0;  // Time per sample in ms (default 1ms, connects sample index to time)
 
   // ── Axis config ──
   bool _autoScaleX = true;
@@ -248,6 +249,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Max points controller ──
   final _maxPointsController = TextEditingController();
+  final _deltaTimeController = TextEditingController();  // Time per sample in ms
 
   // ── Y axis share ──
   bool _shareYAxis = false; // Each channel uses its own Y range
@@ -263,7 +265,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   late Ticker _ticker;
 
   // ── Demo ──
-  double _demoPhase = 0;
+  double _demoPhase = 0;  // Demo phase for waveform generation (time in seconds)
+  int _sampleIndex = 0;  // Sample index counter for X-axis (displayed as index * deltaTime)
   Timer? _demoTimer;
 
   // ── Channel colors pool ──
@@ -311,6 +314,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       });
     }
     _maxPointsController.text = _maxPoints.toString();
+    _deltaTimeController.text = _deltaTime.toString();
     // 启动 Rust 独立线程接收数据（方案3）
     try {
       RustLib.instance.api.crateApiDataReceiverStartDataReceiver();
@@ -427,11 +431,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // Generate sub-samples per tick for smooth curves
       for (int s = 0; s < _demoSubSamples; s++) {
         _demoPhase += dt;
-        final t = _demoPhase;
+        final t = _demoPhase;  // Keep phase for waveform generation
+        final idx = _sampleIndex;  // Use sample index for X-axis
+        _sampleIndex++;
         for (int i = 0; i < _channels.length; i++) {
           final noise = 0.05 * (rng.nextDouble() - 0.5);
           final val = _demoEval(i, t, noise);
-          _channels[i].data.add(_DataPoint(t, val));
+          _channels[i].data.add(_DataPoint(idx.toDouble(), val));  // X = sample index
           _channels[i].currentValue = val;
           // Trim old data
           if (_channels[i].data.length > _maxPoints + _maxPoints ~/ 10) {
@@ -720,16 +726,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   double _plotBottom() => 40;
 
   /// Get total X data range (earliest → latest across all visible channels)
+  /// Get total X data range (earliest → latest across all visible channels)
+  /// Data X values are sample indices (0, 1, 2, ...)
+  /// X axis displays time = sample_index * Δt (in ms)
   (double, double) _getDataXRange() {
-    double minVal = double.infinity;
-    double maxVal = double.negativeInfinity;
+    // 找到最大数据长度
+    int maxLen = 0;
     for (final ch in _channels) {
       if (!ch.visible || ch.data.isEmpty) continue;
-      minVal = min(minVal, ch.data.first.x);
-      maxVal = max(maxVal, ch.data.last.x);
+      maxLen = max(maxLen, ch.data.length);
     }
-    if (minVal.isInfinite) return (0.0, 10.0);
-    return (minVal, maxVal);
+    
+    if (maxLen == 0) return (0.0, 1000.0);
+    
+    // X 轴范围基于实际数据：0 到 maxLen（样本索引）
+    // X 轴标签会乘以 Δt 显示为时间值
+    return (0.0, maxLen.toDouble());
   }
 
   /// Find which channel's Y-axis is closest to cursor X position.
@@ -837,6 +849,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _scrollWindowWidth = (json['scrollWindowWidth'] as num?)?.toDouble() ?? 10.0;
         _scrollMinTime = (json['scrollMinTime'] as num?)?.toDouble() ?? 0.0;
         _maxPoints = (json['maxPoints'] as num?)?.toInt() ?? 250000;
+        _deltaTime = (json['deltaTime'] as num?)?.toDouble() ?? 1.0;
+        _maxPointsController.text = _maxPoints.toString();
+        _deltaTimeController.text = _deltaTime.toString();
         if (mounted) setState(() {});
       }
     } catch (e) {
@@ -859,6 +874,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         'scrollWindowWidth': _scrollWindowWidth,
         'scrollMinTime': _scrollMinTime,
         'maxPoints': _maxPoints,
+        'deltaTime': _deltaTime,
       }));
       // Also sync to app_config.json so settings screen picks it up
       final appData = Platform.environment['APPDATA'] ?? '';
@@ -1270,7 +1286,59 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Plot'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Δt 输入框
+            SizedBox(
+              width: 70,
+              height: 32,
+              child: TextField(
+                controller: _deltaTimeController,
+                decoration: const InputDecoration(
+                  labelText: 'Δt (ms)',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                ),
+                style: const TextStyle(fontSize: 11),
+                onSubmitted: (value) {
+                  final parsed = double.tryParse(value);
+                  if (parsed != null && parsed > 0) {
+                    setState(() => _deltaTime = parsed);
+                    _saveConfig();
+                  }
+                },
+              ),
+            ),
+            const SizedBox(width: 6),
+            // Max Pts 输入框
+            SizedBox(
+              width: 90,
+              height: 32,
+              child: TextField(
+                controller: _maxPointsController,
+                decoration: const InputDecoration(
+                  labelText: 'Max Pts',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                  contentPadding: EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                ),
+                style: const TextStyle(fontSize: 11),
+                onSubmitted: (value) {
+                  final parsed = int.tryParse(value);
+                  if (parsed != null && parsed > 0) {
+                    setState(() {});
+                    _saveConfig();
+                    // 同步到 Rust 缓冲区
+                    RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(parsed));
+                  }
+                },
+              ),
+            ),
+          ],
+        ),
+        centerTitle: false,
         actions: [
           // Auto-scale button
           IconButton(
@@ -1746,6 +1814,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     globalDecimals: _globalDecimals,
                     shareYAxis: _shareYAxis,
                     gpuWaveformImage: _gpuWaveformImage,
+                    deltaTime: _deltaTime,
                   ),
                   size: Size.infinite,
                 ),
@@ -1770,8 +1839,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final scrollbarHeight = 36.0;
     final trackPadding = 16.0; // Padding on each side so handles are always visible
     final plotLeft = trackPadding;
-    // plotRight must leave room for the Max Pts input box (100px) + gap (8px) on the right
-    final plotRight = 124.0;
+    final plotRight = trackPadding;
     final trackWidth = constraints.maxWidth - plotLeft - plotRight;
     if (trackWidth <= 0) return const SizedBox.shrink();
 
@@ -1975,34 +2043,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   ),
                 ),
               ],
-            ),
-          ),
-          // Max points input box
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 100,
-            height: scrollbarHeight,
-            child: Center(
-              child: TextField(
-                controller: _maxPointsController,
-                onSubmitted: (value) {
-                  final parsed = int.tryParse(value);
-                  if (parsed != null && parsed >= 1000 && parsed <= 500000) {
-                    setState(() {
-                      _maxPoints = parsed;
-                      _maxPointsController.text = parsed.toString();
-                    });
-                    _saveConfig();
-                  }
-                },
-                decoration: const InputDecoration(
-                  labelText: 'Max Pts',
-                  border: OutlineInputBorder(),
-                  contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                ),
-                keyboardType: TextInputType.number,
-                style: const TextStyle(fontSize: 12),
-              ),
             ),
           ),
         ],
@@ -2565,6 +2605,7 @@ class _PlotPainter extends CustomPainter {
   final int globalDecimals;
   final bool shareYAxis; // When true, all channels use global yMin/yMax
   final ui.Image? gpuWaveformImage; // GPU-accelerated waveform texture (optional)
+  final double deltaTime; // Time per sample in ms (for X axis label formatting)
 
   _PlotPainter({
     required this.channels,
@@ -2577,6 +2618,7 @@ class _PlotPainter extends CustomPainter {
     this.globalDecimals = 3,
     this.shareYAxis = false,
     this.gpuWaveformImage,
+    this.deltaTime = 1.0,
   });
 
   double _xToScreen(double x, double w) {
@@ -2744,7 +2786,7 @@ class _PlotPainter extends CustomPainter {
       final sx = _xToScreen(tick, plotW) + plotLeft;
       if (sx < plotLeft || sx > plotLeft + plotW) continue;
       final tp = TextPainter(
-        text: TextSpan(text: _formatXTick(tick), style: labelStyle),
+        text: TextSpan(text: _formatXTick(tick, deltaTime), style: labelStyle),
         textDirection: TextDirection.ltr,
       )..layout();
       tp.paint(canvas, Offset(sx - tp.width / 2, h - plotBottom + 4));
@@ -3143,8 +3185,16 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
   }
 
   /// X轴刻度格式化：显示整数点号
-  String _formatXTick(double val) {
-    return val.round().toString();
+  String _formatXTick(double val, [double deltaTime = 1.0]) {
+    // X values are sample indices, multiply by Δt to show time in ms
+    final timeMs = val * (deltaTime > 0 ? deltaTime : 1.0);
+    if (timeMs.abs() >= 1000) {
+      return '${(timeMs / 1000).toStringAsFixed(2)}s';
+    } else if (timeMs.abs() >= 1) {
+      return '${timeMs.toStringAsFixed(1)}ms';
+    } else {
+      return '${timeMs.toStringAsFixed(3)}ms';
+    }
   }
 
   String _formatTick(double val, [int decimals = 3]) {

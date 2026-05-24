@@ -85,14 +85,33 @@ impl ChannelBuffer {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+
+    /// 动态调整缓冲区容量（保留最新的 min(old, new) 个点）
+    pub fn resize(&mut self, new_capacity: usize) {
+        if new_capacity == self.capacity {
+            return;
+        }
+        log::info!("[PlotBuffer] ChannelBuffer.resize: {} -> {}", self.capacity, new_capacity);
+        let mut new_data = vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; new_capacity];
+        // 复制已有数据（保留最新的 min(old_len, new_capacity) 个点）
+        let old_data = self.get_all();
+        let copy_len = old_data.len().min(new_capacity);
+        for i in 0..copy_len {
+            new_data[i] = old_data[old_data.len() - copy_len + i];
+        }
+        self.data = new_data;
+        self.capacity = new_capacity;
+        self.len = copy_len;
+        self.write_pos = copy_len % new_capacity;
+    }
 }
 
 /// Plot 数据管理器（全局单例）
 pub struct PlotDataManager {
     /// 设备数据：device_id -> (channel_name -> buffer)
     devices: RwLock<HashMap<String, HashMap<String, Arc<Mutex<ChannelBuffer>>>>>,
-    /// 默认容量
-    default_capacity: usize,
+    /// 默认容量（可动态修改）
+    default_capacity: RwLock<usize>,
     /// 订阅回调：device_id -> callbacks
     callbacks: RwLock<HashMap<String, Vec<Box<dyn Fn(&str, f64, &[f64]) + Send + Sync>>>>,
     /// 样本计数器（用于 X 轴从0开始递增）
@@ -103,10 +122,47 @@ impl PlotDataManager {
     pub fn new() -> Self {
         Self {
             devices: RwLock::new(HashMap::new()),
-            default_capacity: 10000,
+            default_capacity: RwLock::new(10000),
             callbacks: RwLock::new(HashMap::new()),
             sample_counter: RwLock::new(0),
         }
+    }
+
+    /// 设置默认容量（动态调整缓冲区大小）
+    pub fn set_default_capacity(&self, capacity: usize) {
+        log::info!("[PlotBuffer] set_default_capacity: {} (START)", capacity);
+        
+        // 第一步：收集所有 buffer 引用（只读锁，短暂持有）
+        let mut all_buffers = Vec::new();
+        {
+            let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
+            for (device_id, channels) in devices.iter() {
+                for (channel_name, buffer) in channels.iter() {
+                    all_buffers.push((device_id.clone(), channel_name.clone(), Arc::clone(buffer)));
+                }
+            }
+        } // devices 读锁在这里释放
+        
+        log::info!("[PlotBuffer] collected {} buffers", all_buffers.len());
+        
+        // 第二步：调整所有 buffer 的容量（不持有 devices 锁）
+        for (device_id, channel_name, buffer) in all_buffers {
+            let mut buf = lock_mutex(&buffer);
+            buf.resize(capacity);
+            log::debug!("[PlotBuffer] resized device={}, channel={}, new_capacity={}", 
+                       device_id, channel_name, capacity);
+        }
+        
+        // 第三步：更新 default_capacity
+        let mut cap = self.default_capacity.write().unwrap_or_else(|e| e.into_inner());
+        *cap = capacity;
+        
+        log::info!("[PlotBuffer] set_default_capacity: {} (END)", capacity);
+    }
+
+    /// 获取当前默认容量
+    pub fn get_default_capacity(&self) -> usize {
+        *self.default_capacity.read().unwrap_or_else(|e| e.into_inner())
     }
 
     /// 注册设备
@@ -117,7 +173,7 @@ impl PlotDataManager {
         for ch in channels {
             device_channels.insert(
                 ch.to_string(),
-                Arc::new(Mutex::new(ChannelBuffer::new(self.default_capacity))),
+                Arc::new(Mutex::new(ChannelBuffer::new(*self.default_capacity.read().unwrap_or_else(|e| e.into_inner())))),
             );
         }
         devices.insert(device_id.to_string(), device_channels);
@@ -149,7 +205,7 @@ impl PlotDataManager {
             if let Some(dc) = devices.get_mut(device_id) {
                 dc.insert(
                     channel.to_string(),
-                    Arc::new(Mutex::new(ChannelBuffer::new(self.default_capacity))),
+                    Arc::new(Mutex::new(ChannelBuffer::new(*self.default_capacity.read().unwrap_or_else(|e| e.into_inner())))),
                 );
             }
         }
@@ -164,7 +220,7 @@ impl PlotDataManager {
 
     /// 批量添加数据（从协议解析结果，自动创建通道）
     pub fn push_batch(&self, device_id: &str, timestamp_ms: f64, prefix: Option<&str>, values: &[f64]) {
-        // Collect channel names first
+        // Collect channel names first (push_batch: prefix_i format)
         let channel_names: Vec<(String, f64)> = values
             .iter()
             .enumerate()
@@ -183,9 +239,10 @@ impl PlotDataManager {
             let dc = devices
                 .entry(device_id.to_string())
                 .or_insert_with(HashMap::new);
+            let cap = *self.default_capacity.read().unwrap_or_else(|e| e.into_inner());
             for (ch_name, _) in &channel_names {
                 dc.entry(ch_name.clone())
-                    .or_insert_with(|| Arc::new(Mutex::new(ChannelBuffer::new(self.default_capacity))));
+                    .or_insert_with(|| Arc::new(Mutex::new(ChannelBuffer::new(cap))));
             }
         }
 
@@ -230,15 +287,16 @@ impl PlotDataManager {
             })
             .collect();
 
-        // Single lock: create device + channels if needed
+        // Single lock: create device + channels if needed (push_batch_with_names)
         {
             let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
             let dc = devices
                 .entry(device_id.to_string())
                 .or_insert_with(HashMap::new);
+            let cap = *self.default_capacity.read().unwrap_or_else(|e| e.into_inner());
             for (ch_name, _) in &channel_names {
                 dc.entry(ch_name.clone())
-                    .or_insert_with(|| Arc::new(Mutex::new(ChannelBuffer::new(self.default_capacity))));
+                    .or_insert_with(|| Arc::new(Mutex::new(ChannelBuffer::new(cap))));
             }
         }
 

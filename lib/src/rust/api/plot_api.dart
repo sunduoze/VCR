@@ -9,7 +9,7 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
 /// 注册 Plot 设备
-/// channels: 通道名称列表，如 ["voltage", "current", "power"]
+/// channels: 通道名称列表,如 ["voltage", "current", "power"]
 void plotRegisterDevice({
   required String deviceId,
   required List<String> channels,
@@ -35,7 +35,7 @@ void plotPushData({
   value: value,
 );
 
-/// 批量添加数据点（从协议解析）
+/// 批量添加数据点(从协议解析)
 void plotPushBatch({
   required String deviceId,
   required List<String> channels,
@@ -89,7 +89,7 @@ BigInt plotGetCounter() => RustLib.instance.api.crateApiPlotApiPlotGetCounter();
 void plotClearCounter() =>
     RustLib.instance.api.crateApiPlotApiPlotClearCounter();
 
-/// 从计数器值添加 CSV 数据（X轴使用计数器而非时间戳）
+/// 从计数器值添加 CSV 数据(X轴使用计数器而非时间戳)
 void plotPushCsvCounter({
   required String deviceId,
   String? prefix,
@@ -100,11 +100,11 @@ void plotPushCsvCounter({
   values: values,
 );
 
-/// 获取当前时间戳（毫秒）
+/// 获取当前时间戳(毫秒)
 double plotGetTimestampMs() =>
     RustLib.instance.api.crateApiPlotApiPlotGetTimestampMs();
 
-/// 获取通道视口数据：裁剪 + 降采样
+/// 获取通道视口数据:裁剪 + 降采样
 List<PlotPoint> plotGetChannelViewportData({
   required String deviceId,
   required String channel,
@@ -135,7 +135,15 @@ List<PlotPoint> plotGetChannelLatestData({
   channel: channel,
 );
 
-/// 数据点（FRB 兼容）
+/// 设置 Plot 数据缓冲区容量
+void plotSetBufferCapacity({required BigInt capacity}) => RustLib.instance.api
+    .crateApiPlotApiPlotSetBufferCapacity(capacity: capacity);
+
+/// 获取 Plot 数据缓冲区容量
+BigInt plotGetBufferCapacity() =>
+    RustLib.instance.api.crateApiPlotApiPlotGetBufferCapacity();
+
+/// 数据点(FRB 兼容)
 class PlotPoint {
   final double timestampMs;
   final double value;

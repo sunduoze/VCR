@@ -4,7 +4,7 @@
 use crate::core::plot::PLOT_DATA;
 use std::collections::HashMap;
 
-/// 数据点（FRB 兼容）
+/// 数据点(FRB 兼容)
 #[derive(Debug, Clone)]
 pub struct PlotPoint {
     pub timestamp_ms: f64,
@@ -12,7 +12,7 @@ pub struct PlotPoint {
 }
 
 /// 注册 Plot 设备
-/// channels: 通道名称列表，如 ["voltage", "current", "power"]
+/// channels: 通道名称列表,如 ["voltage", "current", "power"]
 #[flutter_rust_bridge::frb(sync)]
 pub fn plot_register_device(device_id: String, channels: Vec<String>) {
     log::info!("[Plot] plot_register_device: device={}, channels={:?}", device_id, channels);
@@ -34,7 +34,7 @@ pub fn plot_push_data(device_id: String, channel: String, timestamp_ms: f64, val
     PLOT_DATA.push_data(&device_id, &channel, timestamp_ms, value);
 }
 
-/// 批量添加数据点（从协议解析）
+/// 批量添加数据点(从协议解析)
 #[flutter_rust_bridge::frb(sync)]
 pub fn plot_push_batch(device_id: String, channels: Vec<String>, timestamp_ms: f64, values: Vec<f64>) {
     log::trace!("[Plot] plot_push_batch: device={}, ts={:.3}, chs={:?}, vals={:?}", device_id, timestamp_ms, channels, values);
@@ -98,7 +98,7 @@ pub fn plot_clear_counter() {
     PLOT_DATA.clear_counter();
 }
 
-/// 从计数器值添加 CSV 数据（X轴使用计数器而非时间戳）
+/// 从计数器值添加 CSV 数据(X轴使用计数器而非时间戳)
 #[flutter_rust_bridge::frb(sync)]
 pub fn plot_push_csv_counter(device_id: String, prefix: Option<String>, values: Vec<f64>) {
     let counter = PLOT_DATA.next_counter() as f64;
@@ -106,7 +106,7 @@ pub fn plot_push_csv_counter(device_id: String, prefix: Option<String>, values: 
     PLOT_DATA.push_batch(&device_id, counter, prefix.as_deref(), &values);
 }
 
-/// 获取当前时间戳（毫秒）
+/// 获取当前时间戳(毫秒)
 #[flutter_rust_bridge::frb(sync)]
 pub fn plot_get_timestamp_ms() -> f64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -114,7 +114,7 @@ pub fn plot_get_timestamp_ms() -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-/// 获取通道视口数据：裁剪 + 降采样
+/// 获取通道视口数据:裁剪 + 降采样
 #[flutter_rust_bridge::frb(sync)]
 pub fn plot_get_channel_viewport_data(
     device_id: String,
@@ -129,15 +129,15 @@ pub fn plot_get_channel_viewport_data(
     result.into_iter().map(|p| PlotPoint { timestamp_ms: p.timestamp_ms, value: p.value }).collect()
 }
 // ============================================================================
-// 获取通道最新数据（轻量级 API，用于 currentValue 显示）
+// 获取通道最新数据(轻量级 API,用于 currentValue 显示)
 // ============================================================================
 
 /// 获取通道的最新数据点
-/// 
+///
 /// # 参数
 /// - `device_id`: 设备 ID
 /// - `channel`: 通道名称
-/// 
+///
 /// # 返回
 /// 最新数据点（如果没有数据，返回空列表）
 #[flutter_rust_bridge::frb(sync)]
@@ -155,6 +155,21 @@ pub fn plot_get_channel_latest_data(
     } else {
         vec![]
     }
+}
+
+/// 设置 Plot 数据缓冲区容量
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_set_buffer_capacity(capacity: usize) {
+    log::info!("[Plot] plot_set_buffer_capacity: {}", capacity);
+    PLOT_DATA.set_default_capacity(capacity);
+}
+
+/// 获取 Plot 数据缓冲区容量
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_get_buffer_capacity() -> usize {
+    let cap = PLOT_DATA.get_default_capacity();
+    log::trace!("[Plot] plot_get_buffer_capacity: {}", cap);
+    cap
 }
 
 

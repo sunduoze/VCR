@@ -1,4 +1,4 @@
-#include <flutter/dart_project.h>
+﻿#include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
 #include <windows.h>
 
@@ -12,6 +12,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   if (!::AttachConsole(ATTACH_PARENT_PROCESS) && ::IsDebuggerPresent()) {
     CreateAndAttachConsole();
   }
+
+  // Set console code page to UTF-8 so Rust println! output displays
+  // Chinese characters correctly.
+  SetConsoleOutputCP(CP_UTF8);
 
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.

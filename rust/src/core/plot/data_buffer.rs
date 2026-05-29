@@ -358,7 +358,12 @@ impl PlotDataManager {
                 channels.get(channel)
                     .map(|buffer| {
                         let data = buffer.lock().unwrap();
-                        data.data.last().cloned()
+                        // In ring buffer, latest data is at (write_pos - 1 + capacity) % capacity
+                        if data.len == 0 {
+                            return None;
+                        }
+                        let latest_idx = (data.write_pos + data.capacity - 1) % data.capacity;
+                        Some(data.data[latest_idx].clone())
                     })
             })
             .flatten()

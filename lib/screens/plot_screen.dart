@@ -667,15 +667,20 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
                 ch.currentValue = latestData.last.value;
-                // Append new data points (no renumbering — O(n) per tick is too expensive)
-                final baseX = ch.data.isNotEmpty ? ch.data.last.x + 1 : 0.0;
+                // Append new data points with sample index X values
+                // Use negative indices: newest at x=0, older points negative
                 for (int k = 0; k < latestData.length; k++) {
-                  ch.data.add(_DataPoint(baseX + k, latestData[k].value));
+                  ch.data.add(_DataPoint(0.0, latestData[k].value));
                 }
                 ch.currentValue = latestData.last.value;
                 // Keep only _maxPoints points (trim from front, keep newest)
                 if (ch.data.length > _maxPoints) {
                   ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+                }
+                // Renumber X values: newest at x=0, older points at negative indices
+                final int totalLen = ch.data.length;
+                for (int i = 0; i < totalLen; i++) {
+                  ch.data[i] = _DataPoint((i - totalLen + 1).toDouble(), ch.data[i].y);
                 }
               }
             } catch (_) {}
@@ -706,11 +711,24 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_scrollMode) {
       // Newest data at x=0, auto-track
       _xMax = 0.0;
-      _xMin = -_effectiveScrollWindowWidth;
+      // For real data, limit scroll window to actual data length
+      double effectiveWidth = _effectiveScrollWindowWidth;
+      if (_useRealData && _channels.isNotEmpty) {
+        final maxDataLen = _channels.map((c) => c.data.length).fold(0, (a, b) => a > b ? a : b);
+        if (maxDataLen > 0 && maxDataLen < effectiveWidth) {
+          effectiveWidth = maxDataLen.toDouble();
+        }
+      }
+      _xMin = -effectiveWidth;
       _scrollMinTime = _xMin;
     } else {
       if (_autoScaleX) _fitXAxis();
       if (_autoScaleY) _fitYAxis();
+    }
+    
+    // Always update Y-axis in scroll mode too
+    if (_scrollMode && _autoScaleY) {
+      _fitYAxis();
     }
 
     // 调试：X轴范围
@@ -721,36 +739,43 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
       for (final ch in _channels.where((c) => c.visible)) {
         try {
-          final vpPoints = plotGetChannelViewportData(
-            deviceId: ch.deviceId,
-            channel: ch.channelName,
-            xMin: _xMin,
-            xMax: _xMax,
-            maxPoints: maxPts,
-          );
-          // Use sample-index-based X values matching viewport range
-          final vpLen = vpPoints.length;
-          ch.viewportData = List.generate(vpLen, (i) {
-            final xStep = (vpLen > 1) ? (_xMax - _xMin) / (vpLen - 1) : 0.0;
-            return _DataPoint(_xMin + i * xStep, vpPoints[i].value);
-          });
-          // 调试：打印所有通道的viewportData与data对比
-          debugPrint('[DEBUG] ${ch.channelName}: vpLen=${vpPoints.length} dataLen=${ch.data.length}');
-          if (vpPoints.isNotEmpty && ch.data.isNotEmpty) {
-            debugPrint('[DEBUG]   vpFirst=(${vpPoints.first.timestampMs},${vpPoints.first.value}) vpLast=(${vpPoints.last.timestampMs},${vpPoints.last.value})');
-            debugPrint('[DEBUG]   dataFirst=(${ch.data.first.x},${ch.data.first.y}) dataLast=(${ch.data.last.x},${ch.data.last.y})');
-          } else if (vpPoints.isEmpty) {
-            debugPrint('[DEBUG]   ⚠️ vpPoints为空！ch.data.len=${ch.data.length}');
+          // Real mode: build viewportData from ch.data (same as demo mode)
+          // This ensures X values are consistent (sample indices, newest at x=0)
+          if (ch.data.isEmpty) {
+            ch.viewportData = [];
+            continue;
           }
+          
+          // Find data points in viewport range [_xMin, _xMax]
+          final startIdx = ch.data.indexWhere((p) => p.x >= _xMin);
+          final endIdx = ch.data.lastIndexWhere((p) => p.x <= _xMax);
+          print('🧪 [DEBUG] [数据链路] 步骤6c: ch=${ch.channelName} startIdx=$startIdx endIdx=$endIdx data.first.x=${ch.data.first.x} data.last.x=${ch.data.last.x} _xMin=$_xMin _xMax=$_xMax');
+          if (startIdx == -1 || endIdx == -1 || startIdx >= endIdx) {
+            ch.viewportData = [];
+            continue;
+          }
+          
+          final visible = ch.data.sublist(startIdx, endIdx + 1);
+          if (visible.length <= maxPts) {
+            ch.viewportData = visible.toList();
+          } else {
+            // Decimate: evenly sample points
+            final step = visible.length / maxPts;
+            ch.viewportData = List.generate(maxPts, (i) {
+              final idx = (i * step).round().clamp(0, visible.length - 1);
+              return visible[idx];
+            });
+          }
+          
+          debugPrint('[DEBUG] ${ch.channelName}: viewportData.len=${ch.viewportData.length} dataLen=${ch.data.length} xRange=[$_xMin, $_xMax]');
         } catch (e) {
-          debugPrint('[DEBUG] ⚠️ vpPoints ERROR: $e');
+          debugPrint('[DEBUG] ⚠️ Real viewport ERROR: $e');
           ch.viewportData = [];
         }
       }
     } else {
       print('🧪 [DEBUG] [数据链路] 步骤6b: 跳过！_xMin=$_xMin _xMax=$_xMax _screenWidth=$_screenWidth');
     }
-
     // GPU 𫔰阌缂𰬒缂阌缂
     if (_useGpuAcceleration && _gpuInitialized) {
       _renderWaveformOnGpu(); // GPU 缂阌𰬸锅窑𰬒缂阌缂锛𰬸锅窑setState
@@ -826,25 +851,25 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       return;
     }
     
-    // Real 模式：使用 viewportData
+    // Real 模式：使用 ch.data（全量数据）计算 X 轴范围
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
     for (final ch in _channels) {
-      if (!ch.visible || (ch.data.isEmpty && ch.viewportData.isEmpty)) continue;
-      // Use viewportData if available (has adjusted X for demo mode)
-      final data = ch.viewportData.isNotEmpty ? ch.viewportData : ch.data;
+      if (!ch.visible || ch.data.isEmpty) continue;
       // data sorted by x: first=oldest, last=newest
-      minVal = min(minVal, data.first.x);
-      maxVal = max(maxVal, data.last.x);
+      minVal = min(minVal, ch.data.first.x);
+      maxVal = max(maxVal, ch.data.last.x);
     }
     if (minVal.isInfinite) {
       _xMin = bufMin;
       _xMax = 0.0;
+      _debugLog('[FITX] Real mode: no visible data, setting xMin=$bufMin');
       return;
     }
     final padding = (maxVal - minVal) * 0.02;
     _xMin = (minVal - padding).clamp(bufMin, 0.0);
     _xMax = (maxVal + padding).clamp(bufMin, 0.0);
+    _debugLog('[FITX] Real mode: minVal=$minVal, maxVal=$maxVal, padding=$padding, xMin=$_xMin, xMax=$_xMax');
     // Real 模式下才使用最小范围约束
     if (_xMax - _xMin < 1.0) {  // 至少显示 1 个样本宽度
       _xMin = -1.0.clamp(-bufMin, 1.0);
@@ -853,10 +878,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   void _fitYAxisForChannel(PlotChannel ch) {
-    if (!ch.visible || ch.data.isEmpty) return;
+    // Use viewportData for Y-axis fitting (visible data only)
+    final data = ch.viewportData.isNotEmpty ? ch.viewportData : ch.data;
+    if (!ch.visible || data.isEmpty) return;
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
-    for (final pt in ch.data) {
+    for (final pt in data) {
       if (pt.y < minVal) minVal = pt.y;
       if (pt.y > maxVal) maxVal = pt.y;
     }
@@ -3517,3 +3544,5 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     tp.paint(canvas, Offset(tx, ty));
   }
 }
+
+

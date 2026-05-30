@@ -6,6 +6,7 @@
 import '../frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
+// These functions are ignored because they are not marked as `pub`: `increment_data_version`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `fmt`
 
 /// 注册 Plot 设备
@@ -104,7 +105,7 @@ void plotPushCsvCounter({
 double plotGetTimestampMs() =>
     RustLib.instance.api.crateApiPlotApiPlotGetTimestampMs();
 
-/// 获取通道视口数据:裁剪 + 降采样
+/// 获取通道视口数据:裁剪 + 降采样（零拷贝版本）
 List<PlotPoint> plotGetChannelViewportData({
   required String deviceId,
   required String channel,
@@ -142,6 +143,32 @@ void plotSetBufferCapacity({required BigInt capacity}) => RustLib.instance.api
 /// 获取 Plot 数据缓冲区容量
 BigInt plotGetBufferCapacity() =>
     RustLib.instance.api.crateApiPlotApiPlotGetBufferCapacity();
+
+/// 获取当前数据版本号
+BigInt plotGetDataVersion() =>
+    RustLib.instance.api.crateApiPlotApiPlotGetDataVersion();
+
+/// 获取通道增量数据（只返回版本号变化后的新数据）
+List<PlotPoint> plotGetChannelIncrementalData({
+  required String deviceId,
+  required String channel,
+  required BigInt lastVersion,
+  required double xMin,
+  required double xMax,
+  required int maxPoints,
+}) => RustLib.instance.api.crateApiPlotApiPlotGetChannelIncrementalData(
+  deviceId: deviceId,
+  channel: channel,
+  lastVersion: lastVersion,
+  xMin: xMin,
+  xMax: xMax,
+  maxPoints: maxPoints,
+);
+
+/// 🚀 P3-B 双缓冲：Swap 所有通道缓冲区
+/// 调用频率：每 100ms 一次
+/// 将后端写入的数据复制到前端，UI 线程从前端读取（无锁）
+void plotSwapBuffers() => RustLib.instance.api.crateApiPlotApiPlotSwapBuffers();
 
 /// 数据点(FRB 兼容)
 class PlotPoint {

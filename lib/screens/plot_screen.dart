@@ -244,6 +244,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   ui.Image? _gpuWaveformImage;
   bool _isGpuRendering = false;
 
+  // 🚀 P2-B 优化：增量更新版本号
+  BigInt _lastDataVersion = BigInt.zero;
+
+  // 🚀 P3-B 优化：viewport 刷新计数器（用于 shouldRepaint 优化）
+  int _viewportRefreshCount = 0;
+
   // ── Interaction state ──
   Offset? _mousePosition;
   bool _isDragging = false;
@@ -449,7 +455,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     
     final dt = 0.008 / _demoSubSamples; // sub-sample interval
-    _demoTimer = Timer.periodic(const Duration(milliseconds: 8), (_) {  // ~120fps timer
+    _demoTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {  // ~20fps timer
       if (!mounted || !_isPlaying) return;
       
       // 限制UI更新频率：每50ms最多更新一次界面（约20fps）
@@ -583,21 +589,41 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // 调试：打印 visible.length 和 maxPts
       _debugLog('[VPD] ${ch.channelName}: visible.length=${visible.length} maxPts=$maxPts');
       
-      // Adjust X values: relative to newest (newest = 0, older = negative)
-      // Decimate to ≤ maxPts
-      final step = (visible.length / maxPts).ceil().clamp(1, visible.length);
-      ch.viewportData = [
-        for (int i = 0; i < visible.length; i += step)
-          _DataPoint(visible[i].x - newestAbsX, visible[i].y),
-      ];
+      // 🚀 P1-C 优化：LOD自适应抽稀（增强版）
+      // 计算数据点密度（每像素多少个点）
+      final plotWidth = _plotWidth();
+      final density = visible.length / plotWidth;
+      
+      List<_DataPoint> viewportData;
+      if (density > 0.5) {
+        // 密度超过每像素0.5个点 → 抽稀到每像素最多0.5个点（增强抽稀）
+        final targetPoints = plotWidth.round().clamp(100, 1000);
+        final step = (visible.length / targetPoints).ceil().clamp(1, visible.length);
+        viewportData = [
+          for (int i = 0; i < visible.length; i += step)
+            _DataPoint(visible[i].x - newestAbsX, visible[i].y),
+        ];
+        _debugLog('[LOD] Decimated: ${visible.length} → ${viewportData.length} (density=${density.toStringAsFixed(1)} pts/px)');
+      } else {
+        // 密度 ≤ 0.5 → 不抽稀，保持原始数据
+        viewportData = visible.map((pt) => _DataPoint(pt.x - newestAbsX, pt.y)).toList();
+        _debugLog('[LOD] No decimation needed (density=${density.toStringAsFixed(1)} pts/px)');
+      }
+      
+      ch.viewportData = viewportData;
       // 调试：打印 viewportData.length
       _debugLog('[VPD]   viewportData.length=${ch.viewportData.length}');
     }
+    // 🚀 P3-B 优化：viewport 刷新完成，递增计数器
+    _viewportRefreshCount++;
   }
 
   /// 分离的数据轮询（策略 B: 减少 FRB 调用）
   /// 后台快速轮询，不触发 UI 更新
   void _fetchRealData() {
+    // 🚀 P3-B 双缓冲：每次获取数据前，先 swap 缓冲区
+    RustLib.instance.api.crateApiPlotApiPlotSwapBuffers();
+    
     print('🧪 [DEBUG] [数据链路] 步骤5: _fetchRealData() 开始');
     if (!_useRealData) return; // Skip in demo mode
     if (!_isPlaying) return; // Pause: stop data fetching
@@ -804,6 +830,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _xMin = bufMin;
     _xMax = 0.0;
     _debugLog('[FITX] Default: no channels, xMin=$bufMin');
+  }
+
+  // 🚀 性能优化：计算绘图区域尺寸（用于GPU渲染）
+  double _plotWidth() {
+    final yAxisChannels = _channels.where((ch) => ch.visible && ch.showYAxis).toList();
+    final leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
+    final rightYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 1).length;
+    final plotLeft = 50.0 + leftYAxes * 45.0;
+    final plotRight = 10.0 + rightYAxes * 45.0;
+    return MediaQuery.of(context).size.width - plotLeft - plotRight;
+  }
+
+  double _plotHeight() {
+    final plotBottom = 40.0;
+    final plotTop = 10.0;
+    return MediaQuery.of(context).size.height - plotTop - plotBottom;
   }
 
   void _fitYAxisForChannel(PlotChannel ch) {
@@ -1104,12 +1146,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
 
       final pointCount = points.length ~/ 2;
-      final width = 800;
-      final height = 600;
+      // 使用实际绘图区域尺寸，而非硬编码的800x600
+      final renderWidth = _plotWidth().toInt().clamp(100, 4096);
+      final renderHeight = _plotHeight().toInt().clamp(100, 4096);
+
+      print('[GPU] Rendering ${renderWidth}x$renderHeight, points=$pointCount');
 
       final imageData = await RustLib.instance.api.crateApiGpuApiGpuRenderWaveform(
-        width: width,
-        height: height,
+        width: renderWidth,
+        height: renderHeight,
         points: Float32List.fromList(points),
         pointCount: pointCount,
         r: 255,
@@ -1118,7 +1163,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         a: 255,
       );
 
-      final image = await _createImageFromRgba(imageData, width, height);
+      final image = await _createImageFromRgba(imageData, renderWidth, renderHeight);
 
       setState(() {
         _gpuWaveformImage = image;
@@ -1981,6 +2026,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     shareYAxis: _shareYAxis,
                     gpuWaveformImage: _gpuWaveformImage,
                     deltaTime: _deltaTime,
+                    viewportRefreshCount: _viewportRefreshCount,
                   ),
                   size: Size.infinite,
                 ),
@@ -2794,8 +2840,7 @@ class _MinimapPainter extends CustomPainter {
   }
 }
 
-class _PlotPainter extends CustomPainter {
-  final List<PlotChannel> channels;
+class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
   final double xMin, xMax, yMin, yMax;
   final Offset? mousePosition;
   final int fps;
@@ -2805,6 +2850,13 @@ class _PlotPainter extends CustomPainter {
   final bool shareYAxis; // When true, all channels use global yMin/yMax
   final ui.Image? gpuWaveformImage; // GPU-accelerated waveform texture (optional)
   final double deltaTime; // Time per sample in ms (for X axis label formatting)
+  final int viewportRefreshCount; // 🚀 P3-B: viewport 刷新计数器
+
+  // 🚀 性能优化：PictureRecorder 缓存
+  ui.Picture? _cachedPicture;
+  int _cacheVersion = 0;
+  double _cachedXMin = 0, _cachedXMax = 0;
+  double _cachedYMin = 0, _cachedYMax = 0;
 
   _PlotPainter({
     required this.channels,
@@ -2818,6 +2870,7 @@ class _PlotPainter extends CustomPainter {
     this.shareYAxis = false,
     this.gpuWaveformImage,
     this.deltaTime = 1.0,
+    required this.viewportRefreshCount,
   });
 
   double _xToScreen(double x, double w) {
@@ -2917,7 +2970,29 @@ class _PlotPainter extends CustomPainter {
       }
       picture.dispose();
     } else {
-      _paintInternal(canvas, w, h, 1.0);
+      // 🚀 P1-A 优化：PictureRecorder 缓存
+      // 🚀 P3-B 修复：使用 viewportRefreshCount 而非 totalPoints（totalPoints 每次都变）
+      bool cacheValid = (_cachedPicture != null &&
+          _cacheVersion == viewportRefreshCount &&
+          _cachedXMin == xMin &&
+          _cachedXMax == xMax &&
+          _cachedYMin == yMin &&
+          _cachedYMax == yMax);
+      
+      if (cacheValid) {
+        canvas.drawPicture(_cachedPicture!);
+      } else {
+        final recorder = ui.PictureRecorder();
+        final cacheCanvas = Canvas(recorder);
+        _paintInternal(cacheCanvas, w, h, 1.0);
+        _cachedPicture = recorder.endRecording();
+        _cacheVersion = viewportRefreshCount;
+        _cachedXMin = xMin;
+        _cachedXMax = xMax;
+        _cachedYMin = yMin;
+        _cachedYMax = yMax;
+        canvas.drawPicture(_cachedPicture!);
+      }
     }
   }
 
@@ -3237,11 +3312,15 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
       ..strokeWidth = ch.lineWidth
       ..strokeCap = StrokeCap.round;
     
-    for (final pt in data) {
-      final sx = _xToScreen(pt.x, w) + ox;
-      final sy = yTransform(pt.y) + oy;
-      canvas.drawCircle(Offset(sx, sy), 1.5, paint);
+    // 🚀 P1-B 优化：批量绘制（替代 250K 次 drawCircle 调用）
+    // drawRawPoints 需要扁平的 Float32List: [x1,y1, x2,y2, ...]
+    final points = Float32List(data.length * 2);
+    for (int i = 0; i < data.length; i++) {
+      final pt = data[i];
+      points[i * 2] = _xToScreen(pt.x, w) + ox;
+      points[i * 2 + 1] = yTransform(pt.y) + oy;
     }
+    canvas.drawRawPoints(ui.PointMode.points, points, paint);
   }
 
   void _drawDotLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
@@ -3405,6 +3484,12 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
   @override
   bool shouldRepaint(covariant _PlotPainter oldDelegate) {
+    // 🚀 P3-B 优化：只比较 viewport 刷新计数器，不比较数据长度
+    // 如果 viewport 未刷新（计数器未变），不需要重绘
+    if (viewportRefreshCount == oldDelegate.viewportRefreshCount) {
+      return false; // viewport 未变化，跳过重绘
+    }
+    
     // GPU texture changed?
     if (gpuWaveformImage != oldDelegate.gpuWaveformImage) return true;
     
@@ -3419,24 +3504,14 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
         shareYAxis != oldDelegate.shareYAxis) {
       return true;
     }
-    // Check channel-level changes
+    // Check channel-level changes (visible/color/style)
     if (channels.length != oldDelegate.channels.length) return true;
     for (int i = 0; i < channels.length; i++) {
       final a = channels[i];
       final b = oldDelegate.channels[i];
       if (a.visible != b.visible ||
           a.color != b.color ||
-          a.lineStyle != b.lineStyle ||
-          a.data.length != b.data.length ||
-          a.viewportData.length != b.viewportData.length) {
-        return true;
-      }
-      // Only need to check last point for new data
-      if (a.data.isNotEmpty && b.data.isNotEmpty) {
-        final aLast = a.data.last;
-        final bLast = b.data.last;
-        if (aLast.x != bLast.x || aLast.y != bLast.y) return true;
-      } else if (a.data.isNotEmpty || b.data.isNotEmpty) {
+          a.lineStyle != b.lineStyle) {
         return true;
       }
     }
@@ -3501,5 +3576,6 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     tp.paint(canvas, Offset(tx, ty));
   }
 }
+
 
 

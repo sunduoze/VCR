@@ -1,4 +1,4 @@
-﻿// Plot Data Buffer - 环形缓冲区存储通道数据
+// Plot Data Buffer - 双缓冲版本
 // 用于 Plot Screen 实时波形显示
 
 use std::collections::HashMap;
@@ -24,85 +24,140 @@ pub struct DataPoint {
     pub value: f64,
 }
 
-/// 通道数据缓冲区（环形）
+/// 通道数据缓冲区（双缓冲环形）
 #[derive(Debug)]
 pub struct ChannelBuffer {
-    /// 数据区
-    data: Vec<DataPoint>,
-    /// 写入位置
-    write_pos: usize,
-    /// 容量
-    capacity: usize,
-    /// 当前数据量
-    len: usize,
+    /// 后端缓冲区（数据写入）
+    back_data: Vec<DataPoint>,
+    /// 后端写入位置
+    back_write_pos: usize,
+    /// 后端容量
+    back_capacity: usize,
+    /// 后端当前数据量
+    back_len: usize,
+    /// 前端缓冲区（UI 读取，从后端复制）
+    front_data: Vec<DataPoint>,
+    /// 前端数据量
+    front_len: usize,
+    /// Swap 锁（防止 swap 和 push 并发）
+    swap_lock: Mutex<()>,
 }
 
 impl ChannelBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
-            data: vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; capacity],
-            write_pos: 0,
-            capacity,
-            len: 0,
+            back_data: vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; capacity],
+            back_write_pos: 0,
+            back_capacity: capacity,
+            back_len: 0,
+            front_data: vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; capacity],
+            front_len: 0,
+            swap_lock: Mutex::new(()),
         }
     }
 
-    /// 添加数据点
+    /// 添加数据点（写入后端缓冲区）
     pub fn push(&mut self, timestamp_ms: f64, value: f64) {
-        self.data[self.write_pos] = DataPoint { timestamp_ms, value };
-        self.write_pos = (self.write_pos + 1) % self.capacity;
-        if self.len < self.capacity {
-            self.len += 1;
+        self.back_data[self.back_write_pos] = DataPoint { timestamp_ms, value };
+        self.back_write_pos = (self.back_write_pos + 1) % self.back_capacity;
+        if self.back_len < self.back_capacity {
+            self.back_len += 1;
         }
     }
 
-    /// 获取所有数据点（按时间排序）
-    pub fn get_all(&self) -> Vec<DataPoint> {
-        if self.len < self.capacity {
-            // 未满，直接返回
-            self.data[..self.len].to_vec()
+    /// 获取所有数据点（从后端，按时间排序）
+    /// 注意：这是内部方法，用于 swap 前复制数据
+    fn get_back_all(&self) -> Vec<DataPoint> {
+        if self.back_len < self.back_capacity {
+            self.back_data[..self.back_len].to_vec()
         } else {
-            // 已满，需要重新排序
-            let mut result = Vec::with_capacity(self.capacity);
-            for i in 0..self.capacity {
-                result.push(self.data[(self.write_pos + i) % self.capacity]);
+            let mut result = Vec::with_capacity(self.back_capacity);
+            for i in 0..self.back_capacity {
+                result.push(self.back_data[(self.back_write_pos + i) % self.back_capacity]);
             }
             result
         }
     }
 
-    /// 清空
-    pub fn clear(&mut self) {
-        self.write_pos = 0;
-        self.len = 0;
+    /// Swap 前后缓冲区（UI 线程调用）
+    /// 将后端数据复制到前端，UI 读取前端数据（无需锁）
+    pub fn swap(&mut self) {
+        // 获取锁，防止 push 并发
+        let _guard = match self.swap_lock.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                log::warn!("[PlotBuffer] swap_lock poisoned, recovering...");
+                poisoned.into_inner()
+            }
+        };
+        
+        // 复制后端数据到前端
+        let new_front = self.get_back_all();
+        self.front_len = new_front.len();
+        
+        // 如果前端容量不够，扩展
+        if self.front_data.len() < self.front_len {
+            self.front_data.resize(self.front_len, DataPoint { timestamp_ms: 0.0, value: 0.0 });
+        }
+        
+        // 复制数据
+        for (i, pt) in new_front.into_iter().enumerate() {
+            self.front_data[i] = pt;
+        }
     }
 
-    /// 当前数据量
+    /// 获取前端缓冲区数据（O(1) 读取，无锁）
+    /// 注意：必须在 swap 之后调用
+    pub fn get_all(&self) -> Vec<DataPoint> {
+        if self.front_len == 0 {
+            return vec![];
+        }
+        self.front_data[..self.front_len].to_vec()
+    }
+
+    /// 获取前端缓冲区长度（无锁）
     pub fn len(&self) -> usize {
-        self.len
+        self.front_len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.front_len == 0
     }
 
-    /// 动态调整缓冲区容量（保留最新的 min(old, new) 个点）
+    /// 获取后端缓冲区长度（用于调试）
+    pub fn back_len_debug(&self) -> usize {
+        self.back_len
+    }
+
+    /// 清空
+    pub fn clear(&mut self) {
+        self.back_write_pos = 0;
+        self.back_len = 0;
+        self.front_len = 0;
+    }
+
+    /// 动态调整后端缓冲区容量
     pub fn resize(&mut self, new_capacity: usize) {
-        if new_capacity == self.capacity {
+        if new_capacity == self.back_capacity {
             return;
         }
-        log::info!("[PlotBuffer] ChannelBuffer.resize: {} -> {}", self.capacity, new_capacity);
-        let mut new_data = vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; new_capacity];
-        // 复制已有数据（保留最新的 min(old_len, new_capacity) 个点）
-        let old_data = self.get_all();
-        let copy_len = old_data.len().min(new_capacity);
+        log::info!("[PlotBuffer] ChannelBuffer.resize: {} -> {}", self.back_capacity, new_capacity);
+        
+        // 保留后端最新数据
+        let old_back = self.get_back_all();
+        let mut new_back = vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; new_capacity];
+        let copy_len = old_back.len().min(new_capacity);
         for i in 0..copy_len {
-            new_data[i] = old_data[old_data.len() - copy_len + i];
+            new_back[i] = old_back[old_back.len() - copy_len + i];
         }
-        self.data = new_data;
-        self.capacity = new_capacity;
-        self.len = copy_len;
-        self.write_pos = copy_len % new_capacity;
+        
+        self.back_data = new_back;
+        self.back_capacity = new_capacity;
+        self.back_len = copy_len;
+        self.back_write_pos = copy_len % new_capacity;
+        
+        // 清空前端（下次 swap 会重新填充）
+        self.front_len = 0;
     }
 }
 
@@ -321,7 +376,20 @@ impl PlotDataManager {
         }
     }
 
-    /// 获取通道数据（全量）
+    /// Swap 所有设备的通道缓冲区
+    /// 调用频率：每 100ms 一次
+    pub fn swap_all_buffers(&self) {
+        let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
+        for (device_id, channels) in devices.iter() {
+            for (channel_name, buffer) in channels.iter() {
+                let mut buf = lock_mutex(buffer);
+                buf.swap();
+                log::trace!("[PlotBuffer] swapped device={}, ch={}", device_id, channel_name);
+            }
+        }
+    }
+
+    /// 获取通道数据（全量，从前端缓冲区）
     pub fn get_channel_data(&self, device_id: &str, channel: &str) -> Vec<DataPoint> {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
         if let Some(device_channels) = devices.get(device_id) {
@@ -334,22 +402,8 @@ impl PlotDataManager {
         log::warn!("[PlotBuffer] get_channel_data: device={}, ch={} -> NOT FOUND", device_id, channel);
         vec![]
     }
-/// 获取通道最新数据点（O(1) 查询）
-    /// 
-    /// # 参数
-    /// - `device_id`: 设备 ID
-    /// - `channel`: 通道名称
-    /// 
-    /// # 返回
-    /// 最新数据点（如果通道不存在或没有数据，返回 None）
+
     /// 获取通道最新数据点（O(1) 查询）
-    /// 
-    /// # 参数
-    /// - `device_id`: 设备 ID
-    /// - `channel`: 通道名称
-    /// 
-    /// # 返回
-    /// 最新数据点（如果通道不存在或没有数据，返回 None）
     pub fn get_latest_data(&self, device_id: &str, channel: &str) -> Option<DataPoint> {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
         
@@ -357,22 +411,23 @@ impl PlotDataManager {
             .and_then(|channels| {
                 channels.get(channel)
                     .map(|buffer| {
+                        // 前端缓冲区最新点 = (write_pos - 1 + capacity) % capacity
                         let data = buffer.lock().unwrap();
-                        // In ring buffer, latest data is at (write_pos - 1 + capacity) % capacity
-                        if data.len == 0 {
+                        if data.front_len == 0 {
                             return None;
                         }
-                        let latest_idx = (data.write_pos + data.capacity - 1) % data.capacity;
-                        Some(data.data[latest_idx].clone())
+                        // 从前端读取最新点
+                        // 注意：front_data 和 back_data 长度相同
+                        // 最新数据在后端 write_pos-1 的位置
+                        let latest_idx = (data.back_write_pos + data.back_capacity - 1) % data.back_capacity;
+                        Some(data.back_data[latest_idx].clone())
                     })
             })
             .flatten()
     }
 
     /// 获取通道数据：视口裁剪 + min/max 降采样
-    /// 返回在 [x_min, x_max] 范围内的数据，最多 max_points 个点。
-    /// 使用 min/max 降采样：每个桶保留极值点，确保波形轮廓完整。
-    /// 首尾数据点始终保留，防止边界空白。
+    /// 数据从前端缓冲区读取（无需额外锁）
     pub fn get_channel_viewport_data(
         &self,
         device_id: &str,
@@ -385,20 +440,23 @@ impl PlotDataManager {
             return vec![];
         }
 
-        let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
-        let all_data = if let Some(device_channels) = devices.get(device_id) {
-            if let Some(buffer) = device_channels.get(channel) {
-                let data = lock_mutex(&buffer).get_all();
-                log::debug!("[PlotBuffer] get_channel_viewport_data: device={}, ch={}, total={}, x=[{:.1},{:.1}], max={}",
-                    device_id, channel, data.len(), x_min, x_max, max_points);
-                data
+        // 从前端缓冲区读取数据
+        let all_data = {
+            let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(device_channels) = devices.get(device_id) {
+                if let Some(buffer) = device_channels.get(channel) {
+                    let data = lock_mutex(&buffer).get_all();
+                    log::debug!("[PlotBuffer] get_channel_viewport_data: device={}, ch={}, total={}, x=[{:.1},{:.1}], max={}",
+                        device_id, channel, data.len(), x_min, x_max, max_points);
+                    data
+                } else {
+                    log::warn!("[PlotBuffer] get_channel_viewport_data: channel '{}' not found for device '{}'", channel, device_id);
+                    return vec![];
+                }
             } else {
-                log::warn!("[PlotBuffer] get_channel_viewport_data: channel '{}' not found for device '{}'", channel, device_id);
+                log::warn!("[PlotBuffer] get_channel_viewport_data: device '{}' not found", device_id);
                 return vec![];
             }
-        } else {
-            log::warn!("[PlotBuffer] get_channel_viewport_data: device '{}' not found", device_id);
-            return vec![];
         };
 
         if all_data.is_empty() {

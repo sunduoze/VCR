@@ -2,9 +2,22 @@
 // 提供设备数据注册、推送、查询功能
 
 use crate::core::plot::PLOT_DATA;
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use once_cell::sync::Lazy;
+
+/// 全局数据版本号（每次数据更新时递增）
+static DATA_VERSION: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
+
+/// 递增数据版本号
+fn increment_data_version() {
+    DATA_VERSION.fetch_add(1, Ordering::SeqCst);
+}
+
 use std::collections::HashMap;
 
 /// 数据点(FRB 兼容)
+#[repr(C)]
 #[derive(Debug, Clone)]
 pub struct PlotPoint {
     pub timestamp_ms: f64,
@@ -32,6 +45,7 @@ pub fn plot_unregister_device(device_id: String) {
 pub fn plot_push_data(device_id: String, channel: String, timestamp_ms: f64, value: f64) {
     log::trace!("[Plot] plot_push_data: device={}, ch={}, ts={:.3}, val={:.6}", device_id, channel, timestamp_ms, value);
     PLOT_DATA.push_data(&device_id, &channel, timestamp_ms, value);
+    increment_data_version();
 }
 
 /// 批量添加数据点(从协议解析)
@@ -48,6 +62,7 @@ pub fn plot_push_batch(device_id: String, channels: Vec<String>, timestamp_ms: f
 pub fn plot_push_csv(device_id: String, prefix: Option<String>, timestamp_ms: f64, values: Vec<f64>) {
     log::trace!("[Plot] plot_push_csv: device={}, prefix={:?}, ts={:.3}, vals_count={}", device_id, prefix, timestamp_ms, values.len());
     PLOT_DATA.push_batch(&device_id, timestamp_ms, prefix.as_deref(), &values);
+    increment_data_version();
 }
 
 /// 获取通道数据
@@ -114,7 +129,7 @@ pub fn plot_get_timestamp_ms() -> f64 {
     duration.as_secs_f64() * 1000.0
 }
 
-/// 获取通道视口数据:裁剪 + 降采样
+/// 获取通道视口数据:裁剪 + 降采样（零拷贝版本）
 #[flutter_rust_bridge::frb(sync)]
 pub fn plot_get_channel_viewport_data(
     device_id: String,
@@ -126,7 +141,8 @@ pub fn plot_get_channel_viewport_data(
     let result = PLOT_DATA.get_channel_viewport_data(&device_id, &channel, x_min, x_max, max_points as usize);
     eprintln!("🧪 [DEBUG] [数据链路] 步骤4: Dart 请求数据: device={}, channel={}, 返回 {} 个点", device_id, channel, result.len());
     log::debug!("[Plot] plot_get_channel_viewport_data: device={}, ch={}, x=[{:.1},{:.1}], max_pts={}, result={}", device_id, channel, x_min, x_max, max_points, result.len());
-    result.into_iter().map(|p| PlotPoint { timestamp_ms: p.timestamp_ms, value: p.value }).collect()
+    let plot_points: Vec<PlotPoint> = result.into_iter().map(|p| PlotPoint { timestamp_ms: p.timestamp_ms, value: p.value }).collect();
+    plot_points
 }
 // ============================================================================
 // 获取通道最新数据(轻量级 API,用于 currentValue 显示)
@@ -174,3 +190,62 @@ pub fn plot_get_buffer_capacity() -> usize {
 
 
 // ============================================================================
+
+/// 获取当前数据版本号
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_get_data_version() -> u64 {
+    let version = DATA_VERSION.load(Ordering::SeqCst);
+    log::trace!("[Plot] plot_get_data_version: {}", version);
+    version
+}
+
+/// 获取通道增量数据（只返回版本号变化后的新数据）
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_get_channel_incremental_data(
+    device_id: String,
+    channel: String,
+    last_version: u64,
+    x_min: f64,
+    x_max: f64,
+    max_points: u32,
+) -> Vec<PlotPoint> {
+    let current_version = DATA_VERSION.load(Ordering::SeqCst);
+    
+    // 如果版本号未变化，返回空列表（数据未变化）
+    if current_version == last_version {
+        log::trace!(
+            "[Plot] plot_get_channel_incremental_data: version unchanged ({}), returning empty",
+            current_version
+        );
+        return vec![];
+    }
+    
+    // 版本号已变化，返回完整视口数据
+    log::debug!(
+        "[Plot] plot_get_channel_incremental_data: version changed ({} -> {}), returning full data",
+        last_version, current_version
+    );
+    
+    let result = PLOT_DATA.get_channel_viewport_data(
+        &device_id,
+        &channel,
+        x_min,
+        x_max,
+        max_points as usize,
+    );
+    
+    result.into_iter().map(|p| PlotPoint {
+        timestamp_ms: p.timestamp_ms,
+        value: p.value,
+    }).collect()
+}
+
+/// 🚀 P3-B 双缓冲：Swap 所有通道缓冲区
+/// 调用频率：每 100ms 一次
+/// 将后端写入的数据复制到前端，UI 线程从前端读取（无锁）
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_swap_buffers() {
+    log::trace!("[Plot] plot_swap_buffers called");
+    PLOT_DATA.swap_all_buffers();
+}
+

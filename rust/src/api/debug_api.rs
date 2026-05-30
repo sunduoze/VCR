@@ -1,4 +1,4 @@
-﻿use crate::core::app_context::{block_on, DEBUG, init_logger, REGISTRY, RT, SESSIONS};
+﻿use crate::core::app_context::{block_on, DEBUG, init_logger, set_log_level, set_file_logging_enabled, set_log_file_path, get_log_file_path, REGISTRY, RT, SESSIONS};
 use crate::core::session::debug_session::DebugLogEntry;
 use crate::core::transport::TransportError;
 use crate::core::protocol::parse_csv_line;
@@ -32,6 +32,31 @@ static RECEIVE_TASKS: LazyLock<Mutex<HashMap<String, tokio::task::JoinHandle<()>
 pub fn debug_init_logger() {
     init_logger();
     log::info!("[VCR] Logger initialized — debug console active");
+}
+
+/// Set the Rust log level at runtime.
+/// Levels: "trace", "debug", "info", "warn", "error", "off"
+#[flutter_rust_bridge::frb(sync)]
+pub fn debug_set_log_level(level: String) {
+    set_log_level(&level);
+}
+
+/// Enable or disable file logging.
+#[flutter_rust_bridge::frb(sync)]
+pub fn debug_set_file_logging_enabled(enabled: bool) {
+    set_file_logging_enabled(enabled);
+}
+
+/// Set the log file path.
+#[flutter_rust_bridge::frb(sync)]
+pub fn debug_set_log_file_path(path: String) {
+    set_log_file_path(&path);
+}
+
+/// Get the current log file path.
+#[flutter_rust_bridge::frb(sync)]
+pub fn debug_get_log_file_path() -> String {
+    get_log_file_path()
 }
 
 // ============================================================================

@@ -38,7 +38,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.12.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -1452038476;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 932637128;
 
 // Section: executor
 
@@ -340,6 +340,36 @@ fn wire__crate__api__debug_api__debug_get_log_impl(
         },
     )
 }
+fn wire__crate__api__debug_api__debug_get_log_file_path_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "debug_get_log_file_path",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok =
+                    Result::<_, ()>::Ok(crate::api::debug_api::debug_get_log_file_path())?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
 fn wire__crate__api__debug_api__debug_get_log_with_limit_impl(
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
     rust_vec_len_: i32,
@@ -597,6 +627,102 @@ fn wire__crate__api__debug_api__debug_set_buffer_size_impl(
             transform_result_sse::<_, ()>((move || {
                 let output_ok = Result::<_, ()>::Ok({
                     crate::api::debug_api::debug_set_buffer_size(api_device_id, api_max_size);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__debug_api__debug_set_file_logging_enabled_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "debug_set_file_logging_enabled",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_enabled = <bool>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::debug_api::debug_set_file_logging_enabled(api_enabled);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__debug_api__debug_set_log_file_path_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "debug_set_log_file_path",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_path = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::debug_api::debug_set_log_file_path(api_path);
+                })?;
+                Ok(output_ok)
+            })())
+        },
+    )
+}
+fn wire__crate__api__debug_api__debug_set_log_level_impl(
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) -> flutter_rust_bridge::for_generated::WireSyncRust2DartSse {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_sync::<flutter_rust_bridge::for_generated::SseCodec, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "debug_set_log_level",
+            port: None,
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Sync,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            let api_level = <String>::sse_decode(&mut deserializer);
+            deserializer.end();
+            transform_result_sse::<_, ()>((move || {
+                let output_ok = Result::<_, ()>::Ok({
+                    crate::api::debug_api::debug_set_log_level(api_level);
                 })?;
                 Ok(output_ok)
             })())
@@ -3082,22 +3208,22 @@ fn pde_ffi_dispatcher_primary_impl(
             wire__crate__api__device_api__clear_demo_devices_impl(port, ptr, rust_vec_len, data_len)
         }
         4 => wire__crate__api__device_api__connect_device_impl(port, ptr, rust_vec_len, data_len),
-        17 => {
+        21 => {
             wire__crate__api__device_api__disconnect_device_impl(port, ptr, rust_vec_len, data_len)
         }
-        24 => wire__crate__api__lua_api__init_lua_engine_impl(port, ptr, rust_vec_len, data_len),
-        63 => wire__crate__api__device_api__remove_device_impl(port, ptr, rust_vec_len, data_len),
-        71 => wire__crate__api__debug_api__start_receive_loop_if_needed_impl(
+        28 => wire__crate__api__lua_api__init_lua_engine_impl(port, ptr, rust_vec_len, data_len),
+        67 => wire__crate__api__device_api__remove_device_impl(port, ptr, rust_vec_len, data_len),
+        75 => wire__crate__api__debug_api__start_receive_loop_if_needed_impl(
             port,
             ptr,
             rust_vec_len,
             data_len,
         ),
-        74 => {
+        78 => {
             wire__crate__api__debug_api__stop_receive_loop_impl(port, ptr, rust_vec_len, data_len)
         }
-        76 => wire__crate__api__lua_api__trigger_callback_impl(port, ptr, rust_vec_len, data_len),
-        77 => wire__crate__api__device_api__update_device_impl(port, ptr, rust_vec_len, data_len),
+        80 => wire__crate__api__lua_api__trigger_callback_impl(port, ptr, rust_vec_len, data_len),
+        81 => wire__crate__api__device_api__update_device_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -3122,104 +3248,114 @@ fn pde_ffi_dispatcher_sync_impl(
             wire__crate__api__debug_api__debug_get_active_sessions_impl(ptr, rust_vec_len, data_len)
         }
         8 => wire__crate__api__debug_api__debug_get_log_impl(ptr, rust_vec_len, data_len),
-        9 => {
+        9 => wire__crate__api__debug_api__debug_get_log_file_path_impl(ptr, rust_vec_len, data_len),
+        10 => {
             wire__crate__api__debug_api__debug_get_log_with_limit_impl(ptr, rust_vec_len, data_len)
         }
-        10 => wire__crate__api__debug_api__debug_init_logger_impl(ptr, rust_vec_len, data_len),
-        11 => wire__crate__api__debug_api__debug_is_connected_impl(ptr, rust_vec_len, data_len),
-        12 => wire__crate__api__debug_api__debug_receive_impl(ptr, rust_vec_len, data_len),
-        13 => wire__crate__api__debug_api__debug_send_bytes_impl(ptr, rust_vec_len, data_len),
-        14 => wire__crate__api__debug_api__debug_send_hex_impl(ptr, rust_vec_len, data_len),
-        15 => wire__crate__api__debug_api__debug_send_string_impl(ptr, rust_vec_len, data_len),
-        16 => wire__crate__api__debug_api__debug_set_buffer_size_impl(ptr, rust_vec_len, data_len),
-        18 => wire__crate__api__device_api__get_device_impl(ptr, rust_vec_len, data_len),
+        11 => wire__crate__api__debug_api__debug_init_logger_impl(ptr, rust_vec_len, data_len),
+        12 => wire__crate__api__debug_api__debug_is_connected_impl(ptr, rust_vec_len, data_len),
+        13 => wire__crate__api__debug_api__debug_receive_impl(ptr, rust_vec_len, data_len),
+        14 => wire__crate__api__debug_api__debug_send_bytes_impl(ptr, rust_vec_len, data_len),
+        15 => wire__crate__api__debug_api__debug_send_hex_impl(ptr, rust_vec_len, data_len),
+        16 => wire__crate__api__debug_api__debug_send_string_impl(ptr, rust_vec_len, data_len),
+        17 => wire__crate__api__debug_api__debug_set_buffer_size_impl(ptr, rust_vec_len, data_len),
+        18 => wire__crate__api__debug_api__debug_set_file_logging_enabled_impl(
+            ptr,
+            rust_vec_len,
+            data_len,
+        ),
         19 => {
+            wire__crate__api__debug_api__debug_set_log_file_path_impl(ptr, rust_vec_len, data_len)
+        }
+        20 => wire__crate__api__debug_api__debug_set_log_level_impl(ptr, rust_vec_len, data_len),
+        22 => wire__crate__api__device_api__get_device_impl(ptr, rust_vec_len, data_len),
+        23 => {
             wire__crate__api__device_api__get_supported_protocols_impl(ptr, rust_vec_len, data_len)
         }
-        20 => wire__crate__api__virtual_api__get_virtual_infra_status_impl(
+        24 => wire__crate__api__virtual_api__get_virtual_infra_status_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        21 => wire__crate__api__gpu_api__gpu_cleanup_impl(ptr, rust_vec_len, data_len),
-        22 => wire__crate__api__gpu_api__gpu_init_impl(ptr, rust_vec_len, data_len),
-        23 => wire__crate__api__gpu_api__gpu_render_waveform_impl(ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__data_receiver__is_data_receiver_running_impl(
+        25 => wire__crate__api__gpu_api__gpu_cleanup_impl(ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__gpu_api__gpu_init_impl(ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__gpu_api__gpu_render_waveform_impl(ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__data_receiver__is_data_receiver_running_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        26 => wire__crate__api__device_api__is_device_connected_impl(ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__virtual_api__is_virtual_serial_running_impl(
+        30 => wire__crate__api__device_api__is_device_connected_impl(ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__virtual_api__is_virtual_serial_running_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        28 => wire__crate__api__device_api__list_devices_impl(ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__device_api__load_demo_devices_impl(ptr, rust_vec_len, data_len),
-        30 => {
+        32 => wire__crate__api__device_api__list_devices_impl(ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__device_api__load_demo_devices_impl(ptr, rust_vec_len, data_len),
+        34 => {
             wire__crate__api__device_api__load_persisted_devices_impl(ptr, rust_vec_len, data_len)
         }
-        31 => wire__crate__api__device_api__load_virtual_devices_impl(ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__lua_api__lua_clear_logs_impl(ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__lua_api__lua_delete_script_impl(ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__lua_api__lua_eval_impl(ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__lua_api__lua_execute_script_impl(ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__lua_api__lua_get_logs_impl(ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__lua_api__lua_get_scripts_list_impl(ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__lua_api__lua_load_script_impl(ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__lua_api__lua_open_scripts_folder_impl(ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__lua_api__lua_poll_input_box_impl(ptr, rust_vec_len, data_len),
-        41 => wire__crate__api__lua_api__lua_respond_input_box_impl(ptr, rust_vec_len, data_len),
-        42 => wire__crate__api__lua_api__lua_save_script_impl(ptr, rust_vec_len, data_len),
-        43 => wire__crate__api__lua_api__lua_set_device_id_impl(ptr, rust_vec_len, data_len),
-        44 => wire__crate__api__device_api__parse_csv_batch_impl(ptr, rust_vec_len, data_len),
-        45 => wire__crate__api__device_api__parse_csv_data_impl(ptr, rust_vec_len, data_len),
-        46 => wire__crate__api__plot_api__plot_clear_counter_impl(ptr, rust_vec_len, data_len),
-        47 => wire__crate__api__plot_api__plot_clear_device_impl(ptr, rust_vec_len, data_len),
-        48 => wire__crate__api__plot_api__plot_get_all_channels_impl(ptr, rust_vec_len, data_len),
-        49 => {
+        35 => wire__crate__api__device_api__load_virtual_devices_impl(ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__lua_api__lua_clear_logs_impl(ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__lua_api__lua_delete_script_impl(ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__lua_api__lua_eval_impl(ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__lua_api__lua_execute_script_impl(ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__lua_api__lua_get_logs_impl(ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__lua_api__lua_get_scripts_list_impl(ptr, rust_vec_len, data_len),
+        42 => wire__crate__api__lua_api__lua_load_script_impl(ptr, rust_vec_len, data_len),
+        43 => wire__crate__api__lua_api__lua_open_scripts_folder_impl(ptr, rust_vec_len, data_len),
+        44 => wire__crate__api__lua_api__lua_poll_input_box_impl(ptr, rust_vec_len, data_len),
+        45 => wire__crate__api__lua_api__lua_respond_input_box_impl(ptr, rust_vec_len, data_len),
+        46 => wire__crate__api__lua_api__lua_save_script_impl(ptr, rust_vec_len, data_len),
+        47 => wire__crate__api__lua_api__lua_set_device_id_impl(ptr, rust_vec_len, data_len),
+        48 => wire__crate__api__device_api__parse_csv_batch_impl(ptr, rust_vec_len, data_len),
+        49 => wire__crate__api__device_api__parse_csv_data_impl(ptr, rust_vec_len, data_len),
+        50 => wire__crate__api__plot_api__plot_clear_counter_impl(ptr, rust_vec_len, data_len),
+        51 => wire__crate__api__plot_api__plot_clear_device_impl(ptr, rust_vec_len, data_len),
+        52 => wire__crate__api__plot_api__plot_get_all_channels_impl(ptr, rust_vec_len, data_len),
+        53 => {
             wire__crate__api__plot_api__plot_get_buffer_capacity_impl(ptr, rust_vec_len, data_len)
         }
-        50 => wire__crate__api__plot_api__plot_get_channel_data_impl(ptr, rust_vec_len, data_len),
-        51 => wire__crate__api__plot_api__plot_get_channel_latest_data_impl(
+        54 => wire__crate__api__plot_api__plot_get_channel_data_impl(ptr, rust_vec_len, data_len),
+        55 => wire__crate__api__plot_api__plot_get_channel_latest_data_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        52 => wire__crate__api__plot_api__plot_get_channel_viewport_data_impl(
+        56 => wire__crate__api__plot_api__plot_get_channel_viewport_data_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        53 => wire__crate__api__plot_api__plot_get_channels_impl(ptr, rust_vec_len, data_len),
-        54 => wire__crate__api__plot_api__plot_get_counter_impl(ptr, rust_vec_len, data_len),
-        55 => wire__crate__api__plot_api__plot_get_timestamp_ms_impl(ptr, rust_vec_len, data_len),
-        56 => wire__crate__api__plot_api__plot_push_batch_impl(ptr, rust_vec_len, data_len),
-        57 => wire__crate__api__plot_api__plot_push_csv_impl(ptr, rust_vec_len, data_len),
-        58 => wire__crate__api__plot_api__plot_push_csv_counter_impl(ptr, rust_vec_len, data_len),
-        59 => wire__crate__api__plot_api__plot_push_data_impl(ptr, rust_vec_len, data_len),
-        60 => wire__crate__api__plot_api__plot_register_device_impl(ptr, rust_vec_len, data_len),
-        61 => {
+        57 => wire__crate__api__plot_api__plot_get_channels_impl(ptr, rust_vec_len, data_len),
+        58 => wire__crate__api__plot_api__plot_get_counter_impl(ptr, rust_vec_len, data_len),
+        59 => wire__crate__api__plot_api__plot_get_timestamp_ms_impl(ptr, rust_vec_len, data_len),
+        60 => wire__crate__api__plot_api__plot_push_batch_impl(ptr, rust_vec_len, data_len),
+        61 => wire__crate__api__plot_api__plot_push_csv_impl(ptr, rust_vec_len, data_len),
+        62 => wire__crate__api__plot_api__plot_push_csv_counter_impl(ptr, rust_vec_len, data_len),
+        63 => wire__crate__api__plot_api__plot_push_data_impl(ptr, rust_vec_len, data_len),
+        64 => wire__crate__api__plot_api__plot_register_device_impl(ptr, rust_vec_len, data_len),
+        65 => {
             wire__crate__api__plot_api__plot_set_buffer_capacity_impl(ptr, rust_vec_len, data_len)
         }
-        62 => wire__crate__api__plot_api__plot_unregister_device_impl(ptr, rust_vec_len, data_len),
-        64 => wire__crate__api__device_api__save_devices_impl(ptr, rust_vec_len, data_len),
-        65 => wire__crate__api__device_api__scan_serial_ports_impl(ptr, rust_vec_len, data_len),
-        66 => wire__crate__api__device_api__serial_clear_break_impl(ptr, rust_vec_len, data_len),
-        67 => wire__crate__api__device_api__serial_set_break_impl(ptr, rust_vec_len, data_len),
-        68 => wire__crate__api__device_api__serial_set_dtr_impl(ptr, rust_vec_len, data_len),
-        69 => wire__crate__api__device_api__serial_set_rts_impl(ptr, rust_vec_len, data_len),
-        70 => {
+        66 => wire__crate__api__plot_api__plot_unregister_device_impl(ptr, rust_vec_len, data_len),
+        68 => wire__crate__api__device_api__save_devices_impl(ptr, rust_vec_len, data_len),
+        69 => wire__crate__api__device_api__scan_serial_ports_impl(ptr, rust_vec_len, data_len),
+        70 => wire__crate__api__device_api__serial_clear_break_impl(ptr, rust_vec_len, data_len),
+        71 => wire__crate__api__device_api__serial_set_break_impl(ptr, rust_vec_len, data_len),
+        72 => wire__crate__api__device_api__serial_set_dtr_impl(ptr, rust_vec_len, data_len),
+        73 => wire__crate__api__device_api__serial_set_rts_impl(ptr, rust_vec_len, data_len),
+        74 => {
             wire__crate__api__data_receiver__start_data_receiver_impl(ptr, rust_vec_len, data_len)
         }
-        72 => wire__crate__api__virtual_api__start_virtual_infrastructure_impl(
+        76 => wire__crate__api__virtual_api__start_virtual_infrastructure_impl(
             ptr,
             rust_vec_len,
             data_len,
         ),
-        73 => wire__crate__api__data_receiver__stop_data_receiver_impl(ptr, rust_vec_len, data_len),
-        75 => wire__crate__api__virtual_api__stop_virtual_infrastructure_impl(
+        77 => wire__crate__api__data_receiver__stop_data_receiver_impl(ptr, rust_vec_len, data_len),
+        79 => wire__crate__api__virtual_api__stop_virtual_infrastructure_impl(
             ptr,
             rust_vec_len,
             data_len,

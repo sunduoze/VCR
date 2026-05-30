@@ -1,11 +1,17 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write as IoWrite;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::device::registry::DeviceRegistry;
 use crate::core::session::debug_session::DebugSessionManager;
 use crate::core::session::session_manager::SessionManager;
 use crate::core::virtual_device::simulator::SimulatorManager;
+
+/// Global flag to control whether file logging is enabled
+static FILE_LOGGING_ENABLED: AtomicBool = AtomicBool::new(true);
+/// Global log file path (can be changed at runtime)
+static mut LOG_FILE_PATH: Option<String> = None;
 
 /// A log::Log implementation that duplicates output to both stdout and a log file.
 struct TeeLogger {
@@ -40,10 +46,12 @@ impl log::Log for TeeLogger {
         let _ = std::io::stdout().write_all(msg.as_bytes());
         let _ = std::io::stdout().flush();
 
-        // Write to file
-        if let Ok(mut f) = self.file.lock() {
-            let _ = f.write_all(msg.as_bytes());
-            let _ = f.flush();
+        // Write to file (only if file logging is enabled)
+        if FILE_LOGGING_ENABLED.load(Ordering::SeqCst) {
+            if let Ok(mut f) = self.file.lock() {
+                let _ = f.write_all(msg.as_bytes());
+                let _ = f.flush();
+            }
         }
     }
 
@@ -103,6 +111,11 @@ pub fn init_logger() {
         "vcr_debug.log".to_string()
     };
 
+    // Store the default path
+    unsafe {
+        LOG_FILE_PATH = Some(log_path.clone());
+    }
+
     let tee = match TeeLogger::new(&log_path) {
         Ok(w) => {
             eprintln!("[Logger] Log file: {}", log_path);
@@ -122,6 +135,44 @@ pub fn init_logger() {
     let max_level = log::LevelFilter::Info;
     log::set_boxed_logger(tee).expect("Failed to set logger");
     log::set_max_level(max_level);
+}
+
+/// Enable or disable file logging at runtime.
+pub fn set_file_logging_enabled(enabled: bool) {
+    FILE_LOGGING_ENABLED.store(enabled, Ordering::SeqCst);
+    log::info!("[Logger] File logging {}", if enabled { "enabled" } else { "disabled" });
+}
+
+/// Set a custom log file path at runtime.
+/// The path can be absolute or relative.
+pub fn set_log_file_path(path: &str) {
+    unsafe {
+        LOG_FILE_PATH = Some(path.to_string());
+    }
+    log::info!("[Logger] Log file path changed to: {}", path);
+}
+
+/// Get the current log file path.
+pub fn get_log_file_path() -> String {
+    unsafe {
+        LOG_FILE_PATH.clone().unwrap_or_else(|| "vcr_debug.log".to_string())
+    }
+}
+
+/// Set the maximum log level at runtime.
+/// Call this from Flutter via FFI to change log verbosity.
+pub fn set_log_level(level: &str) {
+    let filter = match level.to_lowercase().as_str() {
+        "trace" => log::LevelFilter::Trace,
+        "debug" => log::LevelFilter::Debug,
+        "info" => log::LevelFilter::Info,
+        "warn" | "warning" => log::LevelFilter::Warn,
+        "error" => log::LevelFilter::Error,
+        "off" => log::LevelFilter::Off,
+        _ => log::LevelFilter::Info,
+    };
+    log::set_max_level(filter);
+    log::info!("[Logger] Log level changed to: {:?}", filter);
 }
 
 /// Call this to ensure the panic hook is installed.

@@ -14,6 +14,23 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 void debugInitLogger() =>
     RustLib.instance.api.crateApiDebugApiDebugInitLogger();
 
+/// Set the Rust log level at runtime.
+/// Levels: "trace", "debug", "info", "warn", "error", "off"
+void debugSetLogLevel({required String level}) =>
+    RustLib.instance.api.crateApiDebugApiDebugSetLogLevel(level: level);
+
+/// Enable or disable file logging.
+void debugSetFileLoggingEnabled({required bool enabled}) => RustLib.instance.api
+    .crateApiDebugApiDebugSetFileLoggingEnabled(enabled: enabled);
+
+/// Set the log file path.
+void debugSetLogFilePath({required String path}) =>
+    RustLib.instance.api.crateApiDebugApiDebugSetLogFilePath(path: path);
+
+/// Get the current log file path.
+String debugGetLogFilePath() =>
+    RustLib.instance.api.crateApiDebugApiDebugGetLogFilePath();
+
 bool debugSendBytes({required String deviceId, required List<int> data}) =>
     RustLib.instance.api.crateApiDebugApiDebugSendBytes(
       deviceId: deviceId,

@@ -337,6 +337,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     } catch (e) {
       print('❌ 数据接收线程启动失败: $e');
     }
+    // Load Flutter log settings asynchronously (don't block initState)
+    _loadFlutterLogSettings();
   }
 
   void _initDemoChannels() {
@@ -521,11 +523,20 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     return lo;
   }
 
-  // Debug log to file
-  void _debugLog(String msg) {
+  // Debug log to file with level control
+  // Levels: trace=0, debug=1, info=2, warn=3, error=4, off=5
+  int _flutterLogLevel = 1; // default: debug
+  String _flutterLogPath = 'debug_log.txt';
+  bool _flutterFileLogging = true;
+
+  void _debugLog(String msg, {int level = 1}) {
+    // Check if logging is enabled and level is sufficient
+    if (!_flutterFileLogging || level < _flutterLogLevel) return;
+    
     try {
-      final file = File('debug_log.txt');
-      file.writeAsStringSync('${DateTime.now()}: $msg\n', mode: FileMode.append);
+      final file = File(_flutterLogPath);
+      final levelStr = ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR'][level.clamp(0, 4)];
+      file.writeAsStringSync('${DateTime.now()} [$levelStr] $msg\n', mode: FileMode.append);
     } catch (_) {
       // Ignore file write errors
     }
@@ -547,60 +558,40 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
-      // Demo mode: build viewportData from ch.data with adjusted X
-      // OPTIMIZED: use binary search (O(log n)) instead of full traversal (O(n))
-      if (ch.deviceId.startsWith('demo_')) {
-        if (ch.data.isEmpty) { ch.viewportData = []; continue; }
-        final newestAbsX = ch.data.last.x; // absolute index of newest point
-        final targetMin = newestAbsX + _xMin;
-        final targetMax = newestAbsX + _xMax;
-        
-        // Binary search for targetMin (first index where x >= targetMin)
-        int startIdx = _binarySearch(ch.data, targetMin);
-        // Binary search for targetMax (first index where x > targetMax)
-        int endIdx = _binarySearch(ch.data, targetMax) + 1;
-        
-        startIdx = startIdx.clamp(0, ch.data.length);
-        endIdx = endIdx.clamp(startIdx, ch.data.length);
-        
-        if (startIdx >= endIdx) { ch.viewportData = []; continue; }
-        
-        final visible = ch.data.sublist(startIdx, endIdx);
-        if (visible.isEmpty) { ch.viewportData = []; continue; }
-        
-        // 调试：打印 visible.length 和 maxPts
-        _debugLog('[VPD] ${ch.channelName}: visible.length=${visible.length} maxPts=$maxPts');
-        
-        // Adjust X values: relative to newest (newest = 0, older = negative)
-        // Decimate to ≤ maxPts
-        final step = (visible.length / maxPts).ceil().clamp(1, visible.length);
-        ch.viewportData = [
-          for (int i = 0; i < visible.length; i += step)
-            _DataPoint(visible[i].x - newestAbsX, visible[i].y),
-        ];
-        // 调试：打印 viewportData.length
-        _debugLog('[VPD]   viewportData.length=${ch.viewportData.length}');
-        continue;
-      }
-
-      // Real mode: use Rust FFI for efficient viewport + decimation
-      try {
-        debugPrint('[DEBUG] ${ch.channelName}: calling plotGetChannelViewportData');
-        final vpPoints = plotGetChannelViewportData(
-          deviceId: ch.deviceId,
-          channel: ch.channelName,
-          xMin: _xMin,
-          xMax: _xMax,
-          maxPoints: maxPts,
-        );
-        ch.viewportData = List.generate(vpPoints.length, (i) {
-          final xStep = (vpPoints.length > 1) ? (_xMax - _xMin) / (vpPoints.length - 1) : 0.0;
-          return _DataPoint(_xMin + i * xStep, vpPoints[i].value);
-        });
-        debugPrint('[DEBUG]   Real mode: vpPoints.length=${vpPoints.length} viewportData.length=${ch.viewportData.length}');
-      } catch (_) {
-        ch.viewportData = [];
-      }
+      // 统一处理 Demo 和 Real 模式的 viewportData 构建
+      // 两种模式都使用相同的坐标系统：X 值是相对索引（-N+1 到 0）
+      if (ch.data.isEmpty) { ch.viewportData = []; continue; }
+      
+      // 使用二进制搜索快速定位视口范围内的数据点
+      final newestAbsX = ch.data.last.x; // 最新点的绝对索引
+      final targetMin = newestAbsX + _xMin; // 转换为绝对坐标进行搜索
+      final targetMax = newestAbsX + _xMax;
+      
+      // Binary search for targetMin (first index where x >= targetMin)
+      int startIdx = _binarySearch(ch.data, targetMin);
+      // Binary search for targetMax (first index where x > targetMax)
+      int endIdx = _binarySearch(ch.data, targetMax) + 1;
+      
+      startIdx = startIdx.clamp(0, ch.data.length);
+      endIdx = endIdx.clamp(startIdx, ch.data.length);
+      
+      if (startIdx >= endIdx) { ch.viewportData = []; continue; }
+      
+      final visible = ch.data.sublist(startIdx, endIdx);
+      if (visible.isEmpty) { ch.viewportData = []; continue; }
+      
+      // 调试：打印 visible.length 和 maxPts
+      _debugLog('[VPD] ${ch.channelName}: visible.length=${visible.length} maxPts=$maxPts');
+      
+      // Adjust X values: relative to newest (newest = 0, older = negative)
+      // Decimate to ≤ maxPts
+      final step = (visible.length / maxPts).ceil().clamp(1, visible.length);
+      ch.viewportData = [
+        for (int i = 0; i < visible.length; i += step)
+          _DataPoint(visible[i].x - newestAbsX, visible[i].y),
+      ];
+      // 调试：打印 viewportData.length
+      _debugLog('[VPD]   viewportData.length=${ch.viewportData.length}');
     }
   }
 
@@ -734,54 +725,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // 调试：X轴范围
     print('🧪 [DEBUG] [数据链路] 步骤6a: _xMin=$_xMin _xMax=$_xMax _autoScaleX=$_autoScaleX _channels.len=${_channels.length}');
 
-    // Fetch viewport data for visible channels (only when needed)
-    if (_xMin != _xMax && _screenWidth > 0) {
-      final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
-      for (final ch in _channels.where((c) => c.visible)) {
-        try {
-          // Real mode: build viewportData from ch.data (same as demo mode)
-          // This ensures X values are consistent (sample indices, newest at x=0)
-          if (ch.data.isEmpty) {
-            ch.viewportData = [];
-            continue;
-          }
-          
-          // Find data points in viewport range [_xMin, _xMax]
-          final startIdx = ch.data.indexWhere((p) => p.x >= _xMin);
-          final endIdx = ch.data.lastIndexWhere((p) => p.x <= _xMax);
-          print('🧪 [DEBUG] [数据链路] 步骤6c: ch=${ch.channelName} startIdx=$startIdx endIdx=$endIdx data.first.x=${ch.data.first.x} data.last.x=${ch.data.last.x} _xMin=$_xMin _xMax=$_xMax');
-          if (startIdx == -1 || endIdx == -1 || startIdx >= endIdx) {
-            ch.viewportData = [];
-            continue;
-          }
-          
-          final visible = ch.data.sublist(startIdx, endIdx + 1);
-          if (visible.length <= maxPts) {
-            ch.viewportData = visible.toList();
-          } else {
-            // Decimate: evenly sample points
-            final step = visible.length / maxPts;
-            ch.viewportData = List.generate(maxPts, (i) {
-              final idx = (i * step).round().clamp(0, visible.length - 1);
-              return visible[idx];
-            });
-          }
-          
-          debugPrint('[DEBUG] ${ch.channelName}: viewportData.len=${ch.viewportData.length} dataLen=${ch.data.length} xRange=[$_xMin, $_xMax]');
-        } catch (e) {
-          debugPrint('[DEBUG] ⚠️ Real viewport ERROR: $e');
-          ch.viewportData = [];
-        }
-      }
-    } else {
-      print('🧪 [DEBUG] [数据链路] 步骤6b: 跳过！_xMin=$_xMin _xMax=$_xMax _screenWidth=$_screenWidth');
-    }
-    // GPU 𫔰阌缂𰬒缂阌缂
-    if (_useGpuAcceleration && _gpuInitialized) {
-      _renderWaveformOnGpu(); // GPU 缂阌𰬸锅窑𰬒缂阌缂锛𰬸锅窑setState
-    } else {
-      setState(() {}); // CPU 缂阌缂锛𰬸锅窑UI
-    }
+    // Fetch viewport data for visible channels
+    // 统一使用 _refreshViewportData() 处理 Demo 和 Real 模式
+    _refreshViewportData();
+    
+    // CPU 渲染路径
+    setState(() {});
   }
 
   void _startRealData() {
@@ -832,49 +781,29 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_scrollMode) return; // X axis is controlled by scroll window
     final bufMin = -_maxPoints.toDouble();
     
-    // Demo 模式：X 轴范围固定为 [-_maxPoints, 0]
-    // viewportData 中的 X 值是相对值（相对于最新样本），范围始终是 [-data.length+1, 0]
-    if (!_useRealData && _channels.isNotEmpty) {
+    // 统一 Demo 和 Real 模式的 X 轴范围计算
+    // 两种模式都使用相同的坐标系统：X 值是相对索引（-N+1 到 0）
+    if (_channels.isNotEmpty) {
       final firstCh = _channels.first;
       if (firstCh.data.isNotEmpty) {
-        // 使用实际数据点数计算范围，而不是绝对样本索引差值
+        // 使用实际数据点数计算范围，确保滑块与波形一致
         final numPoints = firstCh.data.length;
         _xMin = (-numPoints).toDouble().clamp(bufMin, 0.0);
         _xMax = 0.0;
-        _debugLog('[FITX] Demo mode: numPoints=$numPoints, bufMin=$bufMin, xMin=$_xMin, _maxPoints=$_maxPoints');
+        _debugLog('[FITX] Unified mode: numPoints=$numPoints, bufMin=$bufMin, xMin=$_xMin, _maxPoints=$_maxPoints');
         return;
       }
       // 数据为空，使用默认范围
-      _debugLog('[FITX] Demo mode: no data, setting xMin=$bufMin, _maxPoints=$_maxPoints');
+      _debugLog('[FITX] Unified mode: no data, setting xMin=$bufMin, _maxPoints=$_maxPoints');
       _xMin = bufMin;
       _xMax = 0.0;
       return;
     }
     
-    // Real 模式：使用 ch.data（全量数据）计算 X 轴范围
-    double minVal = double.infinity;
-    double maxVal = double.negativeInfinity;
-    for (final ch in _channels) {
-      if (!ch.visible || ch.data.isEmpty) continue;
-      // data sorted by x: first=oldest, last=newest
-      minVal = min(minVal, ch.data.first.x);
-      maxVal = max(maxVal, ch.data.last.x);
-    }
-    if (minVal.isInfinite) {
-      _xMin = bufMin;
-      _xMax = 0.0;
-      _debugLog('[FITX] Real mode: no visible data, setting xMin=$bufMin');
-      return;
-    }
-    final padding = (maxVal - minVal) * 0.02;
-    _xMin = (minVal - padding).clamp(bufMin, 0.0);
-    _xMax = (maxVal + padding).clamp(bufMin, 0.0);
-    _debugLog('[FITX] Real mode: minVal=$minVal, maxVal=$maxVal, padding=$padding, xMin=$_xMin, xMax=$_xMax');
-    // Real 模式下才使用最小范围约束
-    if (_xMax - _xMin < 1.0) {  // 至少显示 1 个样本宽度
-      _xMin = -1.0.clamp(-bufMin, 1.0);
-      _xMax = 0.0;
-    }
+    // 没有通道时的默认范围
+    _xMin = bufMin;
+    _xMax = 0.0;
+    _debugLog('[FITX] Default: no channels, xMin=$bufMin');
   }
 
   void _fitYAxisForChannel(PlotChannel ch) {
@@ -1046,10 +975,41 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _deltaTime = (json['deltaTime'] as num?)?.toDouble() ?? 1.0;
         _maxPointsController.text = _maxPoints.toString();
         _deltaTimeController.text = _deltaTime.toString();
-        if (mounted) setState(() {});
+        // Load Flutter log settings from app_config.json
+        try {
+          final appData = Platform.environment['APPDATA'] ?? '';
+          final appFile = File('$appData\\VCR\\app_config.json');
+          if (await appFile.exists()) {
+            final appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
+            final flutterLogLevel = appConfig['flutterLogLevel'] as String? ?? 'debug';
+            _flutterLogLevel = ['trace', 'debug', 'info', 'warn', 'error'].indexOf(flutterLogLevel);
+            if (_flutterLogLevel < 0) _flutterLogLevel = 1;
+            _flutterLogPath = appConfig['flutterLogPath'] as String? ?? 'debug_log.txt';
+            _flutterFileLogging = appConfig['flutterFileLogging'] as bool? ?? true;
+          }
+        } catch (e) {
+          debugPrint('Failed to load Flutter log settings: $e');
+        }
       }
     } catch (e) {
       debugPrint('Failed to load plot config: $e');
+    }
+  }
+
+  Future<void> _loadFlutterLogSettings() async {
+    try {
+      final appData = Platform.environment['APPDATA'] ?? '';
+      final appFile = File('$appData\\VCR\\app_config.json');
+      if (await appFile.exists()) {
+        final appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
+        final flutterLogLevel = appConfig['flutterLogLevel'] as String? ?? 'debug';
+        _flutterLogLevel = ['trace', 'debug', 'info', 'warn', 'error'].indexOf(flutterLogLevel);
+        if (_flutterLogLevel < 0) _flutterLogLevel = 1;
+        _flutterLogPath = appConfig['flutterLogPath'] as String? ?? 'debug_log.txt';
+        _flutterFileLogging = appConfig['flutterFileLogging'] as bool? ?? true;
+      }
+    } catch (e) {
+      debugPrint('Failed to load Flutter log settings: $e');
     }
   }
 
@@ -1095,14 +1055,21 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   // ── GPU Acceleration ──
+  // ⚠️ 临时禁用GPU渲染以排查崩溃问题
   Future<void> _initGpu() async {
     try {
       final result = await RustLib.instance.api.crateApiGpuApiGpuInit();
+      // 强制禁用GPU，即使初始化成功
       setState(() {
-        _gpuInitialized = (result == 0);
+        _gpuInitialized = false; // (result == 0);
+        _useGpuAcceleration = false;
       });
     } catch (e) {
       print('GPU init error: $e');
+      setState(() {
+        _gpuInitialized = false;
+        _useGpuAcceleration = false;
+      });
     }
   }
 
@@ -1954,9 +1921,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         // Clamp: zoom range must stay within [-_maxPoints, 0]
                         final bufMin = -_maxPoints.toDouble();
                         final maxRange = 0.0 - bufMin;  // full range
-                        final clampedRange = range.clamp(_minVisibleRange, maxRange);
-                        _xMin = (center - clampedRange / 2).clamp(bufMin, 0.0 - _minVisibleRange);
-                        _xMax = (center + clampedRange / 2).clamp(bufMin + _minVisibleRange, 0.0);
+                        // 最小范围 = 总范围的10%
+                        final minRange = maxRange * 0.1;
+                        final clampedRange = range.clamp(minRange, maxRange);
+                        _xMin = (center - clampedRange / 2).clamp(bufMin, 0.0 - minRange);
+                        _xMax = (center + clampedRange / 2).clamp(bufMin + minRange, 0.0);
                         // Ensure still within bounds after centering
                         if (_xMin < bufMin) { _xMin = bufMin; _xMax = bufMin + clampedRange; }
                         if (_xMax > 0.0) { _xMax = 0.0; _xMin = 0.0 - clampedRange; }
@@ -1985,7 +1954,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         // Clamp X zoom: range must stay within [-_maxPoints, 0]
                         final bufMin = -_maxPoints.toDouble();
                         final maxXRange = 0.0 - bufMin;
-                        final clampedXRange = xRange.clamp(_minVisibleRange, maxXRange);
+                        // 最小范围 = 总范围的10%
+                        final minXRange = maxXRange * 0.1;
+                        final clampedXRange = xRange.clamp(minXRange, maxXRange);
                         _xMin = xCenter - clampedXRange / 2;
                         _xMax = xCenter + clampedXRange / 2;
                         if (_xMin < bufMin) { _xMin = bufMin; _xMax = bufMin + clampedXRange; }
@@ -2181,11 +2152,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         final dx = d.globalPosition.dx - _scrollbarDragStartX;
                         final dxRatio = dx / trackWidth;
                         var newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
-                        if (newMin >= _scrollbarDragStartXMax - _minVisibleRange) {
-                          newMin = _scrollbarDragStartXMax - _minVisibleRange;
+                        // 计算当前范围
+                        final currentRange = _scrollbarDragStartXMax - newMin;
+                        // 最小范围 = 总范围的10%
+                        final minRange = totalRange * 0.1;
+                        // 如果范围小于最小值，停止缩放
+                        if (currentRange <= minRange) {
+                          newMin = _scrollbarDragStartXMax - minRange;
                         }
                         // Clamp: left edge cannot go below -_maxPoints
-                        newMin = newMin.clamp(-_maxPoints.toDouble(), _scrollbarDragStartXMax - _minVisibleRange);
+                        newMin = newMin.clamp(-_maxPoints.toDouble(), _scrollbarDragStartXMax - minRange);
                         _xMin = newMin;
                         if (_scrollMode) {
                           _scrollMinTime = newMin.clamp(0.0, double.maxFinite);
@@ -2231,11 +2207,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         final dx = d.globalPosition.dx - _scrollbarDragStartX;
                         final dxRatio = dx / trackWidth;
                         var newMax = _scrollbarDragStartXMax + dxRatio * totalRange;
-                        if (newMax <= _scrollbarDragStartXMin + _minVisibleRange) {
-                          newMax = _scrollbarDragStartXMin + _minVisibleRange;
+                        // 计算当前范围
+                        final currentRange = newMax - _scrollbarDragStartXMin;
+                        // 最小范围 = 总范围的10%
+                        final minRange = totalRange * 0.1;
+                        // 如果范围小于最小值，停止缩放
+                        if (currentRange <= minRange) {
+                          newMax = _scrollbarDragStartXMin + minRange;
                         }
                         // Clamp: right edge cannot exceed 0
-                        newMax = newMax.clamp(_scrollbarDragStartXMin + _minVisibleRange, 0.0);
+                        newMax = newMax.clamp(_scrollbarDragStartXMin + minRange, 0.0);
                         _xMax = newMax;
                         if (_scrollMode) {
                           _scrollWindowWidth = newMax - _scrollbarDragStartXMin;

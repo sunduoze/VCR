@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../app/theme.dart';
+import '../src/rust/frb_generated.dart';
+import 'package:vcr/src/rust/api/debug_api.dart';
 
 /// App-wide configuration helper
 /// Stores: autoReconnect, lastConnectedDevices, deviceSortOrder
@@ -66,6 +68,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _bufferSize = 4096;
   String _language = 'zh_CN';
   int _plotAALevel = 0; // 0=off, 1=2x, 2=4x, 3=8x, 4=16x
+  String _logLevel = 'info'; // trace, debug, info, warn, error, off
+  String _logPath = ''; // empty = default (next to executable)
+  bool _fileLoggingEnabled = true; // enable/disable file logging
 
   @override
   void initState() {
@@ -79,6 +84,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _autoReconnect = config['autoReconnect'] as bool? ?? false;
         _plotAALevel = config['plotAALevel'] as int? ?? 0;
+        _logLevel = config['logLevel'] as String? ?? 'info';
+        _logPath = config['logPath'] as String? ?? '';
+        _fileLoggingEnabled = config['fileLoggingEnabled'] as bool? ?? true;
       });
     }
   }
@@ -274,6 +282,119 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 24),
+          // Debug & Logging
+          _SectionHeader(title: 'Debug & Logging'),
+          Card(
+            child: Column(
+              children: [
+                // File Logging Toggle
+                SwitchListTile(
+                  title: const Text('File Logging'),
+                  subtitle: const Text('Save logs to file'),
+                  value: _fileLoggingEnabled,
+                  onChanged: (v) async {
+                    setState(() => _fileLoggingEnabled = v);
+                    final config = await AppConfig.load();
+                    config['fileLoggingEnabled'] = v;
+                    await AppConfig.save(config);
+                    // Apply to Rust logger
+                    try {
+                      RustLib.instance.api.crateApiDebugApiDebugSetFileLoggingEnabled(enabled: v);
+                    } catch (e) {
+                      // ignore
+                    }
+                  },
+                  activeThumbColor: AppTheme.primary,
+                ),
+                const Divider(height: 1),
+                // Log Level
+                ListTile(
+                  title: const Text('Log Level'),
+                  subtitle: Text(_logLevel.toUpperCase()),
+                  trailing: DropdownButton<String>(
+                    value: _logLevel,
+                    underline: const SizedBox.shrink(),
+                    items: const [
+                      DropdownMenuItem(value: 'trace', child: Text('TRACE')),
+                      DropdownMenuItem(value: 'debug', child: Text('DEBUG')),
+                      DropdownMenuItem(value: 'info', child: Text('INFO')),
+                      DropdownMenuItem(value: 'warn', child: Text('WARN')),
+                      DropdownMenuItem(value: 'error', child: Text('ERROR')),
+                      DropdownMenuItem(value: 'off', child: Text('OFF')),
+                    ],
+                    onChanged: (v) async {
+                      if (v != null) {
+                        setState(() => _logLevel = v);
+                        final config = await AppConfig.load();
+                        config['logLevel'] = v;
+                        await AppConfig.save(config);
+                        // Apply to Rust logger
+                        try {
+                          RustLib.instance.api.crateApiDebugApiDebugSetLogLevel(level: v);
+                        } catch (e) {
+                          // ignore
+                        }
+                      }
+                    },
+                  ),
+                ),
+                const Divider(height: 1),
+                // Log File Path
+                ListTile(
+                  title: const Text('Log File Path'),
+                  subtitle: Text(
+                    _logPath.isEmpty ? 'Default (next to executable)' : _logPath,
+                    style: const TextStyle(fontSize: 12),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_logPath.isNotEmpty)
+                        IconButton(
+                          icon: const Icon(Icons.clear, size: 18),
+                          onPressed: () async {
+                            setState(() => _logPath = '');
+                            final config = await AppConfig.load();
+                            config['logPath'] = '';
+                            await AppConfig.save(config);
+                            // Reset to default path
+                            try {
+                              final exeDir = File(Platform.resolvedExecutable).parent?.path ?? '';
+                              final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
+                              RustLib.instance.api.crateApiDebugApiDebugSetLogFilePath(path: '$exeDir\\vcr_debug_$ts.log');
+                            } catch (e) {
+                              // ignore
+                            }
+                          },
+                        ),
+                      const Icon(Icons.chevron_right),
+                    ],
+                  ),
+                  onTap: () => _showLogPathDialog(),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  title: const Text('Note'),
+                  subtitle: const Text(
+                    'TRACE shows all logs including debug traces. '
+                    'ERROR shows only errors. Changes apply immediately.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary,
+                    ),
+                  ),
+                  leading: Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
           // About
           _SectionHeader(title: 'About'),
           Card(
@@ -300,6 +421,64 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
           ),
           const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  void _showLogPathDialog() {
+    final controller = TextEditingController(text: _logPath);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Log File Path'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                hintText: 'Leave empty for default path',
+                helperText: 'Absolute path or relative to executable',
+              ),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Examples:\n'
+              'C:\\\\Logs\\\\vcr.log (absolute)\\n'
+              'logs\\\\mylog.txt (relative)',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final path = controller.text.trim();
+              setState(() => _logPath = path);
+              final config = await AppConfig.load();
+              config['logPath'] = path;
+              await AppConfig.save(config);
+              // Apply to Rust logger
+              try {
+                if (path.isNotEmpty) {
+                  RustLib.instance.api.crateApiDebugApiDebugSetLogFilePath(path: path);
+                } else {
+                  final exeDir = File(Platform.resolvedExecutable).parent?.path ?? '';
+                  final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
+                  RustLib.instance.api.crateApiDebugApiDebugSetLogFilePath(path: '$exeDir\\vcr_debug_$ts.log');
+                }
+              } catch (e) {
+                // ignore
+              }
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
         ],
       ),
     );

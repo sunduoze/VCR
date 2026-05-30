@@ -6,6 +6,7 @@ import 'src/rust/api/device_api.dart';
 import 'src/rust/api/virtual_api.dart';
 import 'src/rust/api/lua_api.dart';
 import 'src/rust/api/debug_api.dart';
+
 import 'app/theme.dart';
 import 'app/routes.dart';
 
@@ -15,6 +16,30 @@ void main() async {
 
   // Initialize Rust logger to output to the debug console window
   debugInitLogger();
+
+  // Load and apply saved log settings
+  try {
+    final configFile = File('${Platform.environment['APPDATA']}\\VCR\\app_config.json');
+    if (await configFile.exists()) {
+      final config = jsonDecode(await configFile.readAsString()) as Map<String, dynamic>;
+      
+      // Apply log level
+      final logLevel = config['logLevel'] as String? ?? 'info';
+      debugSetLogLevel(level: logLevel);
+      
+      // Apply file logging enabled
+      final fileLoggingEnabled = config['fileLoggingEnabled'] as bool? ?? true;
+      debugSetFileLoggingEnabled(enabled: fileLoggingEnabled);
+      
+      // Apply log file path
+      final logPath = config['logPath'] as String? ?? '';
+      if (logPath.isNotEmpty) {
+        debugSetLogFilePath(path: logPath);
+      }
+    }
+  } catch (e) {
+    debugPrint('Failed to load log settings: $e');
+  }
 
   // Pre-init Lua engine at startup so the Rust module is fully initialized
   // before any UI access. This avoids lazy_static initialization timing issues

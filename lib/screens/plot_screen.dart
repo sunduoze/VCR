@@ -1055,14 +1055,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   // ── GPU Acceleration ──
-  // ⚠️ 临时禁用GPU渲染以排查崩溃问题
+  // 启用GPU渲染
   Future<void> _initGpu() async {
     try {
       final result = await RustLib.instance.api.crateApiGpuApiGpuInit();
-      // 强制禁用GPU，即使初始化成功
       setState(() {
-        _gpuInitialized = false; // (result == 0);
-        _useGpuAcceleration = false;
+        _gpuInitialized = true;
+        _useGpuAcceleration = true;
       });
     } catch (e) {
       print('GPU init error: $e');
@@ -1921,11 +1920,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         // Clamp: zoom range must stay within [-_maxPoints, 0]
                         final bufMin = -_maxPoints.toDouble();
                         final maxRange = 0.0 - bufMin;  // full range
-                        // 最小范围 = 总范围的10%
-                        final minRange = maxRange * 0.1;
-                        final clampedRange = range.clamp(minRange, maxRange);
-                        _xMin = (center - clampedRange / 2).clamp(bufMin, 0.0 - minRange);
-                        _xMax = (center + clampedRange / 2).clamp(bufMin + minRange, 0.0);
+                        // 不设最小范围，允许缩放到任意小
+                        final clampedRange = range.clamp(0.0, maxRange);
+                        _xMin = (center - clampedRange / 2).clamp(bufMin, 0.0);
+                        _xMax = (center + clampedRange / 2).clamp(bufMin, 0.0);
                         // Ensure still within bounds after centering
                         if (_xMin < bufMin) { _xMin = bufMin; _xMax = bufMin + clampedRange; }
                         if (_xMax > 0.0) { _xMax = 0.0; _xMin = 0.0 - clampedRange; }
@@ -1954,8 +1952,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         // Clamp X zoom: range must stay within [-_maxPoints, 0]
                         final bufMin = -_maxPoints.toDouble();
                         final maxXRange = 0.0 - bufMin;
-                        // 最小范围 = 总范围的10%
-                        final minXRange = maxXRange * 0.1;
+                        // 最小范围 = 总范围的2%
+                        final minXRange = maxXRange * 0.02;
                         final clampedXRange = xRange.clamp(minXRange, maxXRange);
                         _xMin = xCenter - clampedXRange / 2;
                         _xMax = xCenter + clampedXRange / 2;
@@ -2034,16 +2032,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       thumbRight = plotLeft + trackWidth;
       thumbWidth = trackWidth;
     }
-    // Ensure minimum thumb width so it's always interactable
-    // Minimum = 50 points per channel (in pixels)
-    final minPoints = 50.0 * _channels.length;  // 50 points per channel
-    final minThumbWidthPixels = max(30.0, (minPoints / _maxPoints) * trackWidth);
-    if (thumbWidth < minThumbWidthPixels) {
-      final center = (thumbLeft + thumbRight) / 2;
-      thumbLeft = (center - minThumbWidthPixels / 2).clamp(plotLeft, plotLeft + trackWidth - minThumbWidthPixels);
-      thumbRight = thumbLeft + minThumbWidthPixels;
-      thumbWidth = minThumbWidthPixels;
-    }
+
     // Final clamp: never let thumb extend beyond track bounds
     thumbLeft = thumbLeft.clamp(plotLeft, plotLeft + trackWidth - 20);
     thumbRight = thumbRight.clamp(plotLeft + 20, plotLeft + trackWidth);
@@ -2152,16 +2141,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         final dx = d.globalPosition.dx - _scrollbarDragStartX;
                         final dxRatio = dx / trackWidth;
                         var newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
-                        // 计算当前范围
-                        final currentRange = _scrollbarDragStartXMax - newMin;
-                        // 最小范围 = 总范围的10%
-                        final minRange = totalRange * 0.1;
-                        // 如果范围小于最小值，停止缩放
-                        if (currentRange <= minRange) {
-                          newMin = _scrollbarDragStartXMax - minRange;
+                        // 允许滑块宽度为0
+                        if (newMin >= _scrollbarDragStartXMax) {
+                          newMin = _scrollbarDragStartXMax;
                         }
-                        // Clamp: left edge cannot go below -_maxPoints
-                        newMin = newMin.clamp(-_maxPoints.toDouble(), _scrollbarDragStartXMax - minRange);
+                        newMin = newMin.clamp(-_maxPoints.toDouble(), _scrollbarDragStartXMax);
                         _xMin = newMin;
                         if (_scrollMode) {
                           _scrollMinTime = newMin.clamp(0.0, double.maxFinite);
@@ -2207,16 +2191,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         final dx = d.globalPosition.dx - _scrollbarDragStartX;
                         final dxRatio = dx / trackWidth;
                         var newMax = _scrollbarDragStartXMax + dxRatio * totalRange;
-                        // 计算当前范围
-                        final currentRange = newMax - _scrollbarDragStartXMin;
-                        // 最小范围 = 总范围的10%
-                        final minRange = totalRange * 0.1;
-                        // 如果范围小于最小值，停止缩放
-                        if (currentRange <= minRange) {
-                          newMax = _scrollbarDragStartXMin + minRange;
-                        }
-                        // Clamp: right edge cannot exceed 0
-                        newMax = newMax.clamp(_scrollbarDragStartXMin + minRange, 0.0);
+                        // 允许滑块宽度为0
+                        newMax = newMax.clamp(_scrollbarDragStartXMin, 0.0);
                         _xMax = newMax;
                         if (_scrollMode) {
                           _scrollWindowWidth = newMax - _scrollbarDragStartXMin;

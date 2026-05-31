@@ -2,6 +2,7 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -9,6 +10,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/gestures.dart';
 import 'package:file_picker/file_picker.dart';
 import '../app/theme.dart';
+import '../chart_isolate.dart';
 import '../src/rust/api/device_api.dart';
 import '../src/rust/api/debug_api.dart';
 import '../src/rust/api/plot_api.dart';
@@ -103,7 +105,7 @@ class PlotChannel {
   LineStyle lineStyle;
   double lineWidth;
   List<_DataPoint> data; // Full data (for scale/cursor)
-  List<_DataPoint> viewportData; // Decimated viewport data (for painting)
+  List<_DataPoint> viewportData; // Decimated ChartViewport data (for painting)
   double currentValue;
   double yMin; // Per-channel Y range
   double yMax;
@@ -189,6 +191,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── Data source ──
   bool _useRealData = false; // false = demo, true = real device
   Timer? _realDataTimer;
+  StreamSubscription<dynamic>? _chartDataSub;
   
   // ── Plot Groups ──
   List<PlotGroup> _plotGroups = [
@@ -220,7 +223,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   double _scrollWindowWidth = 0.0;  // visible X range in samples; 0 means auto (= _maxPoints)
   double get _effectiveScrollWindowWidth => _scrollWindowWidth > 0 ? _scrollWindowWidth : _maxPoints.toDouble();
   double _scrollMinTime = 0.0;       // left edge of visible window
-  double _screenWidth = 800.0;       // plot area width for viewport decimation
+  double _screenWidth = 800.0;       // plot area width for ChartViewport decimation
 
   // ── Scrollbar drag state ──
   _ScrollbarDrag _scrollbarDrag = _ScrollbarDrag.none;
@@ -247,7 +250,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // 🚀 P2-B 优化：增量更新版本号
   BigInt _lastDataVersion = BigInt.zero;
 
-  // 🚀 P3-B 优化：viewport 刷新计数器（用于 shouldRepaint 优化）
+  // 🚀 P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
   int _viewportRefreshCount = 0;
 
   // ── Interaction state ──
@@ -258,7 +261,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   double _dragStartXMax = 10;
   double _dragStartYMin = -1;
   double _dragStartYMax = 1;
-  // Drag state for scroll-mode viewport (X-axis only drag in scroll mode)
+  // Drag state for scroll-mode ChartViewport (X-axis only drag in scroll mode)
   double _dragStartScrollMin = 0.0;
 
   // ── Numeric panel ──
@@ -344,8 +347,45 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     // Load Flutter log settings asynchronously (don't block initState)
     _loadFlutterLogSettings();
+    _setupChartIsolateListener();
   }
 
+  /// Connects to the Chart Isolate for high-throughput data pipeline.
+  /// Receives transformed data from the isolate and triggers UI updates.
+  void _setupChartIsolateListener() {
+    if (chartIsolatePort == null) {
+      print('[PlotScreen] Chart Isolate not available, falling back to timer mode');
+      return;
+    }
+
+    final receivePort = ReceivePort();
+    _chartDataSub = receivePort.listen((message) {
+      if (message is Float64List) {
+        // Chart Isolate returns interleaved [x0, y0, x1, y1, ...] as Float64List
+        _onChartIsolateData(message);
+      } else if (message is ChartViewport) {
+        // ChartViewport update from isolate
+        _onViewportUpdate(message);
+      }
+    });
+
+    chartIsolatePort!.send(receivePort.sendPort);
+    print('[PlotScreen] Chart Isolate listener connected');
+  }
+
+  /// Handle transformed data from Chart Isolate
+  void _onChartIsolateData(Float64List data) {
+    // Store for rendering; data contains interleaved [x, y] pixel coordinates
+    // Future: setState() or ValueNotifier update here
+  }
+
+  /// Handle ChartViewport updates from Chart Isolate
+  void _onViewportUpdate(ChartViewport vp) {
+    // Update the plot's visible range
+    setState(() {
+      // _xMin = vp.xMin; _xMax = vp.xMax;
+    });
+  }
   void _initDemoChannels() {
     final devices = listDevices();
     final deviceName = devices.isNotEmpty ? devices.first.name : 'Demo';
@@ -511,7 +551,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     });
   }
 
-  // ── Helper: binary search for viewport data ──
+  // ── Helper: binary search for ChartViewport data ──
   // Returns first index where data[i].x >= target.
   // If no such index, returns data.length.
   int _binarySearch(List<_DataPoint> data, double target) {
@@ -547,7 +587,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   /// Refresh viewportData for all channels using current _xMin/_xMax.
-  /// Called after scrollbar drag, zoom, or any viewport change.
+  /// Called after scrollbar drag, zoom, or any ChartViewport change.
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
@@ -612,7 +652,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // 调试：打印 viewportData.length
       _debugLog('[VPD]   viewportData.length=${ch.viewportData.length}');
     }
-    // 🚀 P3-B 优化：viewport 刷新完成，递增计数器
+    // 🚀 P3-B 优化：ChartViewport 刷新完成，递增计数器
     _viewportRefreshCount++;
   }
 
@@ -744,7 +784,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     // 调试：X轴范围
 
-    // Fetch viewport data for visible channels
+    // Fetch ChartViewport data for visible channels
     // 统一使用 _refreshViewportData() 处理 Demo 和 Real 模式
     _refreshViewportData();
     
@@ -948,6 +988,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _demoTimer?.cancel();
     _realDataTimer?.cancel();
     _fetchTimer?.cancel();
+    _chartDataSub?.cancel();
     // GPU 𫔰阌
     if (_gpuInitialized) {
       RustLib.instance.api.crateApiGpuApiGpuCleanup();
@@ -1834,7 +1875,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       color: const Color(0xFF0A0E14),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // Track plot area width for viewport decimation
+          // Track plot area width for ChartViewport decimation
           final plotLeftPx = 50.0; // approximate, matches painter
           final plotRightPx = 10.0;
           _screenWidth = (constraints.maxWidth - plotLeftPx - plotRightPx).clamp(100.0, 4000.0);
@@ -1903,7 +1944,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
                 setState(() {
                   if (_scrollMode) {
-                    // In scroll mode: drag viewport left/right within fixed range [-缓冲区大小, 0]
+                    // In scroll mode: drag ChartViewport left/right within fixed range [-缓冲区大小, 0]
                     final xRange = _getDataXRange().$2 - _getDataXRange().$1; // Total X range
                     _scrollMinTime = (_dragStartScrollMin - dx / w * xRange)
                         .clamp(-_maxPoints.toDouble(), 0.0);
@@ -2842,7 +2883,7 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
   final bool shareYAxis; // When true, all channels use global yMin/yMax
   final ui.Image? gpuWaveformImage; // GPU-accelerated waveform texture (optional)
   final double deltaTime; // Time per sample in ms (for X axis label formatting)
-  final int viewportRefreshCount; // 🚀 P3-B: viewport 刷新计数器
+  final int viewportRefreshCount; // 🚀 P3-B: ChartViewport 刷新计数器
 
   // 🚀 性能优化：PictureRecorder 缓存
   ui.Picture? _cachedPicture;
@@ -3234,7 +3275,7 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
   }
 
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
-    // Use pre-decimated viewport data from Rust if available, otherwise fall back to full data
+    // Use pre-decimated ChartViewport data from Rust if available, otherwise fall back to full data
     List<_DataPoint> data;
     if (ch.viewportData.isNotEmpty) {
       data = ch.viewportData;
@@ -3242,7 +3283,7 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
       final allData = ch.data;
       if (allData.isEmpty) return;
 
-      // Viewport clip: only pass data points within visible X range + 1 point margin
+      // ChartViewport clip: only pass data points within visible X range + 1 point margin
       final xRange = xMax - xMin;
       final margin = xRange * 0.01;
       int startIdx = 0;
@@ -3261,7 +3302,7 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
       endIdx = lo < allData.length - 1 ? lo + 1 : allData.length - 1;
       data = allData.sublist(startIdx, endIdx + 1);
 
-      // No decimation for demo mode — data is bounded and viewport-clipped
+      // No decimation for demo mode — data is bounded and ChartViewport-clipped
       // Decimation loses high-frequency Fourier harmonics, causing jagged appearance
       // if (data.length > w * 1) {
       //   data = _decimateDataSmooth(data, w);
@@ -3475,10 +3516,10 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
   @override
   bool shouldRepaint(covariant _PlotPainter oldDelegate) {
-    // 🚀 P3-B 优化：只比较 viewport 刷新计数器，不比较数据长度
-    // 如果 viewport 未刷新（计数器未变），不需要重绘
+    // 🚀 P3-B 优化：只比较 ChartViewport 刷新计数器，不比较数据长度
+    // 如果 ChartViewport 未刷新（计数器未变），不需要重绘
     if (viewportRefreshCount == oldDelegate.viewportRefreshCount) {
-      return false; // viewport 未变化，跳过重绘
+      return false; // ChartViewport 未变化，跳过重绘
     }
     
     // GPU texture changed?

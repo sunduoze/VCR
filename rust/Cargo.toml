@@ -33,7 +33,7 @@ futures = "0.3"
 rand = "0.8"
 mlua = { version = "0.10", features = ["lua53", "vendored", "serialize", "send"] }
 dirs = "5"
-bytemuck = "1.25.0"
+bytemuck = { version = "1.25.0", features = ["derive"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

@@ -1,0 +1,238 @@
+// FFI Bridge — Phase 5: C-ABI zero-copy bridge for Dart Isolate ↔ Rust
+// Enables dart:ffi direct calls from Chart Isolate without flutter_rust_bridge serialization
+//
+// Architecture:
+//   Dart Isolate --dart:ffi--> C-ABI symbols (this file)
+//   Main Isolate --flutter_rust_bridge--> RustLib.instance.api.*
+//
+// Both paths coexist; the FFI path is for hot data path (200K pts/sec).
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use parking_lot::Mutex;
+use lazy_static::lazy_static;
+
+use crate::core::plot::lockfree_buffer::{LockFreeRingBuffer, RingDataPoint};
+use crate::core::plot::time_bucket::TimeBucketPyramid;
+
+// ── Global state ────────────────────────────────────────────────────
+
+lazy_static! {
+    /// Lock-free SPSC ring buffer: producer pushes, consumer reads
+    static ref FFI_RING: LockFreeRingBuffer = LockFreeRingBuffer::new(12_000_000);
+
+    /// Time bucket pyramid: updated on every push, queried on demand
+    static ref FFI_PYRAMID: Mutex<TimeBucketPyramid> = Mutex::new(TimeBucketPyramid::new());
+
+    /// Initialization flag
+    static ref FFI_READY: AtomicBool = AtomicBool::new(false);
+}
+
+// ── C-ABI types ─────────────────────────────────────────────────────
+
+/// C-compatible data point (matches Dart Struct layout exactly)
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CDataPoint {
+    pub timestamp_ms: f64,
+    pub value: f64,
+}
+
+/// C-compatible bucket stats for pyramid queries
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct CBucketStats {
+    pub timestamp_ms: f64,
+    pub min_value: f64,
+    pub max_value: f64,
+    pub avg_value: f64,
+    pub count: u32,
+    pub _pad: u32, // alignment padding for C struct compatibility
+}
+
+// ── Initialization ──────────────────────────────────────────────────
+
+/// Initialize the FFI bridge (called once from Dart main)
+#[no_mangle]
+pub extern "C" fn vcr_ffi_init() -> bool {
+    // Pre-warm global state
+    let _ = &*FFI_RING;
+    let _ = &*FFI_PYRAMID;
+    FFI_READY.store(true, Ordering::Release);
+    true
+}
+
+/// Check if FFI bridge is initialized
+#[no_mangle]
+pub extern "C" fn vcr_ffi_is_ready() -> bool {
+    FFI_READY.load(Ordering::Acquire)
+}
+
+// ── Ring Buffer API ─────────────────────────────────────────────────
+
+/// Push a single data point to the ring buffer
+/// Returns true if successful, false if buffer is full
+#[no_mangle]
+pub extern "C" fn vcr_buffer_push(timestamp_ms: f64, value: f64) -> bool {
+    FFI_RING.push_batch(&[(timestamp_ms, value)]);
+    true
+}
+
+/// Push a batch of data points (zero-copy: reads from Dart-allocated memory)
+/// data: pointer to array of CDataPoint (interleaved f64 pairs)
+/// count: number of points
+#[no_mangle]
+pub extern "C" fn vcr_buffer_push_batch(data: *const CDataPoint, count: u32) -> bool {
+    if data.is_null() || count == 0 {
+        return false;
+    }
+
+    let slice = unsafe { std::slice::from_raw_parts(data, count as usize) };
+
+    // Convert to tuples for push_batch
+    let tuples: Vec<(f64, f64)> = slice
+        .iter()
+        .map(|dp| (dp.timestamp_ms, dp.value))
+        .collect();
+
+    FFI_RING.push_batch(&tuples);
+    true
+}
+
+/// Number of unread points in the ring buffer
+#[no_mangle]
+pub extern "C" fn vcr_buffer_available() -> u32 {
+    FFI_RING.peek_len() as u32
+}
+
+/// Read data from ring buffer into pre-allocated memory (zero-copy)
+/// out: pre-allocated destination array
+/// max_count: maximum number of points to read
+/// Returns: actual number of points read
+#[no_mangle]
+pub extern "C" fn vcr_buffer_read(out: *mut CDataPoint, max_count: u32) -> u32 {
+    if out.is_null() || max_count == 0 {
+        return 0;
+    }
+
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, max_count as usize) };
+
+    // Convert CDataPoint slice to RingDataPoint slice via unsafe reinterpret
+    // RingDataPoint and CDataPoint have identical repr(C) layout
+    let ring_dest: &mut [RingDataPoint] = unsafe {
+        std::slice::from_raw_parts_mut(dest.as_mut_ptr() as *mut RingDataPoint, dest.len())
+    };
+
+    FFI_RING.read_into(ring_dest) as u32
+}
+
+/// Clear the ring buffer
+#[no_mangle]
+pub extern "C" fn vcr_buffer_clear() {
+    FFI_RING.clear();
+}
+
+// ── Pyramid Query API ───────────────────────────────────────────────
+
+/// Query aggregated data from the time bucket pyramid
+/// out: pre-allocated destination array (caller owns memory)
+/// max_buckets: maximum number of buckets to write
+/// t_min, t_max: time range in milliseconds
+/// target_points: optimal visualization resolution
+/// Returns: actual number of buckets written
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_query(
+    t_min: f64,
+    t_max: f64,
+    target_points: u32,
+    out: *mut CBucketStats,
+    max_buckets: u32,
+) -> u32 {
+    if out.is_null() || max_buckets == 0 {
+        return 0;
+    }
+
+    let pyramid = FFI_PYRAMID.lock();
+    let buckets = pyramid.query(t_min, t_max, target_points as usize);
+
+    let count = buckets.len().min(max_buckets as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
+
+    for (i, bucket) in buckets.iter().take(count).enumerate() {
+        dest[i] = CBucketStats {
+            timestamp_ms: bucket.0,
+            min_value: bucket.1,
+            max_value: bucket.2,
+            avg_value: (bucket.1 + bucket.2) * 0.5,
+            count: bucket.3,
+            _pad: 0,
+        };
+    }
+
+    count as u32
+}
+
+/// Query pyramid and get downsampled DataPoints (ready for painting)
+/// out: pre-allocated CDataPoint array
+/// max_points: max output points
+/// Returns: actual number of points written (always even: min+max per bucket)
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_query_points(
+    t_min: f64,
+    t_max: f64,
+    target_points: u32,
+    out: *mut CDataPoint,
+    max_points: u32,
+) -> u32 {
+    if out.is_null() || max_points == 0 {
+        return 0;
+    }
+
+    let pyramid = FFI_PYRAMID.lock();
+    let points = pyramid.query_as_datapoints(t_min, t_max, target_points as usize);
+
+    let count = points.len().min(max_points as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
+
+    for (i, dp) in points.iter().take(count).enumerate() {
+        dest[i] = CDataPoint {
+            timestamp_ms: dp.timestamp_ms,
+            value: dp.value,
+        };
+    }
+
+    count as u32
+}
+
+/// Feed data into the pyramid (also pushed to ring buffer in production)
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_push(timestamp_ms: f64, value: f64) {
+    let mut pyramid = FFI_PYRAMID.lock();
+    pyramid.push(timestamp_ms, value);
+}
+
+/// Feed batch into the pyramid
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_push_batch(data: *const CDataPoint, count: u32) -> bool {
+    if data.is_null() || count == 0 {
+        return false;
+    }
+
+    let slice = unsafe { std::slice::from_raw_parts(data, count as usize) };
+    let mut pyramid = FFI_PYRAMID.lock();
+
+    for dp in slice {
+        pyramid.push(dp.timestamp_ms, dp.value);
+    }
+
+    true
+}
+
+// ── Shutdown ────────────────────────────────────────────────────────
+
+/// Shutdown the FFI bridge (free resources)
+#[no_mangle]
+pub extern "C" fn vcr_ffi_shutdown() {
+    FFI_READY.store(false, Ordering::Release);
+    FFI_RING.clear();
+    // Pyramid will be dropped on program exit
+}

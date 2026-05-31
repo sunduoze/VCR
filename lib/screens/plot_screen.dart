@@ -311,7 +311,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
-    print('🧪 [DEBUG] initState() 开始');
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initDemoChannels();
@@ -443,7 +442,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   final List<int> _demoSampleIndices = <int>[];
   
   void _startDemoData() {
-    print('🧪 [DEBUG] _startDemoData() 开始');
     _debugLog('[START] _startDemoData called, _useRealData=$_useRealData, _isPlaying=$_isPlaying, _maxPoints=$_maxPoints');
     _debugLog('[START] _demoChannels.length=${_demoChannels.length}, _realChannels.length=${_realChannels.length}');
     _demoTimer?.cancel();
@@ -624,7 +622,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // 🚀 P3-B 双缓冲：每次获取数据前，先 swap 缓冲区
     RustLib.instance.api.crateApiPlotApiPlotSwapBuffers();
     
-    print('🧪 [DEBUG] [数据链路] 步骤5: _fetchRealData() 开始');
     if (!_useRealData) return; // Skip in demo mode
     if (!_isPlaying) return; // Pause: stop data fetching
 
@@ -676,7 +673,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 return _DataPoint(sampleIdx.toDouble(), pts[i].value);
               });
               ch.currentValue = pts.last.value;
-              print('🧪 [DEBUG] [数据链路] 步骤5a: ch=${chName} initial data.len=${pts.length}');
             }
           } else {
             // ch.data has data, append latest points
@@ -707,7 +703,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
     } catch (e) {
-      print('🧪 [DEBUG] [数据链路] 步骤5 ERROR: $e');
     }
   }
 
@@ -716,7 +711,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   DateTime _lastUIUpdate = DateTime.now();
 
   void _updateRealDataUI() {
-    print('🧪 [DEBUG] [数据链路] 步骤6: _updateRealDataUI() 开始');
     if (!_useRealData || !mounted || !_isPlaying) return;
 
     // 策略 A: UI 节流，每 33ms（约 30fps）更新一次
@@ -749,7 +743,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
 
     // 调试：X轴范围
-    print('🧪 [DEBUG] [数据链路] 步骤6a: _xMin=$_xMin _xMax=$_xMax _autoScaleX=$_autoScaleX _channels.len=${_channels.length}');
 
     // Fetch viewport data for visible channels
     // 统一使用 _refreshViewportData() 处理 Demo 和 Real 模式
@@ -2793,7 +2786,6 @@ class _MinimapPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    print('🧪 [DEBUG] _PlotPainter.paint() 被调用, size=\$size');
     final rangeX = dataXMax - dataXMin;
     if (rangeX <= 0) return;
 
@@ -2885,7 +2877,6 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
 
   @override
   void paint(Canvas canvas, Size size) {
-    print('🧪 [DEBUG] _PlotPainter.paint() 被调用, size=\$size');
     final w = size.width;
     final h = size.height;
 
@@ -3576,6 +3567,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     tp.paint(canvas, Offset(tx, ty));
   }
 }
+
 
 
 

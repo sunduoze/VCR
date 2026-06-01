@@ -16,6 +16,18 @@ import 'package:ffi/ffi.dart';
 // C-ABI Structs (must match Rust repr(C) layout exactly)
 // ══════════════════════════════════════════════════════════════════════
 
+/// Matches Rust: PointsBuffer { ptr: *const f32, len: u32, generation: u64 }
+/// Zero-copy: use ptr.asTypedList(len*2) after each get_points() call.
+final class PointsBuffer extends Struct {
+  external Pointer<Float> ptr;
+
+  @Uint32()
+  external int len;
+
+  @Uint64()
+  external int generation;
+}
+
 /// Matches Rust: CDataPoint { timestamp_ms: f64, value: f64 }
 final class CDataPoint extends Struct {
   @Double()
@@ -71,6 +83,16 @@ typedef _ClearNative = Void Function();
 typedef _ClearDart = void Function();
 
 // Pyramid
+// -- Query Bridge (Triple Buffer + PointsBuffer)
+typedef _SetViewportNative = Void Function(Double tStart, Double tEnd, Uint32 maxPoints);
+typedef _SetViewportDart = void Function(double tStart, double tEnd, int maxPoints);
+typedef _GetPointsNative = PointsBuffer Function();
+typedef _GetPointsDart = PointsBuffer Function();
+typedef _GetGenerationNative = Uint64 Function();
+typedef _GetGenerationDart = int Function();
+typedef _GetLatestTimestampNative = Double Function();
+typedef _GetLatestTimestampDart = double Function();
+// -- Pyramid query
 typedef _PyramidQueryNative = Uint32 Function(
     Double tMin, Double tMax, Uint32 targetPoints,
     Pointer<CBucketStats> out, Uint32 maxBuckets);
@@ -111,6 +133,12 @@ class FfiBridge {
   late final _PyramidQueryPointsDart pyramidQueryPoints;
   late final _PyramidPushDart pyramidPush;
   late final _PyramidPushBatchDart pyramidPushBatch;
+
+  // Query bridge (zero-copy PointsBuffer)
+  late final _SetViewportDart setViewport;
+  late final _GetPointsDart getPoints;
+  late final _GetGenerationDart getGeneration;
+  late final _GetLatestTimestampDart getLatestTimestamp;
 
   FfiBridge._() {
     _lib = _loadLibrary();
@@ -158,6 +186,12 @@ class FfiBridge {
     pyramidQueryPoints = _lib.lookupFunction<_PyramidQueryPointsNative, _PyramidQueryPointsDart>('vcr_pyramid_query_points');
     pyramidPush = _lib.lookupFunction<_PyramidPushNative, _PyramidPushDart>('vcr_pyramid_push');
     pyramidPushBatch = _lib.lookupFunction<_PyramidPushBatchNative, _PyramidPushBatchDart>('vcr_pyramid_push_batch');
+
+    // Query bridge (zero-copy PointsBuffer)
+    setViewport = _lib.lookupFunction<_SetViewportNative, _SetViewportDart>('vcr_set_viewport');
+    getPoints = _lib.lookupFunction<_GetPointsNative, _GetPointsDart>('vcr_get_points');
+    getGeneration = _lib.lookupFunction<_GetGenerationNative, _GetGenerationDart>('vcr_get_generation');
+    getLatestTimestamp = _lib.lookupFunction<_GetLatestTimestampNative, _GetLatestTimestampDart>('vcr_get_latest_timestamp');
   }
 
   // ══════════════════════════════════════════════════════════════════
@@ -188,6 +222,17 @@ class FfiBridge {
 
   /// How many points are available in the ring buffer?
   int get availablePoints => bufferAvailable();
+
+  /// Zero-copy read via PointsBuffer (primary hot path).
+  /// Returns a Float32List backed by native memory — no allocation, no copy.
+  /// The returned list is valid until the next getPoints() call.
+  ///
+  /// Format: interleaved [x0, y0, x1, y1, ...] in data coordinates.
+  ({Float32List data, int generation}) readPointsBuffer() {
+    final pb = getPoints();
+    final data = pb.ptr.asTypedList(pb.len * 2);
+    return (data: data, generation: pb.generation);
+  }
 
   /// Read available data into pre-allocated Float64List [ts, val, ts, val, ...]
   /// Returns: number of POINTS read

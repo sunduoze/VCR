@@ -323,10 +323,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     try {
       RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(_maxPoints));
     } catch (_) {}
-    
-    // 启动真实数据定时器（方案 B: 分离数据轮询和 UI 更新）
-    _fetchTimer = Timer.periodic(const Duration(milliseconds: 20), (_) => _fetchRealData());
-    _realDataTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _updateRealDataUI());
+
+    // Real data timers are started on-demand by _startRealData() / _toggleDataSource().
+    // Not started here — avoid wasting main thread in demo mode (50 function calls/sec).
     // GPU 加速初始化（添加 try-catch 避免崩溃）
     try {
       _initGpu();
@@ -2873,19 +2872,56 @@ class _MinimapPainter extends CustomPainter {
   }
 }
 
-class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
+class _PlotPainter extends CustomPainter {
+  // ═══ Static cached paint objects (zero allocation on paint path) ═══
+  static final _bgPaint = Paint()..color = const Color(0xFF0A0E14);
+  static final _plotBgPaint = Paint()..color = const Color(0xFF0D1117);
+  static final _gpuImagePaint = Paint()..filterQuality = FilterQuality.high;
+  static final _borderPaint = Paint()
+    ..color = const Color(0xFF30363D)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.0;
+  static final _cursorPaint = Paint()
+    ..color = const Color(0x4058A6FF)
+    ..strokeWidth = 0.5;
+  static final _tooltipBgPaint = Paint()..color = const Color(0xCC0D1117);
+  static final _gridPaint = Paint()
+    ..color = const Color(0xFF1A2030)
+    ..strokeWidth = 0.5;
+  static final _zeroPaint = Paint()
+    ..color = const Color(0xFF2A3040)
+    ..strokeWidth = 1.0;
+  static final _miniBgPaint = Paint()..color = const Color(0xDD161B22);
+  static final _aaDownsamplePaint = Paint()
+    ..filterQuality = FilterQuality.medium
+    ..blendMode = BlendMode.srcOver;
+  static final _overlayStyle = TextStyle(
+    color: const Color(0xFF58A6FF),
+    fontSize: 11.0,
+    fontFamily: 'Consolas, monospace',
+  );
+  static final _coordStyle = TextStyle(
+    color: const Color(0xFFC9D1D9),
+    fontSize: 11.0,
+    fontFamily: 'Consolas, monospace',
+  );
+  // Reusable TextPainters (one per frame use case, avoid per-frame allocation)
+  static final _overlayTp = TextPainter(textDirection: TextDirection.ltr);
+  static final _crosshairTp = TextPainter(textDirection: TextDirection.ltr);
+
+  // ── Instance fields ──────────────────────────────────────────
+  final List<PlotChannel> channels;
   final double xMin, xMax, yMin, yMax;
   final Offset? mousePosition;
   final int fps;
   final int totalPoints;
   final double aaScale;
   final int globalDecimals;
-  final bool shareYAxis; // When true, all channels use global yMin/yMax
-  final ui.Image? gpuWaveformImage; // GPU-accelerated waveform texture (optional)
-  final double deltaTime; // Time per sample in ms (for X axis label formatting)
-  final int viewportRefreshCount; // 🚀 P3-B: ChartViewport 刷新计数器
+  final bool shareYAxis;
+  final ui.Image? gpuWaveformImage;
+  final double deltaTime;
+  final int viewportRefreshCount;
 
-  // 🚀 性能优化：PictureRecorder 缓存
   ui.Picture? _cachedPicture;
   int _cacheVersion = 0;
   double _cachedXMin = 0, _cachedXMax = 0;
@@ -2925,7 +2961,7 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
     // If we have a GPU-rendered waveform texture, use it directly
     if (gpuWaveformImage != null) {
       // Draw background first (matches _paintInternal)
-      canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF0A0E14));
+      canvas.drawRect(Rect.fromLTWH(0, 0, w, h), _bgPaint);
       
       // Calculate plot area margins (must match _paintInternal)
       final yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
@@ -2939,24 +2975,15 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
       final plotH = h - plotTop - plotBottom;
 
       // Draw plot area background
-      canvas.drawRect(
-        Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-        Paint()..color = const Color(0xFF0D1117),
-      );
+      canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), _plotBgPaint);
 
       // Draw GPU waveform image (it already contains grid, waveforms, and axes)
       final srcRect = Rect.fromLTWH(0, 0, gpuWaveformImage!.width.toDouble(), gpuWaveformImage!.height.toDouble());
       final dstRect = Rect.fromLTWH(plotLeft, plotTop, plotW, plotH);
-      canvas.drawImageRect(gpuWaveformImage!, srcRect, dstRect, Paint()..filterQuality = FilterQuality.high);
+      canvas.drawImageRect(gpuWaveformImage!, srcRect, dstRect, _gpuImagePaint);
 
       // Draw border
-      canvas.drawRect(
-        Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-        Paint()
-          ..color = const Color(0xFF30363D)
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.0,
-      );
+      canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), _borderPaint);
 
       // Draw FPS and point count overlay
       _drawOverlay(canvas, w, h, fps, totalPoints);
@@ -2992,9 +3019,7 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
         // Scale back to logical size WITHOUT stretching — just downsample.
         final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
         final dstRect = Rect.fromLTWH(0, 0, w, h);
-        canvas.drawImageRect(image, srcRect, dstRect, Paint()
-          ..filterQuality = FilterQuality.medium
-          ..blendMode = BlendMode.srcOver);
+        canvas.drawImageRect(image, srcRect, dstRect, _aaDownsamplePaint);
         image.dispose();
       } catch (e) {
         // Fallback: draw directly without supersampling
@@ -3026,6 +3051,9 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
         canvas.drawPicture(_cachedPicture!);
       }
     }
+
+    // ── Crosshair overlay (drawn AFTER cached/AA picture — never cached) ──
+    _drawCrosshairOverlay(canvas, w, h);
   }
 
   void _paintInternal(Canvas canvas, double w, double h, double scale) {
@@ -3044,25 +3072,21 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
     if (plotW <= 0 || plotH <= 0) return; // Guard against invalid dimensions
 
     // ── Background ──
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF0A0E14));
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), _bgPaint);
 
     // ── Plot area background ──
     canvas.drawRect(
       Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-      Paint()..color = const Color(0xFF0D1117),
+      _plotBgPaint,
     );
 
     // ── Grid lines ──
-    final gridPaint = Paint()
-      ..color = const Color(0xFF1A2030)
-      ..strokeWidth = 0.5;
-
     // Vertical grid (X axis — shared)
     final xTicks = _niceTicks(xMin, xMax, 10);
     for (final tick in xTicks) {
       final sx = _xToScreen(tick, plotW) + plotLeft;
       if (sx < plotLeft || sx > plotLeft + plotW) continue;
-      canvas.drawLine(Offset(sx, plotTop), Offset(sx, plotTop + plotH), gridPaint);
+      canvas.drawLine(Offset(sx, plotTop), Offset(sx, plotTop + plotH), _gridPaint);
     }
 
     // Horizontal grid (Y axis — global for now, per-channel labels rendered separately)
@@ -3070,16 +3094,13 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
     for (final tick in yTicks) {
       final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
       if (sy < plotTop || sy > plotTop + plotH) continue;
-      canvas.drawLine(Offset(plotLeft, sy), Offset(plotLeft + plotW, sy), gridPaint);
+      canvas.drawLine(Offset(plotLeft, sy), Offset(plotLeft + plotW, sy), _gridPaint);
     }
 
     // Zero line
     final zeroY = _yToScreen(0, plotH, yMin, yMax) + plotTop;
     if (zeroY >= plotTop && zeroY <= plotTop + plotH) {
-      final zeroPaint = Paint()
-        ..color = const Color(0xFF2A3040)
-        ..strokeWidth = 1.0;
-      canvas.drawLine(Offset(plotLeft, zeroY), Offset(plotLeft + plotW, zeroY), zeroPaint);
+      canvas.drawLine(Offset(plotLeft, zeroY), Offset(plotLeft + plotW, zeroY), _zeroPaint);
     }
 
     // ── X axis labels ──
@@ -3190,77 +3211,10 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
     // ── Border ──
     canvas.drawRect(
       Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-      Paint()
-        ..color = const Color(0xFF30363D)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0,
+      _borderPaint,
     );
 
-    // ── Crosshair / cursor ──
-    if (mousePosition != null) {
-      final mx = mousePosition!.dx;
-      final my = mousePosition!.dy;
-      if (mx >= plotLeft && mx <= plotLeft + plotW &&
-          my >= plotTop && my <= plotTop + plotH) {
-        final cursorPaint = Paint()
-          ..color = const Color(0x4058A6FF)
-          ..strokeWidth = 0.5;
-
-        canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), cursorPaint);
-        canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), cursorPaint);
-
-        // Show coordinates
-        final dataX = xMin + (mx - plotLeft) / plotW * (xMax - xMin);
-        final dataY = yMax - (my - plotTop) / plotH * (yMax - yMin);
-
-        // Find max decimals across channels for alignment
-        int maxDecimals = 3;
-        for (final ch in channels) {
-          if (ch.visible && ch.decimals > maxDecimals) maxDecimals = ch.decimals;
-        }
-
-        final coordText = 'X: ${dataX.toStringAsFixed(maxDecimals)}  Y: ${dataY.toStringAsFixed(maxDecimals)}';
-        final tp = TextPainter(
-          text: TextSpan(text: coordText, style: TextStyle(
-            color: const Color(0xFFC9D1D9),
-            fontSize: 11.0,
-            fontFamily: 'Consolas, monospace',
-          )),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        var tx = mx + 12;
-        var ty = my - tp.height - 8;
-        if (tx + tp.width > plotLeft + plotW) tx = mx - tp.width - 8;
-        if (ty < plotTop) ty = my + 8;
-
-        canvas.drawRect(
-          Rect.fromLTWH(tx - 2, ty - 1, tp.width + 4, tp.height + 2),
-          Paint()..color = const Color(0xDD161B22),
-        );
-        tp.paint(canvas, Offset(tx, ty));
-
-        // Channel values at cursor X
-        double yOffset = ty + tp.height + 4;
-        for (final ch in channels) {
-          if (!ch.visible || ch.data.isEmpty) continue;
-          final val = _getValueAtX(ch, dataX);
-          if (val != null) {
-            final chText = '${ch.channelName}: ${val.toStringAsFixed(ch.decimals)}';
-            final ctp = TextPainter(
-              text: TextSpan(text: chText, style: TextStyle(
-                color: ch.color,
-                fontSize: 10.0,
-                fontFamily: 'Consolas, monospace',
-              )),
-              textDirection: TextDirection.ltr,
-            )..layout();
-            if (yOffset + ctp.height > plotTop + plotH) break;
-            ctp.paint(canvas, Offset(tx, yOffset));
-            yOffset += ctp.height + 2;
-          }
-        }
-      }
-    }
+    // ═══ Crosshair drawn in paint() after PictureCache (NOT cached) ═══
 
     final infoStyle = TextStyle(
       color: const Color(0xFF8B949E),
@@ -3272,6 +3226,75 @@ class _PlotPainter extends CustomPainter {final List<PlotChannel> channels;
       textDirection: TextDirection.ltr,
     )..layout();
     infoTp.paint(canvas, Offset(plotLeft + plotW - infoTp.width - 4, plotTop + 4));
+  }
+
+  /// Draws crosshair, tooltip, and per-channel values ON TOP of cached content.
+  /// Called from paint() after PictureCache/AA draw — never cached.
+  void _drawCrosshairOverlay(Canvas canvas, double w, double h) {
+    if (mousePosition == null) return;
+
+    // Calculate plot bounds (same as _paintInternal)
+    final yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
+    final leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
+    final rightYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 1).length;
+    final plotLeft = 50.0 + leftYAxes * 45.0;
+    final plotBottom = 40.0;
+    final plotRight = 10.0 + rightYAxes * 45.0;
+    final plotTop = 10.0;
+    final plotW = w - plotLeft - plotRight;
+    final plotH = h - plotTop - plotBottom;
+    if (plotW <= 0 || plotH <= 0) return;
+
+    final mx = mousePosition!.dx;
+    final my = mousePosition!.dy;
+    if (mx < plotLeft || mx > plotLeft + plotW ||
+        my < plotTop || my > plotTop + plotH) return;
+
+    // ── Cursor lines ──
+    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), _cursorPaint);
+    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), _cursorPaint);
+
+    // ── Coordinate tooltip ──
+    final dataX = xMin + (mx - plotLeft) / plotW * (xMax - xMin);
+    final dataY = yMax - (my - plotTop) / plotH * (yMax - yMin);
+    int maxDecimals = 3;
+    for (final ch in channels) {
+      if (ch.visible && ch.decimals > maxDecimals) maxDecimals = ch.decimals;
+    }
+    final coordText = 'X: ${dataX.toStringAsFixed(maxDecimals)}  Y: ${dataY.toStringAsFixed(maxDecimals)}';
+    final tp = _crosshairTp
+      ..text = TextSpan(text: coordText, style: _coordStyle)
+      ..layout();
+    var tx = mx + 12;
+    var ty = my - tp.height - 8;
+    if (tx + tp.width > plotLeft + plotW) tx = mx - tp.width - 8;
+    if (ty < plotTop) ty = my + 8;
+    canvas.drawRect(
+      Rect.fromLTWH(tx - 2, ty - 1, tp.width + 4, tp.height + 2),
+      _miniBgPaint,
+    );
+    tp.paint(canvas, Offset(tx, ty));
+
+    // ── Per-channel values at cursor X ──
+    double yOffset = ty + tp.height + 4;
+    for (final ch in channels) {
+      if (!ch.visible || ch.data.isEmpty) continue;
+      final val = _getValueAtX(ch, dataX);
+      if (val != null) {
+        final chText = '${ch.channelName}: ${val.toStringAsFixed(ch.decimals)}';
+        final ctp = TextPainter(
+          text: TextSpan(text: chText, style: TextStyle(
+            color: ch.color,
+            fontSize: 10.0,
+            fontFamily: 'Consolas, monospace',
+          )),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        if (yOffset + ctp.height > plotTop + plotH) break;
+        ctp.paint(canvas, Offset(tx, yOffset));
+        yOffset += ctp.height + 2;
+      }
+    }
   }
 
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
@@ -3516,6 +3539,9 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
   @override
   bool shouldRepaint(covariant _PlotPainter oldDelegate) {
+    // 🚀 Mouse/cursor moved? Always repaint (instant crosshair feedback)
+    if (mousePosition != oldDelegate.mousePosition) return true;
+
     // 🚀 P3-B 优化：只比较 ChartViewport 刷新计数器，不比较数据长度
     // 如果 ChartViewport 未刷新（计数器未变），不需要重绘
     if (viewportRefreshCount == oldDelegate.viewportRefreshCount) {
@@ -3551,28 +3577,16 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
   }
 
   void _drawOverlay(Canvas canvas, double w, double h, int fps, int totalPoints) {
-    // Draw FPS counter (top-right corner)
-    final fpsStyle = TextStyle(
-      color: const Color(0xFF58A6FF),
-      fontSize: 11.0,
-      fontFamily: 'Consolas, monospace',
-    );
-    final fpsText = 'FPS: $fps | Points: $totalPoints';
-    final tp = TextPainter(
-      text: TextSpan(text: fpsText, style: fpsStyle),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    final tp = _overlayTp
+      ..text = TextSpan(text: 'FPS: $fps | Points: $totalPoints', style: _overlayStyle)
+      ..layout();
     tp.paint(canvas, Offset(w - tp.width - 8, 8));
   }
 
   void _drawCrosshair(Canvas canvas, double mx, double my,
       double plotLeft, double plotTop, double plotW, double plotH, double w, double h) {
-    final cursorPaint = Paint()
-      ..color = const Color(0x4058A6FF)
-      ..strokeWidth = 0.5;
-
-    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), cursorPaint);
-    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), cursorPaint);
+    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), _cursorPaint);
+    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), _cursorPaint);
 
     // Show coordinates
     final dataX = xMin + (mx - plotLeft) / plotW * (xMax - xMin);
@@ -3585,14 +3599,9 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     }
 
     final coordText = 'X: ${dataX.toStringAsFixed(maxDecimals)}  Y: ${dataY.toStringAsFixed(maxDecimals)}';
-    final tp = TextPainter(
-      text: TextSpan(text: coordText, style: TextStyle(
-        color: const Color(0xFFC9D1D9),
-        fontSize: 11.0,
-        fontFamily: 'Consolas, monospace',
-      )),
-      textDirection: TextDirection.ltr,
-    )..layout();
+    final tp = _crosshairTp
+      ..text = TextSpan(text: coordText, style: _coordStyle)
+      ..layout();
 
     // Position tooltip near cursor but avoid clipping
     double tx = mx + 10;
@@ -3603,7 +3612,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     // Background for tooltip
     canvas.drawRect(
       Rect.fromLTWH(tx - 4, ty - 2, tp.width + 8, tp.height + 4),
-      Paint()..color = const Color(0xCC0D1117),
+      _tooltipBgPaint,
     );
     tp.paint(canvas, Offset(tx, ty));
   }

@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use lazy_static::lazy_static;
 
 use crate::core::plot::lockfree_buffer::{LockFreeRingBuffer, RingDataPoint};
+use crate::core::plot::query::{self, PointsBuffer, LatestTimestamp};
 use crate::core::plot::time_bucket::TimeBucketPyramid;
 
 // ── Global state ────────────────────────────────────────────────────
@@ -235,4 +236,33 @@ pub extern "C" fn vcr_ffi_shutdown() {
     FFI_READY.store(false, Ordering::Release);
     FFI_RING.clear();
     // Pyramid will be dropped on program exit
+}
+
+// ── Query Bridge (Triple Buffering + PointsBuffer) ──────────────────
+
+/// Set viewport parameters for the next get_points() call.
+/// Called by Dart when zoom/pan changes.
+#[no_mangle]
+pub extern "C" fn vcr_set_viewport(t_start: f64, t_end: f64, max_points: u32) {
+    query::set_viewport(t_start, t_end, max_points);
+}
+
+/// Get PointsBuffer pointing to interleaved x,y data (zero-copy).
+/// Dart calls this every ~16ms from Chart Isolate.
+/// The returned ptr is valid until the next get_points() call.
+#[no_mangle]
+pub extern "C" fn vcr_get_points() -> PointsBuffer {
+    query::get_points(&FFI_RING, &FFI_PYRAMID)
+}
+
+/// Get ring buffer generation counter.
+#[no_mangle]
+pub extern "C" fn vcr_get_generation() -> u64 {
+    query::get_generation(&FFI_RING)
+}
+
+/// Get latest timestamp from the ring buffer.
+#[no_mangle]
+pub extern "C" fn vcr_get_latest_timestamp() -> f64 {
+    query::get_latest_timestamp(&FFI_RING)
 }

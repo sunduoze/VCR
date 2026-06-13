@@ -1,14 +1,14 @@
 //! Lua 脚本引擎模块
 //! 提供 LLCOM 风格的 Lua 脚本功能
 
-use mlua::{Lua, Table, Result as LuaResult, Error as LuaError, Value, MultiValue, Function};
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::collections::HashMap;
-use lazy_static::lazy_static;
 use super::debug_api::debug_send_bytes;
+use super::lua_core_scripts::{HEAD_LUA, LOG_LUA, SYS_LUA};
 use crate::core::app_context::RT;
-use super::lua_core_scripts::{LOG_LUA, SYS_LUA, HEAD_LUA};
+use lazy_static::lazy_static;
+use mlua::{Error as LuaError, Function, Lua, MultiValue, Result as LuaResult, Table, Value};
+use std::collections::HashMap;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 /// 安全获取 Mutex 锁,遇到 PoisonError 时恢复而非 panic
 /// Poisoned 仅表示"持锁期间曾发生 panic",数据本身通常仍可用
@@ -48,7 +48,10 @@ struct InputBoxRequest {
 
 impl InputBoxState {
     fn new() -> Self {
-        Self { pending: None, next_id: 1 }
+        Self {
+            pending: None,
+            next_id: 1,
+        }
     }
 }
 
@@ -92,14 +95,17 @@ impl LuaEngine {
         let print_fn = self.lua.create_function(move |_lua, args: MultiValue| {
             let mut msg = String::new();
             for (i, value) in args.iter().enumerate() {
-                if i > 0 { msg.push('\t'); }
+                if i > 0 {
+                    msg.push('\t');
+                }
                 match value {
                     Value::String(s) => {
-                        let s = s.to_str()
+                        let s = s
+                            .to_str()
                             .map(|s| s.to_string())
                             .unwrap_or_else(|_| "?".to_string());
                         msg.push_str(&s);
-                    },
+                    }
                     _ => msg.push_str(&value.to_string().unwrap_or("?".to_string())),
                 }
             }
@@ -117,37 +123,49 @@ impl LuaEngine {
 
         // 简单的日志函数
         let log_table = self.lua.create_table()?;
-        let info_fn = self.lua.create_function(move |_lua, (tag, msg): (String, String)| {
-            log::info!("[Lua {}] {}", tag, msg);
-            Ok(())
-        })?;
+        let info_fn = self
+            .lua
+            .create_function(move |_lua, (tag, msg): (String, String)| {
+                log::info!("[Lua {}] {}", tag, msg);
+                Ok(())
+            })?;
         log_table.set("info", info_fn)?;
         // 添加其他日志级别
-        let trace_fn = self.lua.create_function(move |_lua, (tag, msg): (String, String)| {
-            log::trace!("[Lua {}] {}", tag, msg);
-            Ok(())
-        })?;
+        let trace_fn = self
+            .lua
+            .create_function(move |_lua, (tag, msg): (String, String)| {
+                log::trace!("[Lua {}] {}", tag, msg);
+                Ok(())
+            })?;
         log_table.set("trace", trace_fn)?;
-        let debug_fn = self.lua.create_function(move |_lua, (tag, msg): (String, String)| {
-            log::debug!("[Lua {}] {}", tag, msg);
-            Ok(())
-        })?;
+        let debug_fn = self
+            .lua
+            .create_function(move |_lua, (tag, msg): (String, String)| {
+                log::debug!("[Lua {}] {}", tag, msg);
+                Ok(())
+            })?;
         log_table.set("debug", debug_fn)?;
-        let warn_fn = self.lua.create_function(move |_lua, (tag, msg): (String, String)| {
-            log::warn!("[Lua {}] {}", tag, msg);
-            Ok(())
-        })?;
+        let warn_fn = self
+            .lua
+            .create_function(move |_lua, (tag, msg): (String, String)| {
+                log::warn!("[Lua {}] {}", tag, msg);
+                Ok(())
+            })?;
         log_table.set("warn", warn_fn)?;
-        let error_fn = self.lua.create_function(move |_lua, (tag, msg): (String, String)| {
-            log::error!("[Lua {}] {}", tag, msg);
-            Ok(())
-        })?;
+        let error_fn = self
+            .lua
+            .create_function(move |_lua, (tag, msg): (String, String)| {
+                log::error!("[Lua {}] {}", tag, msg);
+                Ok(())
+            })?;
         log_table.set("error", error_fn)?;
-        let fatal_fn = self.lua.create_function(move |_lua, (tag, msg): (String, String)| {
-            log::error!("[Lua FATAL {}] {}", tag, msg);
-            // 可以选择 panic 或退出,这里只记录日志
-            Ok(())
-        })?;
+        let fatal_fn = self
+            .lua
+            .create_function(move |_lua, (tag, msg): (String, String)| {
+                log::error!("[Lua FATAL {}] {}", tag, msg);
+                // 可以选择 panic 或退出,这里只记录日志
+                Ok(())
+            })?;
         log_table.set("fatal", fatal_fn)?;
         globals.set("log", log_table)?;
 
@@ -167,29 +185,32 @@ impl LuaEngine {
             }
             let bytes: Vec<u8> = (0..hex_clean.len())
                 .step_by(2)
-                .filter_map(|i| u8::from_str_radix(&hex_clean[i..i+2], 16).ok())
+                .filter_map(|i| u8::from_str_radix(&hex_clean[i..i + 2], 16).ok())
                 .collect();
             Ok(String::from_utf8_lossy(&bytes).to_string())
         })?;
         string_table.set("fromHex", from_hex_fn)?;
 
         // 字符串扩展:utf8Len
-        let utf8_len_fn = self.lua.create_function(move |_lua, s: String| {
-            Ok(s.chars().count())
-        })?;
+        let utf8_len_fn = self
+            .lua
+            .create_function(move |_lua, s: String| Ok(s.chars().count()))?;
         string_table.set("utf8Len", utf8_len_fn)?;
 
         // 字符串扩展:split
-        let split_fn = self.lua.create_function(move |_lua, (s, sep): (String, String)| {
-            let parts: Vec<String> = s.split(&sep).map(|p| p.to_string()).collect();
-            Ok(parts)
-        })?;
+        let split_fn = self
+            .lua
+            .create_function(move |_lua, (s, sep): (String, String)| {
+                let parts: Vec<String> = s.split(&sep).map(|p| p.to_string()).collect();
+                Ok(parts)
+            })?;
         string_table.set("split", split_fn)?;
 
         // 字符串扩展:urlEncode
         let url_encode_fn = self.lua.create_function(move |_lua, s: String| {
             // 简单的 URL 百分比编码
-            let encoded: String = s.bytes()
+            let encoded: String = s
+                .bytes()
                 .map(|b| {
                     let c = b as char;
                     if c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_' || c == '~' {
@@ -230,38 +251,50 @@ impl LuaEngine {
         globals.set("apiGetPath", get_path_fn)?;
 
         // LLCOM API: apiSetCb
-        let set_cb_fn = self.lua.create_function(move |_lua, (channel, callback): (String, Function)| {
-            let mut callbacks = lock_mutex(&CALLBACKS);
-            callbacks.entry(channel).or_insert_with(Vec::new).push(callback);
-            Ok(())
-        })?;
+        let set_cb_fn =
+            self.lua
+                .create_function(move |_lua, (channel, callback): (String, Function)| {
+                    let mut callbacks = lock_mutex(&CALLBACKS);
+                    callbacks
+                        .entry(channel)
+                        .or_insert_with(Vec::new)
+                        .push(callback);
+                    Ok(())
+                })?;
         globals.set("apiSetCb", set_cb_fn)?;
 
         // LLCOM API: apiUnsetCb
-        let unset_cb_fn = self.lua.create_function(move |_lua, (channel, _callback): (String, Function)| {
-            let mut callbacks = lock_mutex(&CALLBACKS);
-            callbacks.remove(&channel);
-            Ok(())
-        })?;
+        let unset_cb_fn =
+            self.lua
+                .create_function(move |_lua, (channel, _callback): (String, Function)| {
+                    let mut callbacks = lock_mutex(&CALLBACKS);
+                    callbacks.remove(&channel);
+                    Ok(())
+                })?;
         globals.set("apiUnsetCb", unset_cb_fn)?;
 
         // LLCOM API: apiStartTimer(timerId, ms) -> 1 on success
         // Timer body is wrapped in catch_unwind so Lua panic in callback won't crash the process
-        let start_timer_fn = self.lua.create_function(move |_lua, (timer_id, ms): (u32, u64)| {
-            let timer_id_inner = timer_id;
-            let handle = RT.spawn(async move {
-                // sleep is infallible; the inner block catches panics from Lua callbacks
-                tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
-                let result = catch_unwind(AssertUnwindSafe(|| {
-                    fire_sys_timer(timer_id_inner);
-                }));
-                if result.is_err() {
-                    log::error!("[Lua] Timer {} callback panicked (ignored)", timer_id_inner);
-                }
-            });
-            TIMER_TASKS.lock().unwrap().insert(timer_id, handle);
-            Ok(1)
-        })?;
+        let start_timer_fn =
+            self.lua
+                .create_function(move |_lua, (timer_id, ms): (u32, u64)| {
+                    let timer_id_inner = timer_id;
+                    let handle = RT.spawn(async move {
+                        // sleep is infallible; the inner block catches panics from Lua callbacks
+                        tokio::time::sleep(std::time::Duration::from_millis(ms)).await;
+                        let result = catch_unwind(AssertUnwindSafe(|| {
+                            fire_sys_timer(timer_id_inner);
+                        }));
+                        if result.is_err() {
+                            log::error!(
+                                "[Lua] Timer {} callback panicked (ignored)",
+                                timer_id_inner
+                            );
+                        }
+                    });
+                    TIMER_TASKS.lock().unwrap().insert(timer_id, handle);
+                    Ok(1)
+                })?;
         globals.set("apiStartTimer", start_timer_fn)?;
 
         // LLCOM API: apiStopTimer(timerId)
@@ -289,16 +322,18 @@ impl LuaEngine {
 
         // LLCOM API: apiAddPoint(num, line) - 存储 Plot 数据点
         let point_buf = Arc::clone(&self.point_buffer);
-        let add_point_fn = self.lua.create_function(move |_lua, (num, line): (f64, usize)| {
-            let mut buf = lock_mutex(&point_buf);
-            buf.push((num, line));
-            // 保持缓冲区不超过 1000 条
-            if buf.len() > 1000 {
-                let excess = buf.len() - 1000;
-                buf.drain(0..excess);
-            }
-            Ok(())
-        })?;
+        let add_point_fn = self
+            .lua
+            .create_function(move |_lua, (num, line): (f64, usize)| {
+                let mut buf = lock_mutex(&point_buf);
+                buf.push((num, line));
+                // 保持缓冲区不超过 1000 条
+                if buf.len() > 1000 {
+                    let excess = buf.len() - 1000;
+                    buf.drain(0..excess);
+                }
+                Ok(())
+            })?;
         globals.set("apiAddPoint", add_point_fn)?;
 
         // LLCOM API: apiSend(channel, data[, table]) - 多通道发送
@@ -306,15 +341,25 @@ impl LuaEngine {
         let api_send_fn = self.lua.create_function(move |_lua, args: MultiValue| {
             let args_vec: Vec<Value> = args.into_iter().collect();
             if args_vec.len() < 2 {
-                return Err(LuaError::RuntimeError("apiSend requires at least 2 arguments".to_string()));
+                return Err(LuaError::RuntimeError(
+                    "apiSend requires at least 2 arguments".to_string(),
+                ));
             }
             let channel = match &args_vec[0] {
                 Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-                _ => return Err(LuaError::RuntimeError("apiSend first arg must be string".to_string())),
+                _ => {
+                    return Err(LuaError::RuntimeError(
+                        "apiSend first arg must be string".to_string(),
+                    ))
+                }
             };
             let data = match &args_vec[1] {
                 Value::String(s) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
-                _ => return Err(LuaError::RuntimeError("apiSend second arg must be string".to_string())),
+                _ => {
+                    return Err(LuaError::RuntimeError(
+                        "apiSend second arg must be string".to_string(),
+                    ))
+                }
             };
             // 如果通道是"uart",走串口发送
             if channel == "uart" {
@@ -466,7 +511,9 @@ impl LuaEngine {
                 .rev()
                 .enumerate()
                 .fold(String::new(), |mut acc, (i, c)| {
-                    if i > 0 && i % 3 == 0 { acc.push(','); }
+                    if i > 0 && i % 3 == 0 {
+                        acc.push(',');
+                    }
                     acc.push(c);
                     acc
                 })
@@ -529,8 +576,15 @@ impl LuaEngine {
     fn trigger_callbacks(&self, channel: &str, data: &[u8]) {
         let callbacks = lock_mutex(&CALLBACKS);
         if let Some(funcs) = callbacks.get(channel) {
-            let data_hex = data.iter().map(|b| format!("{:02X}", b)).collect::<String>();
-            log::info!("[Lua] RX [{channel}] {len} bytes: {hex}", len = data.len(), hex = data_hex);
+            let data_hex = data
+                .iter()
+                .map(|b| format!("{:02X}", b))
+                .collect::<String>();
+            log::info!(
+                "[Lua] RX [{channel}] {len} bytes: {hex}",
+                len = data.len(),
+                hex = data_hex
+            );
             // 将字节数据转为 Lua 字符串
             let data_str = match self.lua.create_string(data) {
                 Ok(s) => s,
@@ -659,7 +713,10 @@ pub fn trigger_callback(channel: &str, data: &[u8]) {
         trigger_callback_inner(channel, data);
     }));
     if result.is_err() {
-        log::error!("[Lua] trigger_callback panicked for channel '{}' (ignored)", channel);
+        log::error!(
+            "[Lua] trigger_callback panicked for channel '{}' (ignored)",
+            channel
+        );
     }
 }
 
@@ -671,12 +728,24 @@ fn trigger_callback_inner(channel: &str, data: &[u8]) {
             // tiggerCB(id, type, data): id=-1 表示通道回调
             let data_str = match String::from_utf8(data.to_vec()) {
                 Ok(s) => s,
-                Err(_) => data.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(""),
+                Err(_) => data
+                    .iter()
+                    .map(|b| format!("{:02X}", b))
+                    .collect::<Vec<_>>()
+                    .join(""),
             };
             let args = MultiValue::from_vec(vec![
                 Value::Integer(-1),
-                Value::String(e.lua.create_string(channel).unwrap_or_else(|_| e.lua.create_string("").unwrap())),
-                Value::String(e.lua.create_string(&data_str).unwrap_or_else(|_| e.lua.create_string("").unwrap())),
+                Value::String(
+                    e.lua
+                        .create_string(channel)
+                        .unwrap_or_else(|_| e.lua.create_string("").unwrap()),
+                ),
+                Value::String(
+                    e.lua
+                        .create_string(&data_str)
+                        .unwrap_or_else(|_| e.lua.create_string("").unwrap()),
+                ),
             ]);
             if let Err(err) = tigger_fn.call::<()>(args) {
                 log::error!("[Lua] tiggerCB channel callback error: {}", err);
@@ -718,7 +787,10 @@ pub fn lua_poll_input_box() -> Option<String> {
     if let Some(ref req) = state.pending {
         // 返回 JSON: {"id":1,"prompt":"...","default":"...","title":"..."}
         fn escape(s: &str) -> String {
-            s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n").replace('\r', "\\r")
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+                .replace('\r', "\\r")
         }
         Some(format!(
             r#"{{"id":{},"prompt":"{}","default":"{}","title":"{}"}}"#,
@@ -863,7 +935,11 @@ fn fire_sys_timer(timer_id: u32) {
             // tiggerCB(id, type, data): id>=0 表示定时器
             let args = MultiValue::from_vec(vec![
                 Value::Integer(timer_id as i64),
-                Value::String(e.lua.create_string("").unwrap_or_else(|_| e.lua.create_string("").unwrap())),
+                Value::String(
+                    e.lua
+                        .create_string("")
+                        .unwrap_or_else(|_| e.lua.create_string("").unwrap()),
+                ),
                 Value::Nil,
             ]);
             if let Err(err) = tigger_fn.call::<()>(args) {
@@ -950,7 +1026,9 @@ mod tests {
     #[test]
     fn test_format_number_thousands() {
         let engine = LuaEngine::new().unwrap();
-        let value = engine.eval("string.formatNumberThousands(1234567)").unwrap();
+        let value = engine
+            .eval("string.formatNumberThousands(1234567)")
+            .unwrap();
         let s = value.to_string().unwrap();
         assert!(s.contains("1,234,567"), "Expected 1,234,567, got {}", s);
     }
@@ -960,7 +1038,10 @@ mod tests {
         let engine = LuaEngine::new().unwrap();
         // log 模块应该已自动加载
         let value = engine.eval("log.info").unwrap();
-        assert!(matches!(value, Value::Function(_)), "log.info should be a function");
+        assert!(
+            matches!(value, Value::Function(_)),
+            "log.info should be a function"
+        );
     }
 
     #[test]
@@ -968,7 +1049,10 @@ mod tests {
         let engine = LuaEngine::new().unwrap();
         // sys 模块应该已自动加载
         let value = engine.eval("sys.timerStart").unwrap();
-        assert!(matches!(value, Value::Function(_)), "sys.timerStart should be a function");
+        assert!(
+            matches!(value, Value::Function(_)),
+            "sys.timerStart should be a function"
+        );
     }
 
     #[test]
@@ -976,7 +1060,10 @@ mod tests {
         let engine = LuaEngine::new().unwrap();
         // tiggerCB 全局函数应该已定义
         let value = engine.eval("tiggerCB").unwrap();
-        assert!(matches!(value, Value::Function(_)), "tiggerCB should be a function");
+        assert!(
+            matches!(value, Value::Function(_)),
+            "tiggerCB should be a function"
+        );
     }
 
     #[test]
@@ -984,12 +1071,24 @@ mod tests {
         let engine = LuaEngine::new().unwrap();
         // 流控制 API 应该已注册
         let dtr: Value = engine.eval("apiSerialSetDTR").unwrap();
-        assert!(matches!(dtr, Value::Function(_)), "apiSerialSetDTR should be a function");
+        assert!(
+            matches!(dtr, Value::Function(_)),
+            "apiSerialSetDTR should be a function"
+        );
         let rts: Value = engine.eval("apiSerialSetRTS").unwrap();
-        assert!(matches!(rts, Value::Function(_)), "apiSerialSetRTS should be a function");
+        assert!(
+            matches!(rts, Value::Function(_)),
+            "apiSerialSetRTS should be a function"
+        );
         let cts: Value = engine.eval("apiSerialGetCTS").unwrap();
-        assert!(matches!(cts, Value::Function(_)), "apiSerialGetCTS should be a function");
+        assert!(
+            matches!(cts, Value::Function(_)),
+            "apiSerialGetCTS should be a function"
+        );
         let dsr: Value = engine.eval("apiSerialGetDSR").unwrap();
-        assert!(matches!(dsr, Value::Function(_)), "apiSerialGetDSR should be a function");
+        assert!(
+            matches!(dsr, Value::Function(_)),
+            "apiSerialGetDSR should be a function"
+        );
     }
 }

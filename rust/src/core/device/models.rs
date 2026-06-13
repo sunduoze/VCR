@@ -148,11 +148,35 @@ pub struct ProtocolInfo {
 /// 所有支持的协议
 pub fn all_protocols() -> Vec<ProtocolInfo> {
     vec![
-        ProtocolInfo { value: Protocol::Raw, label: "Raw / 无协议".into(), description: "原始数据流，无协议封装".into() },
-        ProtocolInfo { value: Protocol::ModbusRtu, label: "Modbus RTU".into(), description: "串口Modbus RTU协议".into() },
-        ProtocolInfo { value: Protocol::ModbusTcp, label: "Modbus TCP".into(), description: "网络Modbus TCP协议".into() },
-        ProtocolInfo { value: Protocol::Scpi, label: "SCPI".into(), description: "标准仪器命令协议".into() },
-        ProtocolInfo { value: Protocol::Csv, label: "CSV / 自定义协议".into(), description: "CSV格式数据解析，支持自定义前缀".into() },
-        ProtocolInfo { value: Protocol::Private, label: "私有协议".into(), description: "自定义私有协议".into() },
+        ProtocolInfo {
+            value: Protocol::Raw,
+            label: "Raw / 无协议".into(),
+            description: "原始数据流，无协议封装".into(),
+        },
+        ProtocolInfo {
+            value: Protocol::ModbusRtu,
+            label: "Modbus RTU".into(),
+            description: "串口Modbus RTU协议".into(),
+        },
+        ProtocolInfo {
+            value: Protocol::ModbusTcp,
+            label: "Modbus TCP".into(),
+            description: "网络Modbus TCP协议".into(),
+        },
+        ProtocolInfo {
+            value: Protocol::Scpi,
+            label: "SCPI".into(),
+            description: "标准仪器命令协议".into(),
+        },
+        ProtocolInfo {
+            value: Protocol::Csv,
+            label: "CSV / 自定义协议".into(),
+            description: "CSV格式数据解析，支持自定义前缀".into(),
+        },
+        ProtocolInfo {
+            value: Protocol::Private,
+            label: "私有协议".into(),
+            description: "自定义私有协议".into(),
+        },
     ]
 }

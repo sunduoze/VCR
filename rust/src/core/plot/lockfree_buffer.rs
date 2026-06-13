@@ -62,7 +62,13 @@ impl LockFreeRingBuffer {
     /// Capacity is rounded up to next power of two.
     pub fn new(requested_capacity: usize) -> Self {
         let capacity = requested_capacity.next_power_of_two();
-        let data = vec![RingDataPoint { timestamp_ms: 0.0, value: 0.0 }; capacity];
+        let data = vec![
+            RingDataPoint {
+                timestamp_ms: 0.0,
+                value: 0.0
+            };
+            capacity
+        ];
 
         Self {
             write_pos: AtomicU64::new(0),
@@ -121,7 +127,10 @@ impl LockFreeRingBuffer {
         }
 
         let data_ptr = unsafe { &mut *self.data.get() };
-        data_ptr[slot] = RingDataPoint { timestamp_ms, value };
+        data_ptr[slot] = RingDataPoint {
+            timestamp_ms,
+            value,
+        };
 
         // Update readable count
         let new_readable = (idx + 1).min(read + self.capacity);
@@ -145,7 +154,10 @@ impl LockFreeRingBuffer {
                 overwrites += 1;
             }
 
-            data_ptr[slot] = RingDataPoint { timestamp_ms: *ts, value: *val };
+            data_ptr[slot] = RingDataPoint {
+                timestamp_ms: *ts,
+                value: *val,
+            };
         }
 
         if overwrites > 0 {

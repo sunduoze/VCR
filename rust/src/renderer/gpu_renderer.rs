@@ -7,8 +7,8 @@
 //   4. Pre-created pipelines — all pipelines created once at init
 //   5. Dynamic write offset — reuse same buffer, only update changed data
 
-use std::sync::Arc;
 use pollster::block_on;
+use std::sync::Arc;
 use wgpu::*;
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -117,72 +117,69 @@ impl GpuRenderer {
         // ── 5. Shader modules ──────────────────────────────────────
         let ltbb_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("LTTB Compute Shader"),
-            source: ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                include_str!("shader_lttb.wgsl"),
-            )),
+            source: ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shader_lttb.wgsl"
+            ))),
         });
 
         let waveform_shader = device.create_shader_module(ShaderModuleDescriptor {
             label: Some("Waveform Shader"),
-            source: ShaderSource::Wgsl(std::borrow::Cow::Borrowed(
-                include_str!("shader_waveform.wgsl"),
-            )),
+            source: ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "shader_waveform.wgsl"
+            ))),
         });
 
         // ── 6. LTTB compute pipeline ───────────────────────────────
-        let lttb_bind_group_layout =
-            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-                label: Some("LTTB Bind Group Layout"),
-                entries: &[
-                    BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let lttb_bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("LTTB Bind Group Layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: ShaderStages::COMPUTE,
-                        ty: BindingType::Buffer {
-                            ty: BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: wgpu::BufferSize::new(12), // 3 × u32
-                        },
-                        count: None,
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStages::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(12), // 3 × u32
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
-        let lttb_pipeline_layout =
-            device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("LTTB Pipeline Layout"),
-                bind_group_layouts: &[&lttb_bind_group_layout],
-                push_constant_ranges: &[],
-            });
+        let lttb_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("LTTB Pipeline Layout"),
+            bind_group_layouts: &[&lttb_bind_group_layout],
+            push_constant_ranges: &[],
+        });
 
-        let lttb_pipeline =
-            device.create_compute_pipeline(&ComputePipelineDescriptor {
-                label: Some("LTTB Compute Pipeline"),
-                layout: Some(&lttb_pipeline_layout),
-                module: &ltbb_shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let lttb_pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("LTTB Compute Pipeline"),
+            layout: Some(&lttb_pipeline_layout),
+            module: &ltbb_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         // ── 7. Waveform render pipeline ────────────────────────────
         let uniform_bind_group_layout =
@@ -200,12 +197,11 @@ impl GpuRenderer {
                 }],
             });
 
-        let waveform_pipeline_layout =
-            device.create_pipeline_layout(&PipelineLayoutDescriptor {
-                label: Some("Waveform Pipeline Layout"),
-                bind_group_layouts: &[&uniform_bind_group_layout],
-                push_constant_ranges: &[],
-            });
+        let waveform_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Waveform Pipeline Layout"),
+            bind_group_layouts: &[&uniform_bind_group_layout],
+            push_constant_ranges: &[],
+        });
 
         let vertex_buffer_layout = [VertexBufferLayout {
             array_stride: VERTEX_STRIDE,
@@ -217,44 +213,43 @@ impl GpuRenderer {
             }],
         }];
 
-        let waveform_pipeline =
-            device.create_render_pipeline(&RenderPipelineDescriptor {
-                label: Some("Waveform Render Pipeline"),
-                layout: Some(&waveform_pipeline_layout),
-                vertex: VertexState {
-                    module: &waveform_shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &vertex_buffer_layout,
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(FragmentState {
-                    module: &waveform_shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(ColorTargetState {
-                        format: TextureFormat::Rgba8Unorm,
-                        blend: Some(BlendState::REPLACE),
-                        write_mask: ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
-                }),
-                primitive: PrimitiveState {
-                    topology: PrimitiveTopology::LineStrip,
-                    strip_index_format: None,
-                    front_face: FrontFace::Ccw,
-                    cull_mode: None,
-                    polygon_mode: PolygonMode::Fill,
-                    unclipped_depth: false,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: MultisampleState {
-                    count: 1,
-                    mask: !0,
-                    alpha_to_coverage_enabled: false,
-                },
-                multiview: None,
-                cache: None,
-            });
+        let waveform_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Waveform Render Pipeline"),
+            layout: Some(&waveform_pipeline_layout),
+            vertex: VertexState {
+                module: &waveform_shader,
+                entry_point: Some("vs_main"),
+                buffers: &vertex_buffer_layout,
+                compilation_options: Default::default(),
+            },
+            fragment: Some(FragmentState {
+                module: &waveform_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(ColorTargetState {
+                    format: TextureFormat::Rgba8Unorm,
+                    blend: Some(BlendState::REPLACE),
+                    write_mask: ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::LineStrip,
+                strip_index_format: None,
+                front_face: FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview: None,
+            cache: None,
+        });
 
         // ── 8. Uniform buffer ─────────────────────────────────────
         let uniform_buffer = device.create_buffer(&BufferDescriptor {
@@ -337,20 +332,14 @@ impl GpuRenderer {
             // Need GPU decimation
             self.ensure_decimated_buffer(target_points as u64);
             self.run_lttb_compute(actual_count as u32, target_points)?;
-            (
-                self.decimated_buffer.as_ref().unwrap(),
-                target_points,
-            )
+            (self.decimated_buffer.as_ref().unwrap(), target_points)
         } else {
             (&self.vertex_buffer, point_count)
         };
 
         // ─── Step 3: Render ────────────────────────────────────────
-        self.queue.write_buffer(
-            &self.uniform_buffer,
-            0,
-            bytemuck::cast_slice(&color),
-        );
+        self.queue
+            .write_buffer(&self.uniform_buffer, 0, bytemuck::cast_slice(&color));
 
         let view = texture.create_view(&TextureViewDescriptor::default());
         let mut encoder = self
@@ -408,9 +397,7 @@ impl GpuRenderer {
             self.decimated_buffer = Some(self.device.create_buffer(&BufferDescriptor {
                 label: Some("Decimated Output Buffer"),
                 size: VERTEX_STRIDE * cap,
-                usage: BufferUsages::VERTEX
-                    | BufferUsages::STORAGE
-                    | BufferUsages::COPY_DST,
+                usage: BufferUsages::VERTEX | BufferUsages::STORAGE | BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
             self.decimated_capacity = cap;
@@ -423,11 +410,7 @@ impl GpuRenderer {
     }
 
     /// Run GPU LTTB compute pipeline: input → decimated output
-    fn run_lttb_compute(
-        &self,
-        input_count: u32,
-        output_count: u32,
-    ) -> Result<(), String> {
+    fn run_lttb_compute(&self, input_count: u32, output_count: u32) -> Result<(), String> {
         let decimated = self
             .decimated_buffer
             .as_ref()
@@ -486,11 +469,10 @@ impl GpuRenderer {
             });
 
         {
-            let mut cpass =
-                encoder.begin_compute_pass(&ComputePassDescriptor {
-                    label: Some("LTTB Compute Pass"),
-                    timestamp_writes: None,
-                });
+            let mut cpass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("LTTB Compute Pass"),
+                timestamp_writes: None,
+            });
 
             cpass.set_pipeline(&self.lttb_pipeline);
             cpass.set_bind_group(0, &bind_group, &[]);

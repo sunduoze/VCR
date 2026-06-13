@@ -1,9 +1,12 @@
-﻿use crate::core::app_context::{block_on, DEBUG, init_logger, set_log_level, set_file_logging_enabled, set_log_file_path, get_log_file_path, REGISTRY, RT, SESSIONS};
+use super::lua_api::trigger_callback;
+use crate::core::app_context::{
+    block_on, get_log_file_path, init_logger, set_file_logging_enabled, set_log_file_path,
+    set_log_level, DEBUG, REGISTRY, RT, SESSIONS,
+};
+use crate::core::plot::PLOT_DATA;
+use crate::core::protocol::parse_csv_line;
 use crate::core::session::debug_session::DebugLogEntry;
 use crate::core::transport::TransportError;
-use crate::core::protocol::parse_csv_line;
-use crate::core::plot::PLOT_DATA;
-use super::lua_api::trigger_callback;
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
@@ -166,8 +169,7 @@ pub fn debug_get_active_device_names() -> Vec<(String, String)> {
 
 /// 启动后台接收循环（供 device_api 的 connectDevice 也调用）
 pub fn start_receive_loop_if_needed(device_id: &str) {
-    let has_task = lock_mutex(&RECEIVE_TASKS)
-        .contains_key(device_id);
+    let has_task = lock_mutex(&RECEIVE_TASKS).contains_key(device_id);
     if !has_task {
         log::info!("🧪 [DEBUG] 启动接收循环: {}", device_id);
         spawn_receive_loop(device_id.to_string());
@@ -180,14 +182,14 @@ fn spawn_receive_loop(device_id: String) {
     stop_receive_loop(&device_id);
 
     let id = device_id.clone();
-    
+
     // ✅ 添加外层 panic 防护：确保异步任务中的 panic 不会导致整个程序崩溃
     let handle = RT.spawn(async move {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // 注意：catch_unwind 不能捕获 async 块中的 panic
             // 所以我们使用另一种策略：在循环内部添加错误处理
         }));
-        
+
         // 使用 loop + 错误处理，而不是 catch_unwind
         loop {
             // Phase 1: receive (tokio I/O — no panic risk here)
@@ -195,15 +197,15 @@ fn spawn_receive_loop(device_id: String) {
                 Ok(data) if !data.is_empty() => {
                     log::debug!("🧪 [DEBUG] [数据链路] 步骤1: 收到数据: {} 字节", data.len());
                     Ok(data)
-                },
+                }
                 Ok(_) => {
                     log::debug!("🧪 [DEBUG] 收到空数据，继续等待...");
-                    continue;    // empty timeout — retry
-                },
+                    continue; // empty timeout — retry
+                }
                 Err(TransportError::Timeout) => {
                     log::debug!("🧪 [DEBUG] 接收超时，继续等待...");
                     continue;
-                },
+                }
                 Err(e) => {
                     let _ = std::panic::catch_unwind(|| {
                         DEBUG.log_error(&id, &format!("Device disconnected: {:?}", e));
@@ -225,7 +227,8 @@ fn spawn_receive_loop(device_id: String) {
             // Lua execution can panic on bad script / stack overflow / etc.
             let cb_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 trigger_callback("uart", &data);
-            })).is_ok();
+            }))
+            .is_ok();
             if !cb_ok {
                 let _ = std::panic::catch_unwind(|| {
                     DEBUG.log_error(&id, "Lua callback panicked (ignored)");
@@ -237,26 +240,34 @@ fn spawn_receive_loop(device_id: String) {
             if let Ok(text) = String::from_utf8(data.clone()) {
                 let parse_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     // Split by all line endings: \n, \r\n, \n\r, \r
-                    let lines: Vec<&str> = text.split(|c| c == '\n' || c == '\r')
+                    let lines: Vec<&str> = text
+                        .split(|c| c == '\n' || c == '\r')
                         .map(|l| l.trim())
                         .filter(|l| !l.is_empty())
                         .collect();
-                    
+
                     for line in lines {
                         let result = parse_csv_line(line);
                         if result.success && !result.channels.is_empty() {
-                            log::debug!("🧪 [DEBUG] [数据链路] 步骤2: 解析成功, 通道数: {}", result.channels.len());
+                            log::debug!(
+                                "🧪 [DEBUG] [数据链路] 步骤2: 解析成功, 通道数: {}",
+                                result.channels.len()
+                            );
                             // Use counter-based X axis (from 0, incrementing)
                             let counter = PLOT_DATA.next_counter() as f64;
                             // Channel naming: first value → prefix (or "ch0"), others → ch1, ch2...
                             let prefix = result.metadata.get("prefix").map(|s| s.as_str());
                             PLOT_DATA.push_batch_with_names(&id, counter, prefix, &result.channels);
-                            log::debug!("🧪 [DEBUG] [数据链路] 步骤3: 数据已存储到 PLOT_DATA, pts={:.0}", counter);
+                            log::debug!(
+                                "🧪 [DEBUG] [数据链路] 步骤3: 数据已存储到 PLOT_DATA, pts={:.0}",
+                                counter
+                            );
                         } else {
                             log::warn!("🧪 [DEBUG] [数据链路] 步骤2: 解析失败: {:?}", line);
                         }
                     }
-                })).is_ok();
+                }))
+                .is_ok();
                 if !parse_ok {
                     let _ = std::panic::catch_unwind(|| {
                         DEBUG.log_error(&id, "CSV/Plot parse panicked (ignored)");

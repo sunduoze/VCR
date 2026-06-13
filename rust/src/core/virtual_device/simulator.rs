@@ -200,7 +200,8 @@ async fn handle_scpi_client(
         if !*running.read().await {
             break;
         }
-        let line = tokio::time::timeout(std::time::Duration::from_secs(60), lines.next_line()).await;
+        let line =
+            tokio::time::timeout(std::time::Duration::from_secs(60), lines.next_line()).await;
         match line {
             Ok(Ok(Some(cmd))) if !cmd.is_empty() => {
                 let response = scpi.handle_command(&cmd);

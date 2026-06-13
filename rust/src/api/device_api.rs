@@ -1,17 +1,17 @@
 // Device API - 设备管理接口
 // 提供设备增删改查、连接控制、串口扫描等功能
 
+use crate::api::debug_api::{start_receive_loop_if_needed, stop_receive_loop};
 use crate::core::app_context::{DEBUG, REGISTRY, SESSIONS};
 use crate::core::device::models::{
     all_protocols, ConnectionType, DataBits, DeviceConfig, DeviceInfo, FlowControl, Parity,
     PortInfo, Protocol, StopBits,
 };
-use crate::core::device::preset::{demo_presets, all_virtual_presets};
-use crate::core::protocol::{CsvParser, parse_csv_line};
+use crate::core::device::preset::{all_virtual_presets, demo_presets};
+use crate::core::protocol::{parse_csv_line, CsvParser};
 use crate::core::transport::serial;
-use crate::api::debug_api::{start_receive_loop_if_needed, stop_receive_loop};
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 // ============================================================================
 // 协议与设备列表
@@ -61,15 +61,32 @@ pub fn add_serial_device(
     let par = parity;
     let fc = flow_control;
     let proto = protocol;
-    
+
     // 构建地址字符串 (扩展格式包含 dtr:rts:bk)
     let address = format!(
         "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
-        port, baud_rate,
-        match db { DataBits::Five => "5", DataBits::Six => "6", DataBits::Seven => "7", DataBits::Eight => "8" },
-        match sb { StopBits::One => "1", StopBits::Two => "2" },
-        match par { Parity::None => "N", Parity::Odd => "O", Parity::Even => "E" },
-        match fc { FlowControl::None => "N", FlowControl::Hardware => "H", FlowControl::Software => "S" },
+        port,
+        baud_rate,
+        match db {
+            DataBits::Five => "5",
+            DataBits::Six => "6",
+            DataBits::Seven => "7",
+            DataBits::Eight => "8",
+        },
+        match sb {
+            StopBits::One => "1",
+            StopBits::Two => "2",
+        },
+        match par {
+            Parity::None => "N",
+            Parity::Odd => "O",
+            Parity::Even => "E",
+        },
+        match fc {
+            FlowControl::None => "N",
+            FlowControl::Hardware => "H",
+            FlowControl::Software => "S",
+        },
         receive_timeout_ms,
         if dtr_enabled { "1" } else { "0" },
         if rts_enabled { "1" } else { "0" },
@@ -85,22 +102,17 @@ pub fn add_serial_device(
         is_virtual: false,
         server_info: None,
     };
-    
+
     let id = REGISTRY.add(config);
     REGISTRY.get(&id).unwrap()
 }
 
 /// 添加 TCP 设备
 #[flutter_rust_bridge::frb(sync)]
-pub fn add_tcp_device(
-    name: String,
-    host: String,
-    port: u16,
-    protocol: Protocol,
-) -> DeviceInfo {
+pub fn add_tcp_device(name: String, host: String, port: u16, protocol: Protocol) -> DeviceInfo {
     let proto = protocol;
     let address = format!("{}:{}", host, port);
-    
+
     let config = DeviceConfig {
         name,
         device_type: "TcpDevice".into(),
@@ -110,7 +122,7 @@ pub fn add_tcp_device(
         is_virtual: false,
         server_info: None,
     };
-    
+
     let id = REGISTRY.add(config);
     REGISTRY.get(&id).unwrap()
 }
@@ -128,14 +140,14 @@ pub async fn update_device(
     protocol: Protocol,
 ) -> bool {
     let proto = protocol;
-    
+
     // 如果设备已连接，先断开
     if SESSIONS.is_connected_sync(&device_id) {
         let _ = SESSIONS.disconnect(&device_id).await;
         DEBUG.mark_disconnected(&device_id);
         stop_receive_loop(&device_id);
     }
-    
+
     REGISTRY.update(&device_id, name, address, proto)
 }
 
@@ -148,7 +160,7 @@ pub async fn remove_device(device_id: String) -> bool {
         DEBUG.mark_disconnected(&device_id);
         stop_receive_loop(&device_id);
     }
-    
+
     REGISTRY.remove(&device_id)
 }
 
@@ -163,7 +175,11 @@ pub fn scan_serial_ports() -> Vec<PortInfo> {
         .into_iter()
         .map(|(name, description, is_virtual)| PortInfo {
             name,
-            port_type: if is_virtual { "Virtual".into() } else { "Physical".into() },
+            port_type: if is_virtual {
+                "Virtual".into()
+            } else {
+                "Physical".into()
+            },
             description,
             is_virtual,
         })
@@ -180,49 +196,49 @@ pub async fn connect_device(device_id: String) -> bool {
     // 专家调试：记录每一步到 stderr（方便捕获）
     log::debug!("🧪 [DEBUG] connect_device() 开始");
     log::debug!("   - device_id: {}", device_id);
-    
+
     // 1. 连接设备
     log::debug!("🧪 [DEBUG] 步骤 1: 调用 SESSIONS.connect()");
     let connect_result = SESSIONS.connect(&device_id).await;
     log::debug!("🧪 [DEBUG] 步骤 1 完成，结果: {:?}", connect_result.is_ok());
-    
+
     match connect_result {
         Ok(_) => {
             log::debug!("🧪 [DEBUG] 步骤 2: 标记设备为已连接");
             DEBUG.mark_connected(&device_id);
-            
+
             log::debug!("🧪 [DEBUG] 步骤 3: 启动接收循环");
             start_receive_loop_if_needed(&device_id);
             log::debug!("🧪 [DEBUG] 步骤 3 完成");
-            
+
             // 连接成功后应用保存的硬件流控制设置 (从设备地址中解析)
             log::debug!("🧪 [DEBUG] 步骤 4: 应用硬件流控制设置");
             if let Some(device) = REGISTRY.get(&device_id) {
                 let address = device.address.clone();
                 let parts: Vec<&str> = address.split(':').collect();
-                
+
                 if parts.len() >= 10 {
                     log::debug!("🧪 [DEBUG] 步骤 4a: 解析硬件流控制设置");
                     log::debug!("   - DTR: {}", parts[7]);
                     log::debug!("   - RTS: {}", parts[8]);
                     log::debug!("   - BREAK: {}", parts[9]);
-                    
-                    if parts[7] == "1" { 
+
+                    if parts[7] == "1" {
                         log::debug!("🧪 [DEBUG] 步骤 4b: 设置 DTR");
-                        let _ = SESSIONS.set_dtr(&device_id, true); 
+                        let _ = SESSIONS.set_dtr(&device_id, true);
                     }
-                    if parts[8] == "1" { 
+                    if parts[8] == "1" {
                         log::debug!("🧪 [DEBUG] 步骤 4c: 设置 RTS");
-                        let _ = SESSIONS.set_rts(&device_id, true); 
+                        let _ = SESSIONS.set_rts(&device_id, true);
                     }
-                    if parts[9] == "1" { 
+                    if parts[9] == "1" {
                         log::debug!("🧪 [DEBUG] 步骤 4d: 设置 BREAK");
-                        let _ = SESSIONS.set_break(&device_id); 
+                        let _ = SESSIONS.set_break(&device_id);
                     }
                 }
             }
             log::debug!("🧪 [DEBUG] 步骤 4 完成");
-            
+
             log::debug!("🧪 [DEBUG] connect_device() 成功完成");
             true
         }
@@ -335,8 +351,9 @@ pub fn save_devices() {
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    
-    let devices: Vec<_> = REGISTRY.all()
+
+    let devices: Vec<_> = REGISTRY
+        .all()
         .into_iter()
         .filter(|d| !d.is_virtual)
         .map(|d| PersistedDevice {
@@ -349,7 +366,7 @@ pub fn save_devices() {
             rts_enabled: None,
         })
         .collect();
-    
+
     if let Ok(json) = serde_json::to_string_pretty(&devices) {
         let _ = std::fs::write(&path, json);
     }
@@ -362,22 +379,22 @@ pub fn load_persisted_devices() -> i32 {
     if !path.exists() {
         return 0;
     }
-    
+
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return 0,
     };
-    
+
     let devices: Vec<PersistedDevice> = match serde_json::from_str(&content) {
         Ok(d) => d,
         Err(_) => return 0,
     };
-    
+
     let mut count = 0;
     for pd in devices {
         let proto = parse_protocol(&pd.protocol);
         let conn_type = parse_connection_type(&pd.connection_type);
-        
+
         let config = DeviceConfig {
             name: pd.name,
             device_type: match conn_type {
@@ -391,18 +408,17 @@ pub fn load_persisted_devices() -> i32 {
             is_virtual: false,
             server_info: None,
         };
-        
+
         REGISTRY.add(config);
         count += 1;
     }
-    
+
     count
 }
 
 /// 获取持久化文件路径（%APPDATA%\instrument_upper_computer\devices.json）
 fn get_persistence_path() -> PathBuf {
-    let base = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."));
+    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     base.join("VCR").join("devices.json")
 }
 
@@ -463,7 +479,7 @@ struct PersistedDevice {
     connection_type: String,
     address: String,
     protocol: String,
-    flow_control: Option<String>,    // "N", "H", "S"
-    dtr_enabled: Option<bool>,       // DTR 信号状态
-    rts_enabled: Option<bool>,       // RTS 信号状态
+    flow_control: Option<String>, // "N", "H", "S"
+    dtr_enabled: Option<bool>,    // DTR 信号状态
+    rts_enabled: Option<bool>,    // RTS 信号状态
 }

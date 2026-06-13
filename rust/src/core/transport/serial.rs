@@ -1,9 +1,9 @@
-﻿use super::{Transport, TransportError};
+use super::{Transport, TransportError};
+use crate::core::device::models::{DataBits, FlowControl, Parity, StopBits};
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_serial::SerialPortBuilderExt;
-use crate::core::device::models::{DataBits, StopBits, Parity, FlowControl};
 
 /// Wrapper for Windows HANDLE that implements Send + Sync
 /// SAFETY: Windows HANDLEs can be used from any thread (they're kernel objects)
@@ -134,7 +134,11 @@ impl SerialTransport {
     }
 
     pub fn set_dtr(&self, level: bool) -> bool {
-        let func = if level { win_comm::SETDTR } else { win_comm::CLRDTR };
+        let func = if level {
+            win_comm::SETDTR
+        } else {
+            win_comm::CLRDTR
+        };
         let name = if level { "SETDTR" } else { "CLRDTR" };
         self.escape_comm(func, name)
     }
@@ -142,7 +146,11 @@ impl SerialTransport {
     /// Set RTS signal directly via Windows API (no Mutex needed)
     #[cfg(target_os = "windows")]
     pub fn set_rts(&self, level: bool) -> bool {
-        let func = if level { win_comm::SETRTS } else { win_comm::CLRRTS };
+        let func = if level {
+            win_comm::SETRTS
+        } else {
+            win_comm::CLRRTS
+        };
         let name = if level { "SETRTS" } else { "CLRRTS" };
         self.escape_comm(func, name)
     }
@@ -222,7 +230,9 @@ impl Transport for SerialTransport {
 
     async fn send(&mut self, data: &[u8]) -> Result<(), TransportError> {
         if let Some(ref mut port) = self.port {
-            port.write_all(data).await.map_err(|e| TransportError::SendError(e.to_string()))
+            port.write_all(data)
+                .await
+                .map_err(|e| TransportError::SendError(e.to_string()))
         } else {
             Err(TransportError::Disconnected)
         }
@@ -261,8 +271,10 @@ pub fn scan_serial_ports() -> Vec<(String, String, bool)> {
                 serialport::SerialPortType::UsbPort(usb) => {
                     let mfr = usb.manufacturer.as_deref().unwrap_or("");
                     let prod = usb.product.as_deref().unwrap_or("");
-                    let is_v = mfr.contains("Eltima") || mfr.contains("Virtual")
-                        || prod.contains("Virtual") || prod.contains("VSPD");
+                    let is_v = mfr.contains("Eltima")
+                        || mfr.contains("Virtual")
+                        || prod.contains("Virtual")
+                        || prod.contains("VSPD");
                     let desc = match (mfr, prod) {
                         (m, p) if !m.is_empty() && !p.is_empty() => format!("{} - {}", m, p),
                         (m, _) if !m.is_empty() => m.to_string(),
@@ -272,10 +284,10 @@ pub fn scan_serial_ports() -> Vec<(String, String, bool)> {
                     (desc, is_v)
                 }
                 serialport::SerialPortType::PciPort => ("PCI Serial Port".to_string(), false),
-                serialport::SerialPortType::BluetoothPort => ("Bluetooth Serial".to_string(), false),
-                serialport::SerialPortType::Unknown => {
-                    ("Virtual Serial Port".to_string(), true)
+                serialport::SerialPortType::BluetoothPort => {
+                    ("Bluetooth Serial".to_string(), false)
                 }
+                serialport::SerialPortType::Unknown => ("Virtual Serial Port".to_string(), true),
             };
             (p.port_name, desc, is_virtual)
         })

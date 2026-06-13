@@ -143,7 +143,10 @@ impl ModbusResponse {
             for i in 0..(byte_count / 2) {
                 let offset = 1 + i * 2;
                 if offset + 1 < self.data.len() {
-                    registers.push(u16::from_be_bytes([self.data[offset], self.data[offset + 1]]));
+                    registers.push(u16::from_be_bytes([
+                        self.data[offset],
+                        self.data[offset + 1],
+                    ]));
                 }
             }
             registers

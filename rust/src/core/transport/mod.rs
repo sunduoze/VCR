@@ -1,7 +1,7 @@
+pub mod modbus;
 pub mod serial;
 pub mod tcp;
 pub mod virtual_channel;
-pub mod modbus;
 
 use async_trait::async_trait;
 

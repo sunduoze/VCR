@@ -46,7 +46,13 @@ impl DeviceRegistry {
     }
 
     /// 更新设备配置（名称、地址、协议）
-    pub fn update(&self, device_id: &str, name: String, address: String, protocol: Protocol) -> bool {
+    pub fn update(
+        &self,
+        device_id: &str,
+        name: String,
+        address: String,
+        protocol: Protocol,
+    ) -> bool {
         if let Some(d) = self.devices.write().get_mut(device_id) {
             d.name = name;
             d.address = address;

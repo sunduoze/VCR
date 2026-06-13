@@ -7,12 +7,12 @@
 //
 // Both paths coexist; the FFI path is for hot data path (200K pts/sec).
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use parking_lot::Mutex;
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::plot::lockfree_buffer::{LockFreeRingBuffer, RingDataPoint};
-use crate::core::plot::query::{self, PointsBuffer, LatestTimestamp};
+use crate::core::plot::query::{self, LatestTimestamp, PointsBuffer};
 use crate::core::plot::time_bucket::TimeBucketPyramid;
 
 // ── Global state ────────────────────────────────────────────────────
@@ -90,10 +90,7 @@ pub extern "C" fn vcr_buffer_push_batch(data: *const CDataPoint, count: u32) -> 
     let slice = unsafe { std::slice::from_raw_parts(data, count as usize) };
 
     // Convert to tuples for push_batch
-    let tuples: Vec<(f64, f64)> = slice
-        .iter()
-        .map(|dp| (dp.timestamp_ms, dp.value))
-        .collect();
+    let tuples: Vec<(f64, f64)> = slice.iter().map(|dp| (dp.timestamp_ms, dp.value)).collect();
 
     FFI_RING.push_batch(&tuples);
     true

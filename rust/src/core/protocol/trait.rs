@@ -33,7 +33,8 @@ impl ParseResult {
     /// 创建失败的解析结果
     pub fn failure(error: String, raw_text: Option<String>) -> Self {
         Self {
-            channels: vec![],raw_text,
+            channels: vec![],
+            raw_text,
             metadata: HashMap::new(),
             success: false,
             error: Some(error),
@@ -50,10 +51,10 @@ impl ParseResult {
 /// 协议解析器 trait - 所有协议解析器的统一接口
 pub trait ProtocolParser: Send + Sync {
     /// 解析原始数据
-    /// 
+    ///
     /// # 参数
     /// - `data`: 原始字节数据
-    /// 
+    ///
     /// # 返回
     /// - `ParseResult`: 解析结果，包含通道数据、原始文本、元数据等
     fn parse(&self, data: &[u8]) -> ParseResult;

@@ -178,7 +178,8 @@ impl TimeBucket {
                 // Update existing
                 existing.min_value = existing.min_value.min(value);
                 existing.max_value = existing.max_value.max(value);
-                existing.avg_value = (existing.avg_value * existing.count as f64 + value) / (existing.count + 1) as f64;
+                existing.avg_value = (existing.avg_value * existing.count as f64 + value)
+                    / (existing.count + 1) as f64;
                 existing.count += 1;
             }
         } else {
@@ -204,7 +205,8 @@ impl TimeBucket {
             } else {
                 existing.min_value = existing.min_value.min(value);
                 existing.max_value = existing.max_value.max(value);
-                existing.avg_value = (existing.avg_value * existing.count as f64 + value) / (existing.count + 1) as f64;
+                existing.avg_value = (existing.avg_value * existing.count as f64 + value)
+                    / (existing.count + 1) as f64;
                 existing.count += 1;
             }
         }
@@ -236,18 +238,18 @@ pub struct TimeBucketPyramid {
 impl TimeBucketPyramid {
     /// Pre-defined level bucket widths (milliseconds)
     pub const LEVEL_WIDTHS: [f64; 4] = [
-        1_000.0,      // Level 0: 1 second
-        10_000.0,     // Level 1: 10 seconds
-        60_000.0,     // Level 2: 1 minute
-        600_000.0,    // Level 3: 10 minutes
+        1_000.0,   // Level 0: 1 second
+        10_000.0,  // Level 1: 10 seconds
+        60_000.0,  // Level 2: 1 minute
+        600_000.0, // Level 3: 10 minutes
     ];
 
     /// Pre-defined max buckets per level
     pub const LEVEL_MAX_BUCKETS: [usize; 4] = [
-        3600,   // Level 0: up to 1 hour of 1s data
-        2160,   // Level 1: up to 6 hours of 10s data
-        1440,   // Level 2: up to 24 hours of 1min data
-        1008,   // Level 3: up to 7 days of 10min data
+        3600, // Level 0: up to 1 hour of 1s data
+        2160, // Level 1: up to 6 hours of 10s data
+        1440, // Level 2: up to 24 hours of 1min data
+        1008, // Level 3: up to 7 days of 10min data
     ];
 
     pub fn new() -> Self {
@@ -290,12 +292,7 @@ impl TimeBucketPyramid {
     /// Query the pyramid for buckets in [t_min, t_max]
     ///
     /// Returns tuples of (bucket_start_ms, min, max, count) from the best level.
-    pub fn query(
-        &self,
-        t_min: f64,
-        t_max: f64,
-        target_points: usize,
-    ) -> Vec<(f64, f64, f64, u32)> {
+    pub fn query(&self, t_min: f64, t_max: f64, target_points: usize) -> Vec<(f64, f64, f64, u32)> {
         if t_min >= t_max {
             return vec![];
         }
@@ -334,8 +331,14 @@ impl TimeBucketPyramid {
         let mut result = Vec::with_capacity(buckets.len() * 2);
 
         for (ts, min, max, _count) in buckets {
-            result.push(DataPoint { timestamp_ms: ts, value: min });
-            result.push(DataPoint { timestamp_ms: ts + 1.0, value: max });
+            result.push(DataPoint {
+                timestamp_ms: ts,
+                value: min,
+            });
+            result.push(DataPoint {
+                timestamp_ms: ts + 1.0,
+                value: max,
+            });
         }
 
         result

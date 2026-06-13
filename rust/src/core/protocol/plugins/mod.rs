@@ -1,14 +1,14 @@
 // Protocol Plugins - 内置协议插件模块
 // 包含所有内置协议解析器的实现
 
-pub mod raw;
 pub mod csv;
 pub mod modbus_rtu;
 pub mod modbus_tcp;
+pub mod raw;
 pub mod scpi;
 
-use std::sync::Arc;
 use crate::core::protocol::registry::register_global;
+use std::sync::Arc;
 
 /// 注册所有内置协议到全局注册表
 /// 在程序启动时调用一次

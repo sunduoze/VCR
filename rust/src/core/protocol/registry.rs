@@ -1,9 +1,9 @@
 // Protocol Registry - 协议注册表
 // 管理所有协议解析器的注册、查找和列表
 
+use crate::core::protocol::r#trait::{ProtocolParser, ProtocolPluginInfo};
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::core::protocol::r#trait::{ProtocolParser, ProtocolPluginInfo};
 
 /// 协议注册表
 /// 管理所有已注册的协议解析器
@@ -32,12 +32,12 @@ impl ProtocolRegistry {
     }
 
     /// 注册协议解析器
-    /// 
+    ///
     /// # 参数
     /// - `parser`: 协议解析器实例
     /// - `is_builtin`: 是否是内置协议
     /// - `plugin_type`: 插件类型 (rust / wasm / lua)
-    /// 
+    ///
     /// # 返回
     /// - `Ok(())`: 注册成功
     /// - `Err(String)`: 注册失败（ID已存在）
@@ -48,7 +48,7 @@ impl ProtocolRegistry {
         plugin_type: String,
     ) -> Result<(), String> {
         let id = parser.id().to_string();
-        
+
         if self.parsers.contains_key(&id) {
             return Err(format!("Protocol '{}' already registered", id));
         }
@@ -71,10 +71,10 @@ impl ProtocolRegistry {
     }
 
     /// 注销协议解析器
-    /// 
+    ///
     /// # 参数
     /// - `id`: 协议ID
-    /// 
+    ///
     /// # 返回
     /// - `Ok(())`: 注销成功
     /// - `Err(String)`: 注销失败（ID不存在）
@@ -90,10 +90,10 @@ impl ProtocolRegistry {
     }
 
     /// 获取协议解析器
-    /// 
+    ///
     /// # 参数
     /// - `id`: 协议ID
-    /// 
+    ///
     /// # 返回
     /// - `Some(&dyn ProtocolParser)`: 找到的解析器
     /// - `None`: 未找到
@@ -108,10 +108,10 @@ impl ProtocolRegistry {
     }
 
     /// 获取协议信息
-    /// 
+    ///
     /// # 参数
     /// - `id`: 协议ID
-    /// 
+    ///
     /// # 返回
     /// - `Some(&ProtocolPluginInfo)`: 找到的协议信息
     /// - `None`: 未找到

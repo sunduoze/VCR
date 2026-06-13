@@ -13,9 +13,9 @@ static GPU_RENDERER: Lazy<Mutex<Option<GpuRenderer>>> = Lazy::new(|| Mutex::new(
 pub fn gpu_init() -> i32 {
     // 初始化日志（如果尚未初始化）
     let _ = env_logger::try_init();
-    
+
     log::info!("[GPU] ========= GPU Init Starting =========");
-    
+
     match GpuRenderer::new() {
         Ok(renderer) => {
             let mut global_renderer = GPU_RENDERER.lock().unwrap();
@@ -53,19 +53,34 @@ pub fn gpu_render_waveform(
     a: u8,
 ) -> Vec<u8> {
     let mut global_renderer = GPU_RENDERER.lock().unwrap();
-    
+
     if let Some(renderer) = global_renderer.as_mut() {
         // 创建纹理
         match renderer.create_texture(width, height) {
             Ok(texture) => {
                 // 渲染波形
-                let color = [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, a as f32 / 255.0];
-                match renderer.render_waveform_to_texture(&texture, width, height, &points, point_count, color) {
+                let color = [
+                    r as f32 / 255.0,
+                    g as f32 / 255.0,
+                    b as f32 / 255.0,
+                    a as f32 / 255.0,
+                ];
+                match renderer.render_waveform_to_texture(
+                    &texture,
+                    width,
+                    height,
+                    &points,
+                    point_count,
+                    color,
+                ) {
                     Ok(()) => {
                         // 读取纹理数据到 CPU 内存
                         match renderer.read_texture_to_cpu(&texture, width, height) {
                             Ok(data) => {
-                                log::info!("[GPU] Waveform rendered successfully: {} bytes", data.len());
+                                log::info!(
+                                    "[GPU] Waveform rendered successfully: {} bytes",
+                                    data.len()
+                                );
                                 data
                             }
                             Err(e) => {

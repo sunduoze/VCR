@@ -69,9 +69,12 @@ pub fn lttb_downsample(data: &[DataPoint], threshold: usize) -> Vec<DataPoint> {
         let prev_point = &data[prev_idx];
         for j in avg_start..avg_end {
             let area = triangle_area(
-                prev_point.timestamp_ms, prev_point.value,
-                data[j].timestamp_ms, data[j].value,
-                avg_x, avg_y,
+                prev_point.timestamp_ms,
+                prev_point.value,
+                data[j].timestamp_ms,
+                data[j].value,
+                avg_x,
+                avg_y,
             );
             if area > max_area {
                 max_area = area;
@@ -92,11 +95,7 @@ pub fn lttb_downsample(data: &[DataPoint], threshold: usize) -> Vec<DataPoint> {
 /// Calculate triangle area using 3 points.
 /// Area = 0.5 * |(x_a - x_c)*(y_b - y_a) - (x_a - x_b)*(y_c - y_a)|
 #[inline]
-fn triangle_area(
-    x_a: f64, y_a: f64,
-    x_b: f64, y_b: f64,
-    x_c: f64, y_c: f64,
-) -> f64 {
+fn triangle_area(x_a: f64, y_a: f64, x_b: f64, y_b: f64, x_c: f64, y_c: f64) -> f64 {
     ((x_a - x_c) * (y_b - y_a) - (x_a - x_b) * (y_c - y_a)).abs()
 }
 
@@ -154,7 +153,10 @@ mod tests {
     use super::*;
 
     fn make_point(t: f64, v: f64) -> DataPoint {
-        DataPoint { timestamp_ms: t, value: v }
+        DataPoint {
+            timestamp_ms: t,
+            value: v,
+        }
     }
 
     #[test]
@@ -170,7 +172,9 @@ mod tests {
 
     #[test]
     fn test_lttb_first_last_preserved() {
-        let data: Vec<DataPoint> = (0..100).map(|i| make_point(i as f64, (i as f64).sin())).collect();
+        let data: Vec<DataPoint> = (0..100)
+            .map(|i| make_point(i as f64, (i as f64).sin()))
+            .collect();
         let result = lttb_downsample(&data, 10);
         assert!(result.len() <= 10);
         assert_eq!(result[0].timestamp_ms, 0.0);
@@ -190,7 +194,9 @@ mod tests {
 
     #[test]
     fn test_minmax_result_length() {
-        let data: Vec<DataPoint> = (0..10000).map(|i| make_point(i as f64, (i as f64).cos())).collect();
+        let data: Vec<DataPoint> = (0..10000)
+            .map(|i| make_point(i as f64, (i as f64).cos()))
+            .collect();
         let result = minmax_downsample(&data, 100);
         // Minmax: up to 2*(threshold/2)+2 = threshold+2 points
         assert!(result.len() <= 110);
@@ -199,9 +205,9 @@ mod tests {
     #[test]
     fn test_lttb_large_dataset() {
         // 100K points → 1K result
-        let data: Vec<DataPoint> = (0..100000).map(|i| {
-            make_point(i as f64, (i as f64 * 0.01).sin())
-        }).collect();
+        let data: Vec<DataPoint> = (0..100000)
+            .map(|i| make_point(i as f64, (i as f64 * 0.01).sin()))
+            .collect();
         let result = lttb_downsample(&data, 1000);
         assert!(result.len() <= 1000);
         assert_eq!(result[0].timestamp_ms, 0.0);

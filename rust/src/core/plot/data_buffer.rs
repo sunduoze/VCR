@@ -2,7 +2,7 @@
 // 用于 Plot Screen 实时波形显示
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 /// 安全获取 Mutex 锁，遇到 PoisonError 时恢复而非 panic
 fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
@@ -46,11 +46,23 @@ pub struct ChannelBuffer {
 impl ChannelBuffer {
     pub fn new(capacity: usize) -> Self {
         Self {
-            back_data: vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; capacity],
+            back_data: vec![
+                DataPoint {
+                    timestamp_ms: 0.0,
+                    value: 0.0
+                };
+                capacity
+            ],
             back_write_pos: 0,
             back_capacity: capacity,
             back_len: 0,
-            front_data: vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; capacity],
+            front_data: vec![
+                DataPoint {
+                    timestamp_ms: 0.0,
+                    value: 0.0
+                };
+                capacity
+            ],
             front_len: 0,
             swap_lock: Mutex::new(()),
         }
@@ -58,7 +70,10 @@ impl ChannelBuffer {
 
     /// 添加数据点（写入后端缓冲区）
     pub fn push(&mut self, timestamp_ms: f64, value: f64) {
-        self.back_data[self.back_write_pos] = DataPoint { timestamp_ms, value };
+        self.back_data[self.back_write_pos] = DataPoint {
+            timestamp_ms,
+            value,
+        };
         self.back_write_pos = (self.back_write_pos + 1) % self.back_capacity;
         if self.back_len < self.back_capacity {
             self.back_len += 1;
@@ -91,21 +106,27 @@ impl ChannelBuffer {
                 poisoned.into_inner()
             }
         };
-        
+
         // 复制后端数据到前端（delta：自上次 swap 以来新增的数据）
         let new_front = self.get_back_all();
         self.front_len = new_front.len();
-        
+
         // 如果前端容量不够，扩展
         if self.front_data.len() < self.front_len {
-            self.front_data.resize(self.front_len, DataPoint { timestamp_ms: 0.0, value: 0.0 });
+            self.front_data.resize(
+                self.front_len,
+                DataPoint {
+                    timestamp_ms: 0.0,
+                    value: 0.0,
+                },
+            );
         }
-        
+
         // 复制数据
         for (i, pt) in new_front.into_iter().enumerate() {
             self.front_data[i] = pt;
         }
-        
+
         // 重置后端缓冲区：后续 push 只写入自本次 swap 以来的新数据
         self.back_write_pos = 0;
         self.back_len = 0;
@@ -146,21 +167,31 @@ impl ChannelBuffer {
         if new_capacity == self.back_capacity {
             return;
         }
-        log::info!("[PlotBuffer] ChannelBuffer.resize: {} -> {}", self.back_capacity, new_capacity);
-        
+        log::info!(
+            "[PlotBuffer] ChannelBuffer.resize: {} -> {}",
+            self.back_capacity,
+            new_capacity
+        );
+
         // 保留后端最新数据
         let old_back = self.get_back_all();
-        let mut new_back = vec![DataPoint { timestamp_ms: 0.0, value: 0.0 }; new_capacity];
+        let mut new_back = vec![
+            DataPoint {
+                timestamp_ms: 0.0,
+                value: 0.0
+            };
+            new_capacity
+        ];
         let copy_len = old_back.len().min(new_capacity);
         for i in 0..copy_len {
             new_back[i] = old_back[old_back.len() - copy_len + i];
         }
-        
+
         self.back_data = new_back;
         self.back_capacity = new_capacity;
         self.back_len = copy_len;
         self.back_write_pos = copy_len % new_capacity;
-        
+
         // 清空前端（下次 swap 会重新填充）
         self.front_len = 0;
     }
@@ -191,7 +222,7 @@ impl PlotDataManager {
     /// 设置默认容量（动态调整缓冲区大小）
     pub fn set_default_capacity(&self, capacity: usize) {
         log::info!("[PlotBuffer] set_default_capacity: {} (START)", capacity);
-        
+
         // 第一步：收集所有 buffer 引用（只读锁，短暂持有）
         let mut all_buffers = Vec::new();
         {
@@ -202,38 +233,57 @@ impl PlotDataManager {
                 }
             }
         } // devices 读锁在这里释放
-        
+
         log::info!("[PlotBuffer] collected {} buffers", all_buffers.len());
-        
+
         // 第二步：调整所有 buffer 的容量（不持有 devices 锁）
         for (device_id, channel_name, buffer) in all_buffers {
             let mut buf = lock_mutex(&buffer);
             buf.resize(capacity);
-            log::debug!("[PlotBuffer] resized device={}, channel={}, new_capacity={}", 
-                       device_id, channel_name, capacity);
+            log::debug!(
+                "[PlotBuffer] resized device={}, channel={}, new_capacity={}",
+                device_id,
+                channel_name,
+                capacity
+            );
         }
-        
+
         // 第三步：更新 default_capacity
-        let mut cap = self.default_capacity.write().unwrap_or_else(|e| e.into_inner());
+        let mut cap = self
+            .default_capacity
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         *cap = capacity;
-        
+
         log::info!("[PlotBuffer] set_default_capacity: {} (END)", capacity);
     }
 
     /// 获取当前默认容量
     pub fn get_default_capacity(&self) -> usize {
-        *self.default_capacity.read().unwrap_or_else(|e| e.into_inner())
+        *self
+            .default_capacity
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// 注册设备
     pub fn register_device(&self, device_id: &str, channels: &[&str]) {
-        log::info!("[PlotBuffer] register_device: device={}, channels={:?}", device_id, channels);
+        log::info!(
+            "[PlotBuffer] register_device: device={}, channels={:?}",
+            device_id,
+            channels
+        );
         let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
         let mut device_channels = HashMap::new();
         for ch in channels {
             device_channels.insert(
                 ch.to_string(),
-                Arc::new(Mutex::new(ChannelBuffer::new(*self.default_capacity.read().unwrap_or_else(|e| e.into_inner())))),
+                Arc::new(Mutex::new(ChannelBuffer::new(
+                    *self
+                        .default_capacity
+                        .read()
+                        .unwrap_or_else(|e| e.into_inner()),
+                ))),
             );
         }
         devices.insert(device_id.to_string(), device_channels);
@@ -257,7 +307,11 @@ impl PlotDataManager {
             }
         };
         if needs_create {
-            log::info!("[PlotBuffer] auto-create channel: device={}, ch={}", device_id, channel);
+            log::info!(
+                "[PlotBuffer] auto-create channel: device={}, ch={}",
+                device_id,
+                channel
+            );
             let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
             devices
                 .entry(device_id.to_string())
@@ -265,7 +319,12 @@ impl PlotDataManager {
             if let Some(dc) = devices.get_mut(device_id) {
                 dc.insert(
                     channel.to_string(),
-                    Arc::new(Mutex::new(ChannelBuffer::new(*self.default_capacity.read().unwrap_or_else(|e| e.into_inner())))),
+                    Arc::new(Mutex::new(ChannelBuffer::new(
+                        *self
+                            .default_capacity
+                            .read()
+                            .unwrap_or_else(|e| e.into_inner()),
+                    ))),
                 );
             }
         }
@@ -279,7 +338,13 @@ impl PlotDataManager {
     }
 
     /// 批量添加数据（从协议解析结果，自动创建通道）
-    pub fn push_batch(&self, device_id: &str, timestamp_ms: f64, prefix: Option<&str>, values: &[f64]) {
+    pub fn push_batch(
+        &self,
+        device_id: &str,
+        timestamp_ms: f64,
+        prefix: Option<&str>,
+        values: &[f64],
+    ) {
         // Collect channel names first (push_batch: prefix_i format)
         let channel_names: Vec<(String, f64)> = values
             .iter()
@@ -299,7 +364,10 @@ impl PlotDataManager {
             let dc = devices
                 .entry(device_id.to_string())
                 .or_insert_with(HashMap::new);
-            let cap = *self.default_capacity.read().unwrap_or_else(|e| e.into_inner());
+            let cap = *self
+                .default_capacity
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             for (ch_name, _) in &channel_names {
                 dc.entry(ch_name.clone())
                     .or_insert_with(|| Arc::new(Mutex::new(ChannelBuffer::new(cap))));
@@ -330,7 +398,13 @@ impl PlotDataManager {
     /// 批量添加数据（使用友好的通道名称）
     /// 第一列: prefix (或 "ch0")
     /// 后续列: "ch1", "ch2", ...
-    pub fn push_batch_with_names(&self, device_id: &str, timestamp_ms: f64, prefix: Option<&str>, values: &[f64]) {
+    pub fn push_batch_with_names(
+        &self,
+        device_id: &str,
+        timestamp_ms: f64,
+        prefix: Option<&str>,
+        values: &[f64],
+    ) {
         // Collect channel names: first value → prefix, others → ch1, ch2...
         let channel_names: Vec<(String, f64)> = values
             .iter()
@@ -338,7 +412,9 @@ impl PlotDataManager {
             .map(|(i, value)| {
                 let ch_name = if i == 0 {
                     // First value: use prefix (or "ch0")
-                    prefix.map(|p| p.to_string()).unwrap_or_else(|| "ch0".to_string())
+                    prefix
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "ch0".to_string())
                 } else {
                     // Subsequent values: ch1, ch2...
                     format!("ch{}", i)
@@ -353,7 +429,10 @@ impl PlotDataManager {
             let dc = devices
                 .entry(device_id.to_string())
                 .or_insert_with(HashMap::new);
-            let cap = *self.default_capacity.read().unwrap_or_else(|e| e.into_inner());
+            let cap = *self
+                .default_capacity
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             for (ch_name, _) in &channel_names {
                 dc.entry(ch_name.clone())
                     .or_insert_with(|| Arc::new(Mutex::new(ChannelBuffer::new(cap))));
@@ -389,7 +468,11 @@ impl PlotDataManager {
             for (channel_name, buffer) in channels.iter() {
                 let mut buf = lock_mutex(buffer);
                 buf.swap();
-                log::trace!("[PlotBuffer] swapped device={}, ch={}", device_id, channel_name);
+                log::trace!(
+                    "[PlotBuffer] swapped device={}, ch={}",
+                    device_id,
+                    channel_name
+                );
             }
         }
     }
@@ -400,11 +483,20 @@ impl PlotDataManager {
         if let Some(device_channels) = devices.get(device_id) {
             if let Some(buffer) = device_channels.get(channel) {
                 let data = lock_mutex(&buffer).get_all();
-                log::debug!("[PlotBuffer] get_channel_data: device={}, ch={}, len={}", device_id, channel, data.len());
+                log::debug!(
+                    "[PlotBuffer] get_channel_data: device={}, ch={}, len={}",
+                    device_id,
+                    channel,
+                    data.len()
+                );
                 return data;
             }
         }
-        log::warn!("[PlotBuffer] get_channel_data: device={}, ch={} -> NOT FOUND", device_id, channel);
+        log::warn!(
+            "[PlotBuffer] get_channel_data: device={}, ch={} -> NOT FOUND",
+            device_id,
+            channel
+        );
         vec![]
     }
 
@@ -412,7 +504,7 @@ impl PlotDataManager {
     /// 获取通道最新数据（自上次 swap 以来所有新增的点，从前端缓冲区读取）
     pub fn get_latest_data(&self, device_id: &str, channel: &str) -> Vec<DataPoint> {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
-        
+
         if let Some(device_channels) = devices.get(device_id) {
             if let Some(buffer) = device_channels.get(channel) {
                 let data = lock_mutex(buffer);
@@ -454,7 +546,10 @@ impl PlotDataManager {
                     return vec![];
                 }
             } else {
-                log::warn!("[PlotBuffer] get_channel_viewport_data: device '{}' not found", device_id);
+                log::warn!(
+                    "[PlotBuffer] get_channel_viewport_data: device '{}' not found",
+                    device_id
+                );
                 return vec![];
             }
         };
@@ -469,16 +564,18 @@ impl PlotDataManager {
         let search_max = x_max + margin;
 
         // Find start index (first point >= search_min)
-        let start_idx = match all_data.binary_search_by(|p| p.timestamp_ms.partial_cmp(&search_min).unwrap()) {
-            Ok(i) => i.saturating_sub(1),
-            Err(i) => i.saturating_sub(1),
-        };
+        let start_idx =
+            match all_data.binary_search_by(|p| p.timestamp_ms.partial_cmp(&search_min).unwrap()) {
+                Ok(i) => i.saturating_sub(1),
+                Err(i) => i.saturating_sub(1),
+            };
 
         // Find end index (last point <= search_max)
-        let end_idx = match all_data.binary_search_by(|p| p.timestamp_ms.partial_cmp(&search_max).unwrap()) {
-            Ok(i) => (i + 1).min(all_data.len()),
-            Err(i) => i,
-        };
+        let end_idx =
+            match all_data.binary_search_by(|p| p.timestamp_ms.partial_cmp(&search_max).unwrap()) {
+                Ok(i) => (i + 1).min(all_data.len()),
+                Err(i) => i,
+            };
 
         let viewport_data = &all_data[start_idx..end_idx];
         if viewport_data.is_empty() {
@@ -530,10 +627,16 @@ impl PlotDataManager {
         // Ensure first and last points are included
         let first = viewport_data.first().unwrap();
         let last = viewport_data.last().unwrap();
-        if result.first().map_or(true, |p| p.timestamp_ms != first.timestamp_ms) {
+        if result
+            .first()
+            .map_or(true, |p| p.timestamp_ms != first.timestamp_ms)
+        {
             result.insert(0, *first);
         }
-        if result.last().map_or(true, |p| p.timestamp_ms != last.timestamp_ms) {
+        if result
+            .last()
+            .map_or(true, |p| p.timestamp_ms != last.timestamp_ms)
+        {
             result.push(*last);
         }
 
@@ -573,18 +676,27 @@ impl PlotDataManager {
 
     /// 获取当前样本计数器值
     pub fn get_counter(&self) -> u64 {
-        *self.sample_counter.read().unwrap_or_else(|e| e.into_inner())
+        *self
+            .sample_counter
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
     }
 
     /// 重置样本计数器
     pub fn clear_counter(&self) {
-        let mut counter = self.sample_counter.write().unwrap_or_else(|e| e.into_inner());
+        let mut counter = self
+            .sample_counter
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         *counter = 0;
     }
 
     /// 获取并递增计数器（返回新值）
     pub fn next_counter(&self) -> u64 {
-        let mut counter = self.sample_counter.write().unwrap_or_else(|e| e.into_inner());
+        let mut counter = self
+            .sample_counter
+            .write()
+            .unwrap_or_else(|e| e.into_inner());
         let new_val = *counter + 1;
         *counter = new_val;
         new_val

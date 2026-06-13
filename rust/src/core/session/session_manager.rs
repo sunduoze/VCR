@@ -36,10 +36,7 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    pub fn new(
-        registry: &'static DeviceRegistry,
-        simulators: &'static SimulatorManager,
-    ) -> Self {
+    pub fn new(registry: &'static DeviceRegistry, simulators: &'static SimulatorManager) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),
             #[cfg(target_os = "windows")]
@@ -56,7 +53,8 @@ impl SessionManager {
             .get(device_id)
             .ok_or_else(|| TransportError::InvalidConfig("Device not found".into()))?;
 
-        self.registry.update_status(device_id, DeviceStatus::Connecting);
+        self.registry
+            .update_status(device_id, DeviceStatus::Connecting);
 
         let session = if device.is_virtual {
             self.connect_virtual(&device).await?
@@ -72,17 +70,23 @@ impl SessionManager {
         {
             // Store raw HANDLE for lock-free DTR/RTS/Break control
             if let Some(handle) = self._get_serial_handle(device_id).await {
-                self.serial_handles.write().await.insert(device_id.to_string(), handle);
+                self.serial_handles
+                    .write()
+                    .await
+                    .insert(device_id.to_string(), handle);
             }
         }
-        self.registry.update_status(device_id, DeviceStatus::Connected);
+        self.registry
+            .update_status(device_id, DeviceStatus::Connected);
         Ok(())
     }
 
     fn connect_virtual(
         &self,
         device: &crate::core::device::models::DeviceInfo,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActiveSession, TransportError>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<ActiveSession, TransportError>> + Send + '_>,
+    > {
         let device = device.clone();
         Box::pin(async move {
             match device.connection_type {
@@ -92,29 +96,39 @@ impl SessionManager {
                         return Err(TransportError::InvalidConfig("Invalid TCP address".into()));
                     }
                     let host = parts[0].to_string();
-                    let port = parts[1].parse::<u16>()
+                    let port = parts[1]
+                        .parse::<u16>()
                         .map_err(|_| TransportError::InvalidConfig("Invalid port".into()))?;
 
-                    let mut transport = TcpTransport::new(TcpConfig { host, port, ..Default::default() });
+                    let mut transport = TcpTransport::new(TcpConfig {
+                        host,
+                        port,
+                        ..Default::default()
+                    });
                     transport.connect().await?;
                     Ok(ActiveSession::Tcp(Arc::new(Mutex::new(transport))))
                 }
                 ConnectionType::Serial => {
                     // 虚拟串口：从 SimulatorManager 获取 channel pair
-                    let handle = self.simulators
+                    let handle = self
+                        .simulators
                         .create_serial_connection()
                         .await
-                        .ok_or_else(|| TransportError::ConnectionFailed(
-                            "Virtual serial not running. Start infrastructure first.".into()
-                        ))?;
+                        .ok_or_else(|| {
+                            TransportError::ConnectionFailed(
+                                "Virtual serial not running. Start infrastructure first.".into(),
+                            )
+                        })?;
 
-                    let mut transport = VirtualChannelTransport::new(handle.cmd_tx, handle.response_rx);
+                    let mut transport =
+                        VirtualChannelTransport::new(handle.cmd_tx, handle.response_rx);
                     transport.connect().await?;
                     Ok(ActiveSession::Virtual(Arc::new(Mutex::new(transport))))
                 }
-                _ => Err(TransportError::InvalidConfig(
-                    format!("Unsupported virtual connection type: {:?}", device.connection_type)
-                )),
+                _ => Err(TransportError::InvalidConfig(format!(
+                    "Unsupported virtual connection type: {:?}",
+                    device.connection_type
+                ))),
             }
         })
     }
@@ -122,35 +136,69 @@ impl SessionManager {
     fn connect_real(
         &self,
         device: &crate::core::device::models::DeviceInfo,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<ActiveSession, TransportError>> + Send + '_>> {
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<ActiveSession, TransportError>> + Send + '_>,
+    > {
         let device = device.clone();
         Box::pin(async move {
             match device.connection_type {
                 ConnectionType::Serial => {
                     let parts: Vec<&str> = device.address.split(':').collect();
                     if parts.len() < 2 {
-                        return Err(TransportError::InvalidConfig("Invalid serial address".into()));
+                        return Err(TransportError::InvalidConfig(
+                            "Invalid serial address".into(),
+                        ));
                     }
                     let port = parts[0].to_string();
-                    let baud_rate = parts[1].parse::<u32>()
+                    let baud_rate = parts[1]
+                        .parse::<u32>()
                         .map_err(|_| TransportError::InvalidConfig("Invalid baud rate".into()))?;
                     // Parse optional serial config: port:baudRate:dataBits:stopBits:parity:flowControl
-                    let data_bits = parts.get(2)
-                        .map(|s| match *s { "5" => crate::core::device::models::DataBits::Five, "6" => crate::core::device::models::DataBits::Six, "7" => crate::core::device::models::DataBits::Seven, _ => crate::core::device::models::DataBits::Eight })
+                    let data_bits = parts
+                        .get(2)
+                        .map(|s| match *s {
+                            "5" => crate::core::device::models::DataBits::Five,
+                            "6" => crate::core::device::models::DataBits::Six,
+                            "7" => crate::core::device::models::DataBits::Seven,
+                            _ => crate::core::device::models::DataBits::Eight,
+                        })
                         .unwrap_or(crate::core::device::models::DataBits::Eight);
-                    let stop_bits = parts.get(3)
-                        .map(|s| match *s { "2" => crate::core::device::models::StopBits::Two, _ => crate::core::device::models::StopBits::One })
+                    let stop_bits = parts
+                        .get(3)
+                        .map(|s| match *s {
+                            "2" => crate::core::device::models::StopBits::Two,
+                            _ => crate::core::device::models::StopBits::One,
+                        })
                         .unwrap_or(crate::core::device::models::StopBits::One);
-                    let parity = parts.get(4)
-                        .map(|s| match *s { "O" => crate::core::device::models::Parity::Odd, "E" => crate::core::device::models::Parity::Even, _ => crate::core::device::models::Parity::None })
+                    let parity = parts
+                        .get(4)
+                        .map(|s| match *s {
+                            "O" => crate::core::device::models::Parity::Odd,
+                            "E" => crate::core::device::models::Parity::Even,
+                            _ => crate::core::device::models::Parity::None,
+                        })
                         .unwrap_or(crate::core::device::models::Parity::None);
-                    let flow_control = parts.get(5)
-                        .map(|s| match *s { "H" => crate::core::device::models::FlowControl::Hardware, "S" => crate::core::device::models::FlowControl::Software, _ => crate::core::device::models::FlowControl::None })
+                    let flow_control = parts
+                        .get(5)
+                        .map(|s| match *s {
+                            "H" => crate::core::device::models::FlowControl::Hardware,
+                            "S" => crate::core::device::models::FlowControl::Software,
+                            _ => crate::core::device::models::FlowControl::None,
+                        })
                         .unwrap_or(crate::core::device::models::FlowControl::None);
-                    let receive_timeout_ms = parts.get(6)
+                    let receive_timeout_ms = parts
+                        .get(6)
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or(100);
-                    let mut transport = SerialTransport::new(SerialConfig { port, baud_rate, data_bits, stop_bits, parity, flow_control, receive_timeout_ms });
+                    let mut transport = SerialTransport::new(SerialConfig {
+                        port,
+                        baud_rate,
+                        data_bits,
+                        stop_bits,
+                        parity,
+                        flow_control,
+                        receive_timeout_ms,
+                    });
                     transport.connect().await?;
                     Ok(ActiveSession::Serial(Arc::new(Mutex::new(transport))))
                 }
@@ -160,15 +208,21 @@ impl SessionManager {
                         return Err(TransportError::InvalidConfig("Invalid TCP address".into()));
                     }
                     let host = parts[0].to_string();
-                    let port = parts[1].parse::<u16>()
+                    let port = parts[1]
+                        .parse::<u16>()
                         .map_err(|_| TransportError::InvalidConfig("Invalid port".into()))?;
-                    let mut transport = TcpTransport::new(TcpConfig { host, port, ..Default::default() });
+                    let mut transport = TcpTransport::new(TcpConfig {
+                        host,
+                        port,
+                        ..Default::default()
+                    });
                     transport.connect().await?;
                     Ok(ActiveSession::Tcp(Arc::new(Mutex::new(transport))))
                 }
-                _ => Err(TransportError::InvalidConfig(
-                    format!("Unsupported connection type: {:?}", device.connection_type)
-                )),
+                _ => Err(TransportError::InvalidConfig(format!(
+                    "Unsupported connection type: {:?}",
+                    device.connection_type
+                ))),
             }
         })
     }
@@ -186,7 +240,8 @@ impl SessionManager {
                 ActiveSession::Virtual(t) => t.lock().await.disconnect().await?,
             }
         }
-        self.registry.update_status(device_id, DeviceStatus::Disconnected);
+        self.registry
+            .update_status(device_id, DeviceStatus::Disconnected);
         Ok(())
     }
 
@@ -224,19 +279,16 @@ impl SessionManager {
                 // 尝试快速检测：如果不能锁说明正在用，视为已连接
                 t.try_lock().map_or(true, |g| g.is_connected())
             }
-            ActiveSession::Tcp(t) => {
-                t.try_lock().map_or(true, |g| g.is_connected())
-            }
-            ActiveSession::Virtual(t) => {
-                t.try_lock().map_or(true, |g| g.is_connected())
-            }
+            ActiveSession::Tcp(t) => t.try_lock().map_or(true, |g| g.is_connected()),
+            ActiveSession::Virtual(t) => t.try_lock().map_or(true, |g| g.is_connected()),
         })
     }
 
     /// 同步版连接状态检查 —— 用于 #[frb(sync)] 函数，避免 block_on
     /// 仅检查 sessions map 是否包含该设备，不尝试锁定 transport
     pub fn is_connected_sync(&self, device_id: &str) -> bool {
-        self.sessions.try_read()
+        self.sessions
+            .try_read()
             .map(|sessions| sessions.contains_key(device_id))
             .unwrap_or(false) // 锁被占用时保守认为已连接
     }
@@ -258,14 +310,27 @@ impl SessionManager {
     pub fn set_dtr(&self, device_id: &str, level: bool) -> bool {
         if let Ok(handles) = self.serial_handles.try_read() {
             if let Some(handle) = handles.get(device_id) {
-                let func = if level { crate::core::transport::serial::win_comm::SETDTR } else { crate::core::transport::serial::win_comm::CLRDTR };
-                return unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func) != 0 };
+                let func = if level {
+                    crate::core::transport::serial::win_comm::SETDTR
+                } else {
+                    crate::core::transport::serial::win_comm::CLRDTR
+                };
+                return unsafe {
+                    crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func)
+                        != 0
+                };
             }
         }
         let handles = crate::core::app_context::block_on(self.serial_handles.read());
         if let Some(handle) = handles.get(device_id) {
-            let func = if level { crate::core::transport::serial::win_comm::SETDTR } else { crate::core::transport::serial::win_comm::CLRDTR };
-            unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func) != 0 }
+            let func = if level {
+                crate::core::transport::serial::win_comm::SETDTR
+            } else {
+                crate::core::transport::serial::win_comm::CLRDTR
+            };
+            unsafe {
+                crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func) != 0
+            }
         } else {
             false
         }
@@ -276,14 +341,27 @@ impl SessionManager {
     pub fn set_rts(&self, device_id: &str, level: bool) -> bool {
         if let Ok(handles) = self.serial_handles.try_read() {
             if let Some(handle) = handles.get(device_id) {
-                let func = if level { crate::core::transport::serial::win_comm::SETRTS } else { crate::core::transport::serial::win_comm::CLRRTS };
-                return unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func) != 0 };
+                let func = if level {
+                    crate::core::transport::serial::win_comm::SETRTS
+                } else {
+                    crate::core::transport::serial::win_comm::CLRRTS
+                };
+                return unsafe {
+                    crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func)
+                        != 0
+                };
             }
         }
         let handles = crate::core::app_context::block_on(self.serial_handles.read());
         if let Some(handle) = handles.get(device_id) {
-            let func = if level { crate::core::transport::serial::win_comm::SETRTS } else { crate::core::transport::serial::win_comm::CLRRTS };
-            unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func) != 0 }
+            let func = if level {
+                crate::core::transport::serial::win_comm::SETRTS
+            } else {
+                crate::core::transport::serial::win_comm::CLRRTS
+            };
+            unsafe {
+                crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, func) != 0
+            }
         } else {
             false
         }
@@ -294,12 +372,22 @@ impl SessionManager {
     pub fn set_break(&self, device_id: &str) -> bool {
         if let Ok(handles) = self.serial_handles.try_read() {
             if let Some(handle) = handles.get(device_id) {
-                return unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, crate::core::transport::serial::win_comm::SETBREAK) != 0 };
+                return unsafe {
+                    crate::core::transport::serial::win_comm::EscapeCommFunction(
+                        handle.0,
+                        crate::core::transport::serial::win_comm::SETBREAK,
+                    ) != 0
+                };
             }
         }
         let handles = crate::core::app_context::block_on(self.serial_handles.read());
         if let Some(handle) = handles.get(device_id) {
-            unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, crate::core::transport::serial::win_comm::SETBREAK) != 0 }
+            unsafe {
+                crate::core::transport::serial::win_comm::EscapeCommFunction(
+                    handle.0,
+                    crate::core::transport::serial::win_comm::SETBREAK,
+                ) != 0
+            }
         } else {
             false
         }
@@ -310,12 +398,22 @@ impl SessionManager {
     pub fn clear_break(&self, device_id: &str) -> bool {
         if let Ok(handles) = self.serial_handles.try_read() {
             if let Some(handle) = handles.get(device_id) {
-                return unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, crate::core::transport::serial::win_comm::CLRBREAK) != 0 };
+                return unsafe {
+                    crate::core::transport::serial::win_comm::EscapeCommFunction(
+                        handle.0,
+                        crate::core::transport::serial::win_comm::CLRBREAK,
+                    ) != 0
+                };
             }
         }
         let handles = crate::core::app_context::block_on(self.serial_handles.read());
         if let Some(handle) = handles.get(device_id) {
-            unsafe { crate::core::transport::serial::win_comm::EscapeCommFunction(handle.0, crate::core::transport::serial::win_comm::CLRBREAK) != 0 }
+            unsafe {
+                crate::core::transport::serial::win_comm::EscapeCommFunction(
+                    handle.0,
+                    crate::core::transport::serial::win_comm::CLRBREAK,
+                ) != 0
+            }
         } else {
             false
         }
@@ -326,7 +424,9 @@ impl SessionManager {
     pub fn get_cts(&self, device_id: &str) -> bool {
         let read_cts = |handle: &crate::core::transport::serial::SafeHandle| -> bool {
             let mut stat: u32 = 0;
-            let result = unsafe { crate::core::transport::serial::win_comm::GetCommModemStatus(handle.0, &mut stat) };
+            let result = unsafe {
+                crate::core::transport::serial::win_comm::GetCommModemStatus(handle.0, &mut stat)
+            };
             result != 0 && (stat & crate::core::transport::serial::win_comm::MS_CTS_ON) != 0
         };
         if let Ok(handles) = self.serial_handles.try_read() {
@@ -343,7 +443,9 @@ impl SessionManager {
     pub fn get_dsr(&self, device_id: &str) -> bool {
         let read_dsr = |handle: &crate::core::transport::serial::SafeHandle| -> bool {
             let mut stat: u32 = 0;
-            let result = unsafe { crate::core::transport::serial::win_comm::GetCommModemStatus(handle.0, &mut stat) };
+            let result = unsafe {
+                crate::core::transport::serial::win_comm::GetCommModemStatus(handle.0, &mut stat)
+            };
             result != 0 && (stat & crate::core::transport::serial::win_comm::MS_DSR_ON) != 0
         };
         if let Ok(handles) = self.serial_handles.try_read() {

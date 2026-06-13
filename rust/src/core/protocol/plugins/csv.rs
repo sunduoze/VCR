@@ -5,7 +5,7 @@
 // - 逗号可以用空格替代
 // - 支持 \n, \r\n, \n\r 行结束符
 
-use crate::core::protocol::r#trait::{ProtocolParser, ParseResult};
+use crate::core::protocol::r#trait::{ParseResult, ProtocolParser};
 
 /// CSV 协议解析器配置
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -24,7 +24,8 @@ impl Default for CsvConfig {
     fn default() -> Self {
         Self {
             require_prefix: false,
-            allowed_prefixes: vec![],delimiter: ",".to_string(),
+            allowed_prefixes: vec![],
+            delimiter: ",".to_string(),
             ignore_image: true,
         }
     }
@@ -57,7 +58,7 @@ impl CsvParser {
     /// 解析单行 CSV 数据
     fn parse_line(&self, line: &str) -> ParseResult {
         let trimmed = line.trim();
-        
+
         if trimmed.is_empty() {
             return ParseResult::failure("Empty line".to_string(), Some(trimmed.to_string()));
         }
@@ -65,8 +66,11 @@ impl CsvParser {
         // 检查是否忽略 image 前缀
         if self.config.ignore_image {
             if trimmed.starts_with("image:") || trimmed.starts_with("image=") {
-                return ParseResult::failure("Image prefix reserved".to_string(), Some(trimmed.to_string()))
-                    .with_metadata("prefix".to_string(), "image".to_string());
+                return ParseResult::failure(
+                    "Image prefix reserved".to_string(),
+                    Some(trimmed.to_string()),
+                )
+                .with_metadata("prefix".to_string(), "image".to_string());
             }
         }
 
@@ -88,7 +92,10 @@ impl CsvParser {
         if !self.config.allowed_prefixes.is_empty() {
             if let Some(ref p) = prefix {
                 if !self.config.allowed_prefixes.contains(p) {
-                    return ParseResult::failure(format!("Prefix '{}' not allowed", p), Some(trimmed.to_string()));
+                    return ParseResult::failure(
+                        format!("Prefix '{}' not allowed", p),
+                        Some(trimmed.to_string()),
+                    );
                 }
             }
         }
@@ -105,7 +112,7 @@ impl CsvParser {
 
         // 构建结果
         let mut result = ParseResult::success(values, Some(trimmed.to_string()));
-        
+
         if let Some(ref p) = prefix {
             result = result.with_metadata("prefix".to_string(), p.clone());
         }
@@ -137,8 +144,9 @@ impl CsvParser {
                 i += 1;
                 if i < chars.len() {
                     // 处理 \r\n 或 \n\r
-                    if (chars[i - 1] == '\r' && chars[i] == '\n') ||
-                       (chars[i - 1] == '\n' && chars[i] == '\r') {
+                    if (chars[i - 1] == '\r' && chars[i] == '\n')
+                        || (chars[i - 1] == '\n' && chars[i] == '\r')
+                    {
                         i += 1;
                     }
                 }
@@ -170,7 +178,7 @@ impl ProtocolParser for CsvParser {
     fn parse(&self, data: &[u8]) -> ParseResult {
         // 对于单次解析，直接处理（不使用缓冲区）
         let text = String::from_utf8_lossy(data);
-        
+
         // 查找第一个行结束符
         let line_end = text.find(|c| c == '\n' || c == '\r');
         let line = if let Some(pos) = line_end {
@@ -206,13 +214,15 @@ impl ProtocolParser for CsvParser {
     }
 
     fn config_schema(&self) -> Option<&str> {
-        Some(r#"{"type": "object", "properties": {"require_prefix": {"type": "boolean", "default": false}, "allowed_prefixes": {"type": "array", "items": {"type": "string"}}, "delimiter": {"type": "string", "default": ","}, "ignore_image": {"type": "boolean", "default": true}}}"#)
+        Some(
+            r#"{"type": "object", "properties": {"require_prefix": {"type": "boolean", "default": false}, "allowed_prefixes": {"type": "array", "items": {"type": "string"}}, "delimiter": {"type": "string", "default": ","}, "ignore_image": {"type": "boolean", "default": true}}}"#,
+        )
     }
 
     fn configure(&mut self, config: &str) -> Result<(), String> {
         // 解析 JSON 配置
-        let parsed: CsvConfig = serde_json::from_str(config)
-            .map_err(|e| format!("Config parse error: {}", e))?;
+        let parsed: CsvConfig =
+            serde_json::from_str(config).map_err(|e| format!("Config parse error: {}", e))?;
         self.config = parsed;
         Ok(())
     }

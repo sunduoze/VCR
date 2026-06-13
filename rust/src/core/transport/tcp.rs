@@ -48,7 +48,9 @@ impl Transport for TcpTransport {
         .map_err(|_| TransportError::Timeout)?
         .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
 
-        stream.set_nodelay(true).map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
+        stream
+            .set_nodelay(true)
+            .map_err(|e| TransportError::ConnectionFailed(e.to_string()))?;
         self.stream = Some(stream);
         Ok(())
     }
@@ -60,7 +62,10 @@ impl Transport for TcpTransport {
 
     async fn send(&mut self, data: &[u8]) -> Result<(), TransportError> {
         if let Some(ref mut stream) = self.stream {
-            stream.write_all(data).await.map_err(|e| TransportError::SendError(e.to_string()))
+            stream
+                .write_all(data)
+                .await
+                .map_err(|e| TransportError::SendError(e.to_string()))
         } else {
             Err(TransportError::Disconnected)
         }
@@ -69,13 +74,10 @@ impl Transport for TcpTransport {
     async fn receive(&mut self) -> Result<Vec<u8>, TransportError> {
         if let Some(ref mut stream) = self.stream {
             let mut buf = vec![0u8; 4096];
-            let n = tokio::time::timeout(
-                Duration::from_millis(200),
-                stream.read(&mut buf),
-            )
-            .await
-            .map_err(|_| TransportError::Timeout)?
-            .map_err(|e| TransportError::ReceiveError(e.to_string()))?;
+            let n = tokio::time::timeout(Duration::from_millis(200), stream.read(&mut buf))
+                .await
+                .map_err(|_| TransportError::Timeout)?
+                .map_err(|e| TransportError::ReceiveError(e.to_string()))?;
             buf.truncate(n);
             Ok(buf)
         } else {

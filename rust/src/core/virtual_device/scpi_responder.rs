@@ -64,9 +64,7 @@ impl ScpiResponder {
                 }
                 "*HELP?" => self.help_text(),
                 _ => {
-                    self.state
-                        .error_queue
-                        .push("-100,\"Command error\"".into());
+                    self.state.error_queue.push("-100,\"Command error\"".into());
                     "ERR:Unknown * command\n".into()
                 }
             };
@@ -90,10 +88,11 @@ impl ScpiResponder {
             "OUTP?" | "OUTPUT?" => {
                 format!("{}\n", if self.state.output_enabled { 1 } else { 0 })
             }
-            "SYST:ERR?" => self.state.error_queue.pop().map_or_else(
-                || "0,\"No error\"\n".into(),
-                |e| format!("{}\n", e),
-            ),
+            "SYST:ERR?" => self
+                .state
+                .error_queue
+                .pop()
+                .map_or_else(|| "0,\"No error\"\n".into(), |e| format!("{}\n", e)),
             "SYST:STAT?" | "STAT?" => self.status_text(),
             "HELP?" => self.help_text(),
             // 带参数的命令（VOLT x / CURR x / FREQ x）
@@ -107,9 +106,7 @@ impl ScpiResponder {
                 self.set_frequency(cmd)
             }
             _ => {
-                self.state
-                    .error_queue
-                    .push("-100,\"Command error\"".into());
+                self.state.error_queue.push("-100,\"Command error\"".into());
                 "ERR:Unknown command\n".into()
             }
         }
@@ -121,7 +118,11 @@ impl ScpiResponder {
     }
 
     fn set_voltage(&mut self, cmd: &str) -> String {
-        if let Some(v) = cmd.split_whitespace().last().and_then(|s| s.parse::<f64>().ok()) {
+        if let Some(v) = cmd
+            .split_whitespace()
+            .last()
+            .and_then(|s| s.parse::<f64>().ok())
+        {
             self.state.voltage = v;
             self.state.power = v * self.state.current;
             "OK\n".into()
@@ -131,7 +132,11 @@ impl ScpiResponder {
     }
 
     fn set_current(&mut self, cmd: &str) -> String {
-        if let Some(v) = cmd.split_whitespace().last().and_then(|s| s.parse::<f64>().ok()) {
+        if let Some(v) = cmd
+            .split_whitespace()
+            .last()
+            .and_then(|s| s.parse::<f64>().ok())
+        {
             self.state.current = v;
             self.state.power = self.state.voltage * v;
             "OK\n".into()
@@ -141,7 +146,11 @@ impl ScpiResponder {
     }
 
     fn set_frequency(&mut self, cmd: &str) -> String {
-        if let Some(v) = cmd.split_whitespace().last().and_then(|s| s.parse::<f64>().ok()) {
+        if let Some(v) = cmd
+            .split_whitespace()
+            .last()
+            .and_then(|s| s.parse::<f64>().ok())
+        {
             self.state.frequency = v;
             "OK\n".into()
         } else {

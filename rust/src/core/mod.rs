@@ -1,7 +1,7 @@
-pub mod device;
-pub mod transport;
-pub mod session;
-pub mod virtual_device;
 pub mod app_context;
-pub mod protocol;
+pub mod device;
 pub mod plot;
+pub mod protocol;
+pub mod session;
+pub mod transport;
+pub mod virtual_device;

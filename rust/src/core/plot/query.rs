@@ -2,9 +2,9 @@
 // Bridges the gap between LockFreeRingBuffer/Pyramid and dart:ffi.
 // Provides PointsBuffer (ptr, len, generation) for zero-copy Dart read.
 
-use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};
-use parking_lot::Mutex;
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use crate::core::plot::lockfree_buffer::{LockFreeRingBuffer, RingDataPoint};
 use crate::core::plot::time_bucket::TimeBucketPyramid;
@@ -128,18 +128,19 @@ lazy_static! {
 /// Set viewport parameters for the next get_points() call.
 pub fn set_viewport(t_start: f64, t_end: f64, max_points: u32) {
     let state = &mut *QUERY_STATE.lock();
-    state.t_start.store(f64::to_bits(t_start), Ordering::Release);
+    state
+        .t_start
+        .store(f64::to_bits(t_start), Ordering::Release);
     state.t_end.store(f64::to_bits(t_end), Ordering::Release);
-    state.max_points.store(max_points as usize, Ordering::Release);
+    state
+        .max_points
+        .store(max_points as usize, Ordering::Release);
 }
 
 /// Get PointsBuffer pointing to freshly-interleaved data.
 /// Called by Chart Isolate every ~16ms.
 /// Returns pointer to pre-allocated buffer — no heap allocation on read path.
-pub fn get_points(
-    ring: &LockFreeRingBuffer,
-    pyramid: &Mutex<TimeBucketPyramid>,
-) -> PointsBuffer {
+pub fn get_points(ring: &LockFreeRingBuffer, pyramid: &Mutex<TimeBucketPyramid>) -> PointsBuffer {
     let state = &mut *QUERY_STATE.lock();
 
     let t_start = f64::from_bits(state.t_start.load(Ordering::Acquire));
@@ -165,7 +166,13 @@ pub fn get_points(
         if buckets.is_empty() {
             let available = ring.peek_len();
             if available > 0 {
-                let mut raw = vec![RingDataPoint { timestamp_ms: 0.0, value: 0.0 }; available.min(cap)];
+                let mut raw = vec![
+                    RingDataPoint {
+                        timestamp_ms: 0.0,
+                        value: 0.0
+                    };
+                    available.min(cap)
+                ];
                 let count = ring.read_into(&mut raw);
                 interleave_ring_points(&raw[..count], write_buf);
             }
@@ -177,7 +184,11 @@ pub fn get_points(
     let point_count = {
         let write_idx = state.buffers.write_idx();
         let write_buf = state.buffers.get_buf(write_idx);
-        if write_buf.len() >= 2 { write_buf.len() / 2 } else { 0 }
+        if write_buf.len() >= 2 {
+            write_buf.len() / 2
+        } else {
+            0
+        }
     };
 
     state.buffers.rotate();
@@ -221,11 +232,7 @@ fn interleave_ring_points(points: &[RingDataPoint], out: &mut Vec<f32>) {
     }
 }
 
-fn interleave_buckets(
-    buckets: &[(f64, f64, f64, u32)],
-    target_points: usize,
-    out: &mut Vec<f32>,
-) {
+fn interleave_buckets(buckets: &[(f64, f64, f64, u32)], target_points: usize, out: &mut Vec<f32>) {
     let bucket_count = buckets.len();
     if bucket_count == 0 {
         return;

@@ -1,7 +1,7 @@
 // Modbus RTU Protocol Parser - Modbus RTU 协议解析
 // 解析 Modbus RTU 响应帧，提取寄存器值
 
-use crate::core::protocol::r#trait::{ProtocolParser, ParseResult};
+use crate::core::protocol::r#trait::{ParseResult, ProtocolParser};
 use std::collections::HashMap;
 
 /// Modbus RTU 协议解析器
@@ -87,7 +87,13 @@ impl ModbusRtuParser {
             let calculated_crc = Self::calculate_crc(crc_data);
 
             if received_crc != calculated_crc {
-                return ParseResult::failure(format!("CRC mismatch: received {}, calculated {}", received_crc, calculated_crc), None);
+                return ParseResult::failure(
+                    format!(
+                        "CRC mismatch: received {}, calculated {}",
+                        received_crc, calculated_crc
+                    ),
+                    None,
+                );
             }
         }
 
@@ -138,7 +144,10 @@ impl ProtocolParser for ModbusRtuParser {
         match function_code {
             0x03 => self.parse_read_holding_response(data),
             0x83 => self.parse_error_response(data), // 错误响应
-            _ => ParseResult::failure(format!("Unsupported function code: {}", function_code), None),
+            _ => ParseResult::failure(
+                format!("Unsupported function code: {}", function_code),
+                None,
+            ),
         }
     }
 
@@ -155,12 +164,14 @@ impl ProtocolParser for ModbusRtuParser {
     }
 
     fn config_schema(&self) -> Option<&str> {
-        Some(r#"{"type": "object", "properties": {"slave_address": {"type": "integer", "default": 1, "minimum": 1, "maximum": 247}, "verify_crc": {"type": "boolean", "default": true}}}"#)
+        Some(
+            r#"{"type": "object", "properties": {"slave_address": {"type": "integer", "default": 1, "minimum": 1, "maximum": 247}, "verify_crc": {"type": "boolean", "default": true}}}"#,
+        )
     }
 
     fn configure(&mut self, config: &str) -> Result<(), String> {
-        let parsed: serde_json::Value = serde_json::from_str(config)
-            .map_err(|e| format!("Config parse error: {}", e))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(config).map_err(|e| format!("Config parse error: {}", e))?;
 
         if let Some(addr) = parsed.get("slave_address").and_then(|v| v.as_u64()) {
             self.slave_address = addr as u8;

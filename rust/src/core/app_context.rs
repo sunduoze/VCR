@@ -1,7 +1,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write as IoWrite;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use crate::core::device::registry::DeviceRegistry;
 use crate::core::session::debug_session::DebugSessionManager;
@@ -103,7 +103,9 @@ pub fn init_logger() {
     let log_path = if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-            dir.join(format!("vcr_debug_{}.log", ts)).to_string_lossy().to_string()
+            dir.join(format!("vcr_debug_{}.log", ts))
+                .to_string_lossy()
+                .to_string()
         } else {
             "vcr_debug.log".to_string()
         }
@@ -140,7 +142,10 @@ pub fn init_logger() {
 /// Enable or disable file logging at runtime.
 pub fn set_file_logging_enabled(enabled: bool) {
     FILE_LOGGING_ENABLED.store(enabled, Ordering::SeqCst);
-    log::info!("[Logger] File logging {}", if enabled { "enabled" } else { "disabled" });
+    log::info!(
+        "[Logger] File logging {}",
+        if enabled { "enabled" } else { "disabled" }
+    );
 }
 
 /// Set a custom log file path at runtime.
@@ -155,7 +160,9 @@ pub fn set_log_file_path(path: &str) {
 /// Get the current log file path.
 pub fn get_log_file_path() -> String {
     unsafe {
-        LOG_FILE_PATH.clone().unwrap_or_else(|| "vcr_debug.log".to_string())
+        LOG_FILE_PATH
+            .clone()
+            .unwrap_or_else(|| "vcr_debug.log".to_string())
     }
 }
 

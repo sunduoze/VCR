@@ -69,7 +69,8 @@ impl DataGenerator {
                 self.amplitude * (2.0 * std::f64::consts::PI * self.frequency * t).sin()
             }
             SignalType::Square => {
-                let phase = (2.0 * std::f64::consts::PI * self.frequency * t) % (2.0 * std::f64::consts::PI);
+                let phase = (2.0 * std::f64::consts::PI * self.frequency * t)
+                    % (2.0 * std::f64::consts::PI);
                 if phase < std::f64::consts::PI {
                     self.amplitude
                 } else {
@@ -84,14 +85,16 @@ impl DataGenerator {
                 let phase = (self.frequency * t) % 1.0;
                 self.amplitude * (2.0 * phase - 1.0)
             }
-            SignalType::Noise => {
-                (rng.gen::<f64>() - 0.5) * 2.0 * self.amplitude
-            }
+            SignalType::Noise => (rng.gen::<f64>() - 0.5) * 2.0 * self.amplitude,
             SignalType::Mixed => {
                 // 多频率叠加
                 let base = self.amplitude * (2.0 * std::f64::consts::PI * self.frequency * t).sin();
-                let harmonic1 = 0.3 * self.amplitude * (2.0 * std::f64::consts::PI * self.frequency * 2.0 * t).sin();
-                let harmonic2 = 0.1 * self.amplitude * (2.0 * std::f64::consts::PI * self.frequency * 3.0 * t).sin();
+                let harmonic1 = 0.3
+                    * self.amplitude
+                    * (2.0 * std::f64::consts::PI * self.frequency * 2.0 * t).sin();
+                let harmonic2 = 0.1
+                    * self.amplitude
+                    * (2.0 * std::f64::consts::PI * self.frequency * 3.0 * t).sin();
                 base + harmonic1 + harmonic2
             }
         };
@@ -153,12 +156,12 @@ impl ModbusDataGenerator {
 
     fn initialize_default_values(&mut self) {
         // 保持寄存器初始化一些合理的默认值
-        self.registers[0] = 3300;  // 电压 (3300 = 33.00V)
-        self.registers[1] = 500;   // 电流 (500 = 5.00A)
+        self.registers[0] = 3300; // 电压 (3300 = 33.00V)
+        self.registers[1] = 500; // 电流 (500 = 5.00A)
         self.registers[2] = 16500; // 功率 (16500 = 165.0W)
-        self.registers[3] = 250;   // 温度 (250 = 25.0°C)
-        self.registers[4] = 1000;  // 频率 (1000 = 100.0Hz)
-        self.registers[10] = 1;    // 状态: 运行中
+        self.registers[3] = 250; // 温度 (250 = 25.0°C)
+        self.registers[4] = 1000; // 频率 (1000 = 100.0Hz)
+        self.registers[10] = 1; // 状态: 运行中
     }
 
     /// 读取保持寄存器

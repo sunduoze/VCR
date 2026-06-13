@@ -1,7 +1,7 @@
 // Modbus TCP Protocol Parser - Modbus TCP 协议解析
 // 解析 Modbus TCP 响应帧，提取寄存器值
 
-use crate::core::protocol::r#trait::{ProtocolParser, ParseResult};
+use crate::core::protocol::r#trait::{ParseResult, ProtocolParser};
 
 /// Modbus TCP 协议解析器
 /// 支持读取保持寄存器（功能码 03）和输入寄存器（功能码 04）
@@ -12,9 +12,7 @@ pub struct ModbusTcpParser {
 
 impl ModbusTcpParser {
     pub fn new() -> Self {
-        Self {
-            unit_id: 1,
-        }
+        Self { unit_id: 1 }
     }
 
     /// 解析读取保持寄存器响应（功能码 03）
@@ -108,7 +106,10 @@ impl ProtocolParser for ModbusTcpParser {
         match function_code {
             0x03 => self.parse_read_holding_response(data),
             0x83 => self.parse_error_response(data), // 错误响应
-            _ => ParseResult::failure(format!("Unsupported function code: {}", function_code), None),
+            _ => ParseResult::failure(
+                format!("Unsupported function code: {}", function_code),
+                None,
+            ),
         }
     }
 
@@ -125,12 +126,14 @@ impl ProtocolParser for ModbusTcpParser {
     }
 
     fn config_schema(&self) -> Option<&str> {
-        Some(r#"{"type": "object", "properties": {"unit_id": {"type": "integer", "default": 1, "minimum": 1, "maximum": 247}}}"#)
+        Some(
+            r#"{"type": "object", "properties": {"unit_id": {"type": "integer", "default": 1, "minimum": 1, "maximum": 247}}}"#,
+        )
     }
 
     fn configure(&mut self, config: &str) -> Result<(), String> {
-        let parsed: serde_json::Value = serde_json::from_str(config)
-            .map_err(|e| format!("Config parse error: {}", e))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(config).map_err(|e| format!("Config parse error: {}", e))?;
 
         if let Some(unit) = parsed.get("unit_id").and_then(|v| v.as_u64()) {
             self.unit_id = unit as u8;

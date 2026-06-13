@@ -1,7 +1,7 @@
 use super::{Transport, TransportError};
 use async_trait::async_trait;
-use tokio::sync::{broadcast, mpsc};
 use std::time::Duration;
+use tokio::sync::{broadcast, mpsc};
 
 /// 虚拟通道传输（用于虚拟串口对 / 内部 channel 通信）
 ///
@@ -58,16 +58,10 @@ impl Transport for VirtualChannelTransport {
         }
         // 用 recv() + timeout 替代 try_recv()
         // 这样数据一旦 broadcast 就立即返回，而不是轮询空转
-        match tokio::time::timeout(
-            Duration::from_millis(200),
-            self.response_rx.recv(),
-        ).await {
+        match tokio::time::timeout(Duration::from_millis(200), self.response_rx.recv()).await {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(broadcast::error::RecvError::Closed)) => Err(TransportError::Disconnected),
-            Ok(Err(broadcast::error::RecvError::Lagged(_n))) => {
-                
-                Err(TransportError::Timeout)
-            }
+            Ok(Err(broadcast::error::RecvError::Lagged(_n))) => Err(TransportError::Timeout),
             Err(_) => {
                 // timeout，无数据，正常返回空让调用方继续轮询
                 Ok(vec![])

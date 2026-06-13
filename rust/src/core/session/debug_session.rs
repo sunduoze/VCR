@@ -87,7 +87,7 @@ impl DebugSessionManager {
     pub fn log_rx(&self, device_id: &str, data: &[u8]) {
         // Check if data contains line endings
         let has_line_endings = data.iter().any(|&b| b == b'\r' || b == b'\n');
-        
+
         if has_line_endings {
             // Split by \r\n, \r, or \n and create separate entries with individual timestamps
             let lines = split_by_line_endings(data);
@@ -244,7 +244,7 @@ fn split_by_line_endings(data: &[u8]) -> Vec<(Vec<u8>, String)> {
     let mut result = Vec::new();
     let mut start = 0;
     let mut i = 0;
-    
+
     while i < data.len() {
         // Check for \r\n first (Windows line ending)
         if i + 1 < data.len() && data[i] == b'\r' && data[i + 1] == b'\n' {
@@ -265,13 +265,13 @@ fn split_by_line_endings(data: &[u8]) -> Vec<(Vec<u8>, String)> {
             i += 1;
         }
     }
-    
+
     // Handle remaining data after last line ending (if any)
     if start < data.len() {
         let line_data = &data[start..];
         let line_display = bytes_to_ascii(line_data);
         result.push((line_data.to_vec(), line_display));
     }
-    
+
     result
 }

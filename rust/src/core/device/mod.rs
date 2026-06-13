@@ -1,3 +1,3 @@
 pub mod models;
-pub mod registry;
 pub mod preset;
+pub mod registry;

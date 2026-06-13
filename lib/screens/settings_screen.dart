@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import '../app/theme.dart';
 import '../src/rust/frb_generated.dart';
-import 'package:vcr/src/rust/api/debug_api.dart';
 
 /// App-wide configuration helper
 /// Stores: autoReconnect, lastConnectedDevices, deviceSortOrder
@@ -361,7 +360,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             await AppConfig.save(config);
                             // Reset to default path
                             try {
-                              final exeDir = File(Platform.resolvedExecutable).parent?.path ?? '';
+                              final exeDir = File(Platform.resolvedExecutable).parent.path;
                               final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
                               RustLib.instance.api.crateApiDebugApiDebugSetLogFilePath(path: '$exeDir\\vcr_debug_$ts.log');
                             } catch (e) {
@@ -468,7 +467,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 if (path.isNotEmpty) {
                   RustLib.instance.api.crateApiDebugApiDebugSetLogFilePath(path: path);
                 } else {
-                  final exeDir = File(Platform.resolvedExecutable).parent?.path ?? '';
+                  final exeDir = File(Platform.resolvedExecutable).parent.path;
                   final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
                   RustLib.instance.api.crateApiDebugApiDebugSetLogFilePath(path: '$exeDir\\vcr_debug_$ts.log');
                 }

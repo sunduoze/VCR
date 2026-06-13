@@ -178,6 +178,7 @@ class _DataPoint {
 enum _ScrollbarDrag { none, thumb, leftEdge, rightEdge }
 
 /// Min visible X range (prevents zooming to zero)
+// ignore: unused_element
 const _minVisibleRange = 0.01;
 
 class PlotScreen extends StatefulWidget {
@@ -248,6 +249,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _isGpuRendering = false;
 
   // 🚀 P2-B 优化：增量更新版本号
+  // ignore: unused_field
   BigInt _lastDataVersion = BigInt.zero;
 
   // 🚀 P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
@@ -1128,7 +1130,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // 启用GPU渲染
   Future<void> _initGpu() async {
     try {
-      final result = await RustLib.instance.api.crateApiGpuApiGpuInit();
+      await RustLib.instance.api.crateApiGpuApiGpuInit();
       setState(() {
         _gpuInitialized = true;
         _useGpuAcceleration = true;
@@ -1154,6 +1156,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     return completer.future;
   }
 
+  // ignore: unused_element
   Future<void> _renderWaveformOnGpu() async {
     if (!_useGpuAcceleration || !_gpuInitialized || _isGpuRendering) return;
     if (_channels.isEmpty) return;

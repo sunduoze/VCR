@@ -14,19 +14,19 @@ pub fn gpu_init() -> i32 {
     // 初始化日志（如果尚未初始化）
     let _ = env_logger::try_init();
     
-    eprintln!("[GPU] ========= GPU Init Starting =========");
+    log::info!("[GPU] ========= GPU Init Starting =========");
     
     match GpuRenderer::new() {
         Ok(renderer) => {
             let mut global_renderer = GPU_RENDERER.lock().unwrap();
             *global_renderer = Some(renderer);
             log::info!("[GPU] GPU renderer initialized successfully");
-            eprintln!("[GPU] GPU renderer initialized successfully");
+
             0
         }
         Err(e) => {
             let error_msg = format!("[GPU] Failed to initialize GPU renderer: {}", e);
-            eprintln!("{}", error_msg);
+
             log::error!("{}", error_msg);
             -1
         }

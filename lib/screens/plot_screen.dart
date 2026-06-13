@@ -567,18 +567,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   // Debug log to file with level control
-  // Levels: trace=0, debug=1, info=2, warn=3, error=4, off=5
-  int _flutterLogLevel = 1; // default: debug
+  // Levels (matches Settings UI): off=0, trace=1, debug=2, info=3, warn=4, error=5
+  int _flutterLogLevel = 3; // default: info (same as Settings)
   String _flutterLogPath = 'debug_log.txt';
-  bool _flutterFileLogging = true;
+  bool _flutterFileLogging = false; // default: off (same as Settings)
 
-  void _debugLog(String msg, {int level = 1}) {
+  void _debugLog(String msg, {int level = 2}) {
     // Check if logging is enabled and level is sufficient
-    if (!_flutterFileLogging || level < _flutterLogLevel) return;
+    if (!_flutterFileLogging || _flutterLogLevel == 0 || level < _flutterLogLevel) return;
     
     try {
       final file = File(_flutterLogPath);
-      final levelStr = ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR'][level.clamp(0, 4)];
+      final levelStr = ['OFF', 'TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR'][level.clamp(0, 5)];
       file.writeAsStringSync('${DateTime.now()} [$levelStr] $msg\n', mode: FileMode.append);
     } catch (_) {
       // Ignore file write errors
@@ -714,25 +714,20 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               ch.currentValue = pts.last.value;
             }
           } else {
-            // ch.data has data, append latest points
+            // Get delta data: all new points since last swap (front buffer has delta only)
             try {
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
-                ch.currentValue = latestData.last.value;
-                // Append new data points with sample index X values
-                // Use negative indices: newest at x=0, older points negative
+                // Compute the next X index from the last point in data
+                final nextX = ch.data.isEmpty ? 0.0 : (ch.data.last.x + 1.0);
+                // Append delta points with sequential X values
                 for (int k = 0; k < latestData.length; k++) {
-                  ch.data.add(_DataPoint(0.0, latestData[k].value));
+                  ch.data.add(_DataPoint(nextX + k, latestData[k].value));
                 }
                 ch.currentValue = latestData.last.value;
                 // Keep only _maxPoints points (trim from front, keep newest)
                 if (ch.data.length > _maxPoints) {
                   ch.data = ch.data.sublist(ch.data.length - _maxPoints);
-                }
-                // Renumber X values: newest at x=0, older points at negative indices
-                final int totalLen = ch.data.length;
-                for (int i = 0; i < totalLen; i++) {
-                  ch.data[i] = _DataPoint((i - totalLen + 1).toDouble(), ch.data[i].y);
                 }
               }
             } catch (_) {}
@@ -1056,11 +1051,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final appFile = File('$appData\\VCR\\app_config.json');
           if (await appFile.exists()) {
             final appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
-            final flutterLogLevel = appConfig['flutterLogLevel'] as String? ?? 'debug';
-            _flutterLogLevel = ['trace', 'debug', 'info', 'warn', 'error'].indexOf(flutterLogLevel);
-            if (_flutterLogLevel < 0) _flutterLogLevel = 1;
-            _flutterLogPath = appConfig['flutterLogPath'] as String? ?? 'debug_log.txt';
-            _flutterFileLogging = appConfig['flutterFileLogging'] as bool? ?? true;
+            final logLevel = appConfig['logLevel'] as String? ?? 'info';
+            _flutterLogLevel = ['off', 'trace', 'debug', 'info', 'warn', 'error'].indexOf(logLevel);
+            if (_flutterLogLevel < 0) _flutterLogLevel = 3;
+            _flutterLogPath = appConfig['logPath'] as String? ?? 'debug_log.txt';
+            _flutterFileLogging = appConfig['fileLoggingEnabled'] as bool? ?? false;
           }
         } catch (e) {
           debugPrint('Failed to load Flutter log settings: $e');
@@ -1077,11 +1072,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final appFile = File('$appData\\VCR\\app_config.json');
       if (await appFile.exists()) {
         final appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
-        final flutterLogLevel = appConfig['flutterLogLevel'] as String? ?? 'debug';
-        _flutterLogLevel = ['trace', 'debug', 'info', 'warn', 'error'].indexOf(flutterLogLevel);
-        if (_flutterLogLevel < 0) _flutterLogLevel = 1;
-        _flutterLogPath = appConfig['flutterLogPath'] as String? ?? 'debug_log.txt';
-        _flutterFileLogging = appConfig['flutterFileLogging'] as bool? ?? true;
+        final logLevel = appConfig['logLevel'] as String? ?? 'info';
+        _flutterLogLevel = ['off', 'trace', 'debug', 'info', 'warn', 'error'].indexOf(logLevel);
+        if (_flutterLogLevel < 0) _flutterLogLevel = 3;
+        _flutterLogPath = appConfig['logPath'] as String? ?? 'debug_log.txt';
+        _flutterFileLogging = appConfig['fileLoggingEnabled'] as bool? ?? false;
       }
     } catch (e) {
       debugPrint('Failed to load Flutter log settings: $e');
@@ -1213,11 +1208,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _clearData() {
     // Reset sample counter so X axis starts from 0 again
     plotClearCounter();
+    // Clear Rust-side data for all active devices
+    final deviceIds = _channels.map((c) => c.deviceId).toSet();
+    for (final deviceId in deviceIds) {
+      plotClearDevice(deviceId: deviceId);
+    }
     setState(() {
       _sampleIndex = 0;
       _demoPhase = 0;
+      // Reset per-channel demo sample indices
+      _demoSampleIndices.clear();
+      for (int i = 0; i < _channels.length; i++) {
+        _demoSampleIndices.add(0);
+      }
       for (final ch in _channels) {
         ch.data.clear();
+        ch.viewportData.clear();
         ch.currentValue = 0.0;
       }
       _totalPoints = 0;

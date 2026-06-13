@@ -80,7 +80,8 @@ impl ChannelBuffer {
     }
 
     /// Swap 前后缓冲区（UI 线程调用）
-    /// 将后端数据复制到前端，UI 读取前端数据（无需锁）
+    /// 将后端数据复制到前端（仅 delta），UI 读取前端数据（无需锁）
+    /// 每次 swap 后重置后端缓冲区，确保前端只包含自上次 swap 以来的新增数据
     pub fn swap(&mut self) {
         // 获取锁，防止 push 并发
         let _guard = match self.swap_lock.lock() {
@@ -91,7 +92,7 @@ impl ChannelBuffer {
             }
         };
         
-        // 复制后端数据到前端
+        // 复制后端数据到前端（delta：自上次 swap 以来新增的数据）
         let new_front = self.get_back_all();
         self.front_len = new_front.len();
         
@@ -104,6 +105,10 @@ impl ChannelBuffer {
         for (i, pt) in new_front.into_iter().enumerate() {
             self.front_data[i] = pt;
         }
+        
+        // 重置后端缓冲区：后续 push 只写入自本次 swap 以来的新数据
+        self.back_write_pos = 0;
+        self.back_len = 0;
     }
 
     /// 获取前端缓冲区数据（O(1) 读取，无锁）
@@ -404,26 +409,21 @@ impl PlotDataManager {
     }
 
     /// 获取通道最新数据点（O(1) 查询）
-    pub fn get_latest_data(&self, device_id: &str, channel: &str) -> Option<DataPoint> {
+    /// 获取通道最新数据（自上次 swap 以来所有新增的点，从前端缓冲区读取）
+    pub fn get_latest_data(&self, device_id: &str, channel: &str) -> Vec<DataPoint> {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
         
-        devices.get(device_id)
-            .and_then(|channels| {
-                channels.get(channel)
-                    .map(|buffer| {
-                        // 前端缓冲区最新点 = (write_pos - 1 + capacity) % capacity
-                        let data = buffer.lock().unwrap();
-                        if data.front_len == 0 {
-                            return None;
-                        }
-                        // 从前端读取最新点
-                        // 注意：front_data 和 back_data 长度相同
-                        // 最新数据在后端 write_pos-1 的位置
-                        let latest_idx = (data.back_write_pos + data.back_capacity - 1) % data.back_capacity;
-                        Some(data.back_data[latest_idx].clone())
-                    })
-            })
-            .flatten()
+        if let Some(device_channels) = devices.get(device_id) {
+            if let Some(buffer) = device_channels.get(channel) {
+                let data = lock_mutex(buffer);
+                if data.front_len == 0 {
+                    return vec![];
+                }
+                // 返回前端缓冲区所有数据（自上次 swap 以来的 delta）
+                return data.front_data[..data.front_len].to_vec();
+            }
+        }
+        vec![]
     }
 
     /// 获取通道数据：视口裁剪 + min/max 降采样

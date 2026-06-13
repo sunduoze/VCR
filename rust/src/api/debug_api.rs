@@ -169,10 +169,10 @@ pub fn start_receive_loop_if_needed(device_id: &str) {
     let has_task = lock_mutex(&RECEIVE_TASKS)
         .contains_key(device_id);
     if !has_task {
-        println!("🧪 [DEBUG] 启动接收循环: {}", device_id);
+        log::info!("🧪 [DEBUG] 启动接收循环: {}", device_id);
         spawn_receive_loop(device_id.to_string());
     } else {
-        println!("🧪 [DEBUG] 接收循环已存在: {}", device_id);
+        log::info!("🧪 [DEBUG] 接收循环已存在: {}", device_id);
     }
 }
 
@@ -193,22 +193,22 @@ fn spawn_receive_loop(device_id: String) {
             // Phase 1: receive (tokio I/O — no panic risk here)
             let data: Result<Vec<u8>, TransportError> = match SESSIONS.receive(&id).await {
                 Ok(data) if !data.is_empty() => {
-                    eprintln!("🧪 [DEBUG] [数据链路] 步骤1: 收到数据: {} 字节", data.len());
+                    log::debug!("🧪 [DEBUG] [数据链路] 步骤1: 收到数据: {} 字节", data.len());
                     Ok(data)
                 },
                 Ok(_) => {
-                    println!("🧪 [DEBUG] 收到空数据，继续等待...");
+                    log::debug!("🧪 [DEBUG] 收到空数据，继续等待...");
                     continue;    // empty timeout — retry
                 },
                 Err(TransportError::Timeout) => {
-                    println!("🧪 [DEBUG] 接收超时，继续等待...");
+                    log::debug!("🧪 [DEBUG] 接收超时，继续等待...");
                     continue;
                 },
                 Err(e) => {
                     let _ = std::panic::catch_unwind(|| {
                         DEBUG.log_error(&id, &format!("Device disconnected: {:?}", e));
                     });
-                    println!("🧪 [DEBUG] 设备断开连接: {:?}", e);
+                    log::warn!("🧪 [DEBUG] 设备断开连接: {:?}", e);
                     break;
                 }
             };
@@ -245,15 +245,15 @@ fn spawn_receive_loop(device_id: String) {
                     for line in lines {
                         let result = parse_csv_line(line);
                         if result.success && !result.channels.is_empty() {
-                            eprintln!("🧪 [DEBUG] [数据链路] 步骤2: 解析成功, 通道数: {}", result.channels.len());
+                            log::debug!("🧪 [DEBUG] [数据链路] 步骤2: 解析成功, 通道数: {}", result.channels.len());
                             // Use counter-based X axis (from 0, incrementing)
                             let counter = PLOT_DATA.next_counter() as f64;
                             // Channel naming: first value → prefix (or "ch0"), others → ch1, ch2...
                             let prefix = result.metadata.get("prefix").map(|s| s.as_str());
                             PLOT_DATA.push_batch_with_names(&id, counter, prefix, &result.channels);
-                            eprintln!("🧪 [DEBUG] [数据链路] 步骤3: 数据已存储到 PLOT_DATA, pts={:.0}", counter);
+                            log::debug!("🧪 [DEBUG] [数据链路] 步骤3: 数据已存储到 PLOT_DATA, pts={:.0}", counter);
                         } else {
-                            eprintln!("🧪 [DEBUG] [数据链路] 步骤2: 解析失败: {:?}", line);
+                            log::warn!("🧪 [DEBUG] [数据链路] 步骤2: 解析失败: {:?}", line);
                         }
                     }
                 })).is_ok();

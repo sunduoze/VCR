@@ -64,14 +64,14 @@ impl CsvParser {
         }
 
         // 检查是否忽略 image 前缀
-        if self.config.ignore_image {
-            if trimmed.starts_with("image:") || trimmed.starts_with("image=") {
-                return ParseResult::failure(
-                    "Image prefix reserved".to_string(),
-                    Some(trimmed.to_string()),
-                )
-                .with_metadata("prefix".to_string(), "image".to_string());
-            }
+        if self.config.ignore_image
+            && (trimmed.starts_with("image:") || trimmed.starts_with("image="))
+        {
+            return ParseResult::failure(
+                "Image prefix reserved".to_string(),
+                Some(trimmed.to_string()),
+            )
+            .with_metadata("prefix".to_string(), "image".to_string());
         }
 
         // 查找分隔符(: 或 =)
@@ -102,7 +102,7 @@ impl CsvParser {
 
         // 解析数值：按逗号或空格分割
         let values: Vec<f64> = data_part
-            .split(|c| c == ',' || c == ' ')
+            .split([',', ' '])
             .filter_map(|s| s.trim().parse::<f64>().ok())
             .collect();
 
@@ -180,7 +180,7 @@ impl ProtocolParser for CsvParser {
         let text = String::from_utf8_lossy(data);
 
         // 查找第一个行结束符
-        let line_end = text.find(|c| c == '\n' || c == '\r');
+        let line_end = text.find(['\n', '\r']);
         let line = if let Some(pos) = line_end {
             &text[..pos]
         } else {
@@ -191,7 +191,7 @@ impl ProtocolParser for CsvParser {
     }
 
     fn parse_text(&self, text: &str) -> ParseResult {
-        let line_end = text.find(|c| c == '\n' || c == '\r');
+        let line_end = text.find(['\n', '\r']);
         let line = if let Some(pos) = line_end {
             &text[..pos]
         } else {

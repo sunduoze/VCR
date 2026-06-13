@@ -3,7 +3,7 @@
 // Design: 12M points pre-allocated (~192MB), cache-line aligned, no false sharing
 
 use std::cell::UnsafeCell;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Cache line size for modern x86 CPUs
 const CACHE_LINE_SIZE: usize = 128;

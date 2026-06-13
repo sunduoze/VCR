@@ -3,7 +3,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// 安全获取 Mutex 锁，遇到 PoisonError 时恢复而非 panic
-fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -53,9 +53,7 @@ impl DebugSessionManager {
 
     pub fn mark_connected(&self, device_id: &str) {
         let mut sessions = lock_mutex(&self.sessions);
-        let entry = sessions
-            .entry(device_id.to_string())
-            .or_insert_with(DebugSessionInner::default);
+        let entry = sessions.entry(device_id.to_string()).or_default();
         entry.connected = true;
         entry.log.push(DebugLogEntry {
             timestamp: now_ms(),
@@ -188,9 +186,7 @@ impl DebugSessionManager {
 
     fn push_entry(&self, device_id: &str, direction: &str, data: &[u8], display: String) {
         let mut sessions = lock_mutex(&self.sessions);
-        let entry = sessions
-            .entry(device_id.to_string())
-            .or_insert_with(DebugSessionInner::default);
+        let entry = sessions.entry(device_id.to_string()).or_default();
 
         // 添加新条目
         entry.log.push(DebugLogEntry {

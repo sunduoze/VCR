@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, MutexGuard};
 
 /// 安全获取 Mutex 锁，遇到 PoisonError 时恢复而非 panic
-fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -185,7 +185,7 @@ fn spawn_receive_loop(device_id: String) {
 
     // ✅ 添加外层 panic 防护：确保异步任务中的 panic 不会导致整个程序崩溃
     let handle = RT.spawn(async move {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // 注意：catch_unwind 不能捕获 async 块中的 panic
             // 所以我们使用另一种策略：在循环内部添加错误处理
         }));
@@ -241,7 +241,7 @@ fn spawn_receive_loop(device_id: String) {
                 let parse_ok = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     // Split by all line endings: \n, \r\n, \n\r, \r
                     let lines: Vec<&str> = text
-                        .split(|c| c == '\n' || c == '\r')
+                        .split(['\n', '\r'])
                         .map(|l| l.trim())
                         .filter(|l| !l.is_empty())
                         .collect();

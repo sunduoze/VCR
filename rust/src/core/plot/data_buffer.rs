@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 /// 安全获取 Mutex 锁，遇到 PoisonError 时恢复而非 panic
-fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -209,6 +209,12 @@ pub struct PlotDataManager {
     sample_counter: RwLock<u64>,
 }
 
+impl Default for PlotDataManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlotDataManager {
     pub fn new() -> Self {
         Self {
@@ -313,9 +319,7 @@ impl PlotDataManager {
                 channel
             );
             let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
-            devices
-                .entry(device_id.to_string())
-                .or_insert_with(HashMap::new);
+            devices.entry(device_id.to_string()).or_default();
             if let Some(dc) = devices.get_mut(device_id) {
                 dc.insert(
                     channel.to_string(),
@@ -332,7 +336,7 @@ impl PlotDataManager {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
         if let Some(device_channels) = devices.get(device_id) {
             if let Some(buffer) = device_channels.get(channel) {
-                lock_mutex(&buffer).push(timestamp_ms, value);
+                lock_mutex(buffer).push(timestamp_ms, value);
             }
         }
     }
@@ -361,9 +365,7 @@ impl PlotDataManager {
         // Single lock: create device + channels if needed
         {
             let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
-            let dc = devices
-                .entry(device_id.to_string())
-                .or_insert_with(HashMap::new);
+            let dc = devices.entry(device_id.to_string()).or_default();
             let cap = *self
                 .default_capacity
                 .read()
@@ -380,7 +382,7 @@ impl PlotDataManager {
             if let Some(dc) = devices.get(device_id) {
                 for (ch_name, value) in &channel_names {
                     if let Some(buf) = dc.get(ch_name) {
-                        lock_mutex(&buf).push(timestamp_ms, *value);
+                        lock_mutex(buf).push(timestamp_ms, *value);
                     }
                 }
             }
@@ -426,9 +428,7 @@ impl PlotDataManager {
         // Single lock: create device + channels if needed (push_batch_with_names)
         {
             let mut devices = self.devices.write().unwrap_or_else(|e| e.into_inner());
-            let dc = devices
-                .entry(device_id.to_string())
-                .or_insert_with(HashMap::new);
+            let dc = devices.entry(device_id.to_string()).or_default();
             let cap = *self
                 .default_capacity
                 .read()
@@ -445,7 +445,7 @@ impl PlotDataManager {
             if let Some(dc) = devices.get(device_id) {
                 for (ch_name, value) in &channel_names {
                     if let Some(buf) = dc.get(ch_name) {
-                        lock_mutex(&buf).push(timestamp_ms, *value);
+                        lock_mutex(buf).push(timestamp_ms, *value);
                     }
                 }
             }
@@ -482,7 +482,7 @@ impl PlotDataManager {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
         if let Some(device_channels) = devices.get(device_id) {
             if let Some(buffer) = device_channels.get(channel) {
-                let data = lock_mutex(&buffer).get_all();
+                let data = lock_mutex(buffer).get_all();
                 log::debug!(
                     "[PlotBuffer] get_channel_data: device={}, ch={}, len={}",
                     device_id,
@@ -537,7 +537,7 @@ impl PlotDataManager {
             let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
             if let Some(device_channels) = devices.get(device_id) {
                 if let Some(buffer) = device_channels.get(channel) {
-                    let data = lock_mutex(&buffer).get_all();
+                    let data = lock_mutex(buffer).get_all();
                     log::debug!("[PlotBuffer] get_channel_viewport_data: device={}, ch={}, total={}, x=[{:.1},{:.1}], max={}",
                         device_id, channel, data.len(), x_min, x_max, max_points);
                     data
@@ -629,13 +629,13 @@ impl PlotDataManager {
         let last = viewport_data.last().unwrap();
         if result
             .first()
-            .map_or(true, |p| p.timestamp_ms != first.timestamp_ms)
+            .is_none_or(|p| p.timestamp_ms != first.timestamp_ms)
         {
             result.insert(0, *first);
         }
         if result
             .last()
-            .map_or(true, |p| p.timestamp_ms != last.timestamp_ms)
+            .is_none_or(|p| p.timestamp_ms != last.timestamp_ms)
         {
             result.push(*last);
         }
@@ -649,7 +649,7 @@ impl PlotDataManager {
         let mut result = HashMap::new();
         if let Some(device_channels) = devices.get(device_id) {
             for (ch, buffer) in device_channels {
-                result.insert(ch.clone(), lock_mutex(&buffer).get_all());
+                result.insert(ch.clone(), lock_mutex(buffer).get_all());
             }
         }
         result
@@ -669,7 +669,7 @@ impl PlotDataManager {
         let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
         if let Some(device_channels) = devices.get(device_id) {
             for buffer in device_channels.values() {
-                lock_mutex(&buffer).clear();
+                lock_mutex(buffer).clear();
             }
         }
     }

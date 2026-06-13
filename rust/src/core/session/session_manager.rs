@@ -274,7 +274,7 @@ impl SessionManager {
     /// 检查连接状态
     pub async fn is_connected(&self, device_id: &str) -> bool {
         let sessions = self.sessions.read().await;
-        sessions.get(device_id).map_or(false, |s| match s {
+        sessions.get(device_id).is_some_and(|s| match s {
             ActiveSession::Serial(t) => {
                 // 尝试快速检测：如果不能锁说明正在用，视为已连接
                 t.try_lock().map_or(true, |g| g.is_connected())
@@ -435,7 +435,7 @@ impl SessionManager {
             }
         }
         let handles = crate::core::app_context::block_on(self.serial_handles.read());
-        handles.get(device_id).map_or(false, |h| read_cts(h))
+        handles.get(device_id).is_some_and(read_cts)
     }
 
     /// Read DSR signal status — uses raw HANDLE directly
@@ -454,6 +454,6 @@ impl SessionManager {
             }
         }
         let handles = crate::core::app_context::block_on(self.serial_handles.read());
-        handles.get(device_id).map_or(false, |h| read_dsr(h))
+        handles.get(device_id).is_some_and(read_dsr)
     }
 }

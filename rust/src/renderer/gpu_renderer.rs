@@ -18,6 +18,7 @@ const MAX_VERTEX_CAPACITY: u64 = 500_000;
 const VERTEX_STRIDE: u64 = 8; // vec2<f32>
 
 /// Staging pool max size (lazy allocation, grows on demand)
+#[allow(dead_code)]
 const STAGING_MAX_SIZE: usize = 4;
 
 // ── Structs ─────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ pub struct GpuRenderer {
 
     // Persistent vertex buffer — allocated once, updated per frame
     vertex_buffer: Buffer,
+    #[allow(dead_code)]
     vertex_capacity: u64,
 
     // Compute pipeline for GPU-side LTTB decimation
@@ -51,6 +53,7 @@ pub struct GpuRenderer {
 
     // Staging buffer pool for readback
     staging_pool: Vec<StagingEntry>,
+    #[allow(dead_code)]
     staging_idx: usize,
 
     // Intermediate buffers for compute pipeline
@@ -390,7 +393,7 @@ impl GpuRenderer {
         if self
             .decimated_buffer
             .as_ref()
-            .map_or(true, |_| self.decimated_capacity < target)
+            .is_none_or(|_| self.decimated_capacity < target)
         {
             // Allocate with some headroom (2x target)
             let cap = target.max(1024).next_power_of_two();
@@ -477,7 +480,7 @@ impl GpuRenderer {
             cpass.set_pipeline(&self.lttb_pipeline);
             cpass.set_bind_group(0, &bind_group, &[]);
             // Dispatch: ceil(output_count / 64) workgroups
-            let workgroups = (output_count + 63) / 64;
+            let workgroups = output_count.div_ceil(64);
             cpass.dispatch_workgroups(workgroups, 1, 1);
         }
 

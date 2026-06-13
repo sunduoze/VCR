@@ -6,6 +6,7 @@ pub struct DataGenerator {
     signal_type: SignalType,
     amplitude: f64,
     frequency: f64,
+    #[allow(dead_code)]
     phase: f64,
     noise_level: f64,
     current_phase: f64,

@@ -158,6 +158,7 @@ pub fn set_log_file_path(path: &str) {
 }
 
 /// Get the current log file path.
+#[allow(static_mut_refs)]
 pub fn get_log_file_path() -> String {
     unsafe {
         LOG_FILE_PATH

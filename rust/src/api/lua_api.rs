@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 /// 安全获取 Mutex 锁,遇到 PoisonError 时恢复而非 panic
 /// Poisoned 仅表示"持锁期间曾发生 panic",数据本身通常仍可用
-fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<T> {
+fn lock_mutex<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     match mutex.lock() {
         Ok(guard) => guard,
         Err(poisoned) => {
@@ -180,7 +180,7 @@ impl LuaEngine {
         // 字符串扩展:fromHex
         let from_hex_fn = self.lua.create_function(move |_lua, hex: String| {
             let hex_clean: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
-            if hex_clean.len() % 2 != 0 {
+            if !hex_clean.len().is_multiple_of(2) {
                 return Err(LuaError::RuntimeError("Invalid hex string".to_string()));
             }
             let bytes: Vec<u8> = (0..hex_clean.len())
@@ -255,10 +255,7 @@ impl LuaEngine {
             self.lua
                 .create_function(move |_lua, (channel, callback): (String, Function)| {
                     let mut callbacks = lock_mutex(&CALLBACKS);
-                    callbacks
-                        .entry(channel)
-                        .or_insert_with(Vec::new)
-                        .push(callback);
+                    callbacks.entry(channel).or_default().push(callback);
                     Ok(())
                 })?;
         globals.set("apiSetCb", set_cb_fn)?;
@@ -390,7 +387,7 @@ impl LuaEngine {
         // 同步阻塞:Lua 调用后挂起,等待 Dart 端提供输入
         let input_box_fn = self.lua.create_function(move |_lua, args: MultiValue| {
             let args_vec: Vec<Value> = args.into_iter().collect();
-            let prompt = match args_vec.get(0) {
+            let prompt = match args_vec.first() {
                 Some(Value::String(s)) => s.to_str().map(|s| s.to_string()).unwrap_or_default(),
                 _ => String::new(),
             };

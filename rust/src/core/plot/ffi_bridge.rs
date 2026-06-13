@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::core::plot::lockfree_buffer::{LockFreeRingBuffer, RingDataPoint};
-use crate::core::plot::query::{self, LatestTimestamp, PointsBuffer};
+use crate::core::plot::query::{self, PointsBuffer};
 use crate::core::plot::time_bucket::TimeBucketPyramid;
 
 // ── Global state ────────────────────────────────────────────────────

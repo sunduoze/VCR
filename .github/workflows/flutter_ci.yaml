@@ -48,8 +48,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+            rust/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('rust/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-cargo-
 
@@ -70,8 +70,36 @@ jobs:
       - name: Run analyze
         run: flutter analyze lib/
 
+      - name: Build Rust DLL (explicit, for CI reliability)
+        working-directory: rust
+        run: cargo build --release
+
       - name: Build Flutter Windows Release
         run: flutter build windows --release
+
+      - name: Copy Rust DLL to Release (fallback)
+        shell: pwsh
+        run: |
+          $src = "rust/target/release/vcr_lib.dll"
+          $dst = "build/windows/x64/runner/Release/vcr_lib.dll"
+          if (Test-Path $src) {
+            Copy-Item $src $dst -Force
+            Write-Host "vcr_lib.dll copied to Release dir"
+          } else {
+            Write-Host "WARNING: $src not found"
+            Get-ChildItem -Recurse -Filter "*.dll" -Path rust/target/ | Select-Object FullName, Length
+          }
+
+      - name: Verify Release assets
+        shell: pwsh
+        run: |
+          Write-Host "=== Release directory contents ==="
+          Get-ChildItem build/windows/x64/runner/Release/ -Filter "*.dll" | Select-Object Name, Length
+          if (-not (Test-Path build/windows/x64/runner/Release/vcr_lib.dll)) {
+            Write-Host "ERROR: vcr_lib.dll is missing!"
+            exit 1
+          }
+          Write-Host "vcr_lib.dll verified OK"
 
       - name: Upload Windows Artifact
         uses: actions/upload-artifact@v5

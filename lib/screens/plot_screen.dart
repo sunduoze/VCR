@@ -1909,8 +1909,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                             group.name,
                             style: const TextStyle(
                               color: Color(0xFF8B949E),
-                              fontSize: 10,
-                              fontFamily: 'Consolas, monospace',
+                              fontSize: 16,
+                              fontFamily: 'DS-Digital',
                             ),
                           ),
                           const Spacer(),
@@ -2490,9 +2490,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                               ch.visible ? ch.currentValue.toStringAsFixed(ch.decimals) : '---',
                               style: TextStyle(
                                 color: ch.visible ? ch.color : ch.color.withValues(alpha: 0.3),
-                                fontSize: 22,
+                                fontSize: 28,
                                 fontWeight: FontWeight.bold,
-                                fontFamily: 'Consolas, monospace',
+                                fontFamily: 'DS-Digital',
                               ),
                             ),
                             Text(
@@ -2968,8 +2968,8 @@ class _PlotPainter extends CustomPainter {
     ..strokeWidth = 1.0;
   static final _gridTextStyle = TextStyle(
     color: const Color(0xFF8B949E),
-    fontSize: 9.0,
-    fontFamily: 'Consolas, monospace',
+    fontSize: 15,
+    fontFamily: 'DS-Digital',
   );
   static final _miniBgPaint = Paint()..color = const Color(0xDD161B22);
   static final _aaDownsamplePaint = Paint()
@@ -2999,18 +2999,18 @@ class _PlotPainter extends CustomPainter {
   static final _dkTooltipBg = Paint()..color = const Color(0xCC0D1117);
   static final _dkOverlayStyle = TextStyle(
     color: const Color(0xFF58A6FF),
-    fontSize: 11.0,
-    fontFamily: 'Consolas, monospace',
+    fontSize: 17,
+    fontFamily: 'DS-Digital',
   );
   static final _dkCoordStyle = TextStyle(
     color: const Color(0xFFC9D1D9),
-    fontSize: 11.0,
-    fontFamily: 'Consolas, monospace',
+    fontSize: 17,
+    fontFamily: 'DS-Digital',
   );
   static final _dkInfoStyle = TextStyle(
     color: const Color(0xFFB0B8C4),
-    fontSize: 10.0,
-    fontFamily: 'Consolas, monospace',
+    fontSize: 16,
+    fontFamily: 'DS-Digital',
   );
 
   // ═══ Light theme paints ═══
@@ -3026,18 +3026,18 @@ class _PlotPainter extends CustomPainter {
   static final _ltTooltipBg = Paint()..color = const Color(0xDDF6F8FA);
   static final _ltOverlayStyle = TextStyle(
     color: const Color(0xFF0969DA),
-    fontSize: 11.0,
-    fontFamily: 'Consolas, monospace',
+    fontSize: 17,
+    fontFamily: 'DS-Digital',
   );
   static final _ltCoordStyle = TextStyle(
     color: const Color(0xFF24292F),
-    fontSize: 11.0,
-    fontFamily: 'Consolas, monospace',
+    fontSize: 17,
+    fontFamily: 'DS-Digital',
   );
   static final _ltInfoStyle = TextStyle(
     color: const Color(0xFF57606A),
-    fontSize: 10.0,
-    fontFamily: 'Consolas, monospace',
+    fontSize: 16,
+    fontFamily: 'DS-Digital',
   );
   static final _miniBgLightPaint = Paint()..color = const Color(0xDDFFFFFF);
 
@@ -3268,8 +3268,8 @@ class _PlotPainter extends CustomPainter {
     // ── X axis labels ──
     final labelStyle = TextStyle(
       color: const Color(0xFF8B949E),
-      fontSize: 10.0,
-      fontFamily: 'Consolas, monospace',
+      fontSize: 16,
+      fontFamily: 'DS-Digital',
     );
     for (final tick in xTicks) {
       final sx = _xToScreen(tick, plotW) + plotLeft;
@@ -3314,8 +3314,8 @@ class _PlotPainter extends CustomPainter {
         final chTicks = _niceTicks(chYMin, chYMax, 6);
         final chLabelStyle = TextStyle(
           color: ch.color,
-          fontSize: 9.0,
-          fontFamily: 'Consolas, monospace',
+          fontSize: 15,
+          fontFamily: 'DS-Digital',
         );
 
         // Even index → left side, odd index → right side
@@ -3456,8 +3456,8 @@ class _PlotPainter extends CustomPainter {
         final ctp = TextPainter(
           text: TextSpan(text: chText, style: TextStyle(
             color: ch.color,
-            fontSize: 10.0,
-            fontFamily: 'Consolas, monospace',
+            fontSize: 16,
+            fontFamily: 'DS-Digital',
           )),
           textDirection: TextDirection.ltr,
         )..layout();

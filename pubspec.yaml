@@ -29,3 +29,13 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/
+  fonts:
+    - family: DS-Digital
+      fonts:
+        - asset: assets/fonts/DS-DIGI.TTF
+          weight: 400
+        - asset: assets/fonts/DS-DIGIB.TTF
+          weight: 700
+        - asset: assets/fonts/DS-DIGII.TTF
+          style: italic
+        - asset: assets/fonts/DS-DIGIT.TTF

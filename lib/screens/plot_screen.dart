@@ -2574,6 +2574,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         onChanged: (v) {
                           if (v != null) {
                             setDialogState(() => ch.decimals = v);
+                            _viewportRefreshCount++;
                             setState(() {});
                           }
                         },
@@ -2822,6 +2823,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                                 onChanged: (v) {
                                   if (v != null) {
                                     setDialogState(() => ch.decimals = v);
+                                    _viewportRefreshCount++;
                                     setState(() {});
                                   }
                                 },

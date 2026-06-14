@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:isolate';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
+import 'dart:ffi' hide Size; // 🚀 Phase C: Pointer for native buffer reuse (hide Size to avoid dart:ui conflict)
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/gestures.dart';
@@ -15,6 +16,8 @@ import '../src/rust/api/device_api.dart';
 import '../src/rust/api/debug_api.dart';
 import '../src/rust/api/plot_api.dart';
 import '../src/rust/frb_generated.dart';
+import '../core/ffi_bridge.dart';
+import 'package:ffi/ffi.dart' show calloc;
 
 // ============================================================================
 // Plot Screen — Oscilloscope-style waveform viewer
@@ -105,7 +108,8 @@ class PlotChannel {
   LineStyle lineStyle;
   double lineWidth;
   List<_DataPoint> data; // Full data (for scale/cursor)
-  List<_DataPoint> viewportData; // Decimated ChartViewport data (for painting)
+  List<_DataPoint> viewportData; // Decimated ChartViewport avg line (for painting)
+  List<_DataPoint> envelopeData; // 🚀 Phase B: envelope (min+max pairs per bucket) for fill
   double currentValue;
   double yMin; // Per-channel Y range
   double yMax;
@@ -126,6 +130,7 @@ class PlotChannel {
     this.lineWidth = 1.5,
     List<_DataPoint>? data,
     List<_DataPoint>? viewportData,
+    List<_DataPoint>? envelopeData,
     this.currentValue = 0.0,
     this.yMin = 0,
     this.yMax = 1,
@@ -134,7 +139,8 @@ class PlotChannel {
     this.autoScaleY = true,
     this.plotGroupId = 'default',
   }) : data = data ?? [],
-       viewportData = viewportData ?? [];
+       viewportData = viewportData ?? [],
+       envelopeData = envelopeData ?? [];
 
   Map<String, dynamic> toJson() => {
     'deviceId': deviceId,
@@ -257,6 +263,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // 🚀 P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
   int _viewportRefreshCount = 0;
+
+  // 🚀 Phase C: Reusable query buffers (allocated once, resized lazily)
+  Float64List? _queryBuffer;        // Reusable Float64List for _refreshViewportData
+  Pointer<CDataPoint>? _queryNative; // Reusable native buffer for FFI queries
+  int _queryNativeCap = 0;           // Current native buffer capacity (in CDataPoint elements)
 
   // ── Interaction state ──
   Offset? _mousePosition;
@@ -531,6 +542,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           // Store per-channel sample index (continuous); displayed X = pt.x - data.last.x (offset from newest)
           _channels[i].data.add(_DataPoint(_demoSampleIndices[i].toDouble(), val));
           _channels[i].currentValue = val;
+          // 🚀 Phase A: Feed into per-channel LOD pyramid
+          FfiBridge.instance.pushChannelPoint(i, _demoSampleIndices[i].toDouble(), val);
           _demoSampleIndices[i]++;
         }
       }
@@ -606,6 +619,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Refresh viewportData for all channels using current _xMin/_xMax.
   /// Called after scrollbar drag, zoom, or any ChartViewport change.
+  /// 🚀 Phase A: Uses per-channel Rust LOD pyramid (pre-computed bucket aggregation)
+  /// instead of O(n) binary search + sublist + step decimation.
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
@@ -614,64 +629,113 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _debugLog('[DEBUG] _refreshViewportData: _xMin=$_xMin _xMax=$_xMax _screenWidth=$_screenWidth maxPts=$maxPts');
       _debugLog('[DEBUG]   first ch.data.length=${_channels.first.data.length} newestAbsX=${_channels.first.data.last.x}');
     }
-    for (final ch in _channels) {
-      if (!ch.visible) {
+
+    final bridge = FfiBridge.instance;
+
+    // 🚀 Phase C: Reuse Float64List buffer (resize lazily only when maxPts changes)
+    final buffer = _queryBuffer;
+    if (buffer == null || buffer.length != maxPts * 2) {
+      _queryBuffer = Float64List(maxPts * 2);
+    }
+    final fb = _queryBuffer!;
+
+    // 🚀 Phase C: Reuse native CDataPoint buffer
+    Pointer<CDataPoint> nativeBuf;
+    if (_queryNative != null && _queryNativeCap >= maxPts) {
+      nativeBuf = _queryNative!;
+    } else {
+      // Free old buffer if it exists (resize up)
+      if (_queryNative != null) {
+        calloc.free(_queryNative!);
+      }
+      _queryNative = calloc<CDataPoint>(maxPts);
+      _queryNativeCap = maxPts;
+      nativeBuf = _queryNative!;
+    }
+
+    for (int ci = 0; ci < _channels.length; ci++) {
+      final ch = _channels[ci];
+      if (!ch.visible || ch.data.isEmpty) {
         ch.viewportData = [];
+        ch.envelopeData = [];
         continue;
       }
 
-      // 统一处理 Demo 和 Real 模式的 viewportData 构建
-      // 两种模式都使用相同的坐标系统：X 值是相对索引（-N+1 到 0）
-      if (ch.data.isEmpty) { ch.viewportData = []; continue; }
-      
-      // 使用二进制搜索快速定位视口范围内的数据点
       final newestAbsX = ch.data.last.x; // 最新点的绝对索引
-      final targetMin = newestAbsX + _xMin; // 转换为绝对坐标进行搜索
-      final targetMax = newestAbsX + _xMax;
-      
-      // Binary search for targetMin (first index where x >= targetMin)
-      int startIdx = _binarySearch(ch.data, targetMin);
-      // Binary search for targetMax (first index where x > targetMax)
-      int endIdx = _binarySearch(ch.data, targetMax) + 1;
-      
-      startIdx = startIdx.clamp(0, ch.data.length);
-      endIdx = endIdx.clamp(startIdx, ch.data.length);
-      
-      if (startIdx >= endIdx) { ch.viewportData = []; continue; }
-      
-      final visible = ch.data.sublist(startIdx, endIdx);
-      if (visible.isEmpty) { ch.viewportData = []; continue; }
-      
-      // 调试：打印 visible.length 和 maxPts
-      _debugLog('[VPD] ${ch.channelName}: visible.length=${visible.length} maxPts=$maxPts');
-      
-      // 🚀 P1-C 优化：LOD自适应抽稀（增强版）
-      // 计算数据点密度（每像素多少个点）
-      final plotWidth = _plotWidth();
-      final density = visible.length / plotWidth;
-      
-      List<_DataPoint> viewportData;
-      if (density > 0.5) {
-        // 密度超过每像素0.5个点 → 抽稀到每像素最多0.5个点（增强抽稀）
-        final targetPoints = plotWidth.round().clamp(100, 1000);
-        final step = (visible.length / targetPoints).ceil().clamp(1, visible.length);
-        viewportData = [
-          for (int i = 0; i < visible.length; i += step)
-            _DataPoint(visible[i].x - newestAbsX, visible[i].y),
-        ];
-        _debugLog('[LOD] Decimated: ${visible.length} → ${viewportData.length} (density=${density.toStringAsFixed(1)} pts/px)');
-      } else {
-        // 密度 ≤ 0.5 → 不抽稀，保持原始数据
-        viewportData = visible.map((pt) => _DataPoint(pt.x - newestAbsX, pt.y)).toList();
-        _debugLog('[LOD] No decimation needed (density=${density.toStringAsFixed(1)} pts/px)');
+      final tMin = newestAbsX + _xMin;   // 视口绝对坐标范围
+      final tMax = newestAbsX + _xMax;
+
+      // 🚀 Phase A+B+C: Query per-channel pyramid with reusable buffers
+      final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxPts, fb);
+
+      if (count == 0) {
+        // 🚀 Phase C TODO: Remove fallback once per-channel pyramid is proven stable across all data sources.
+        // Pyramid empty for this channel → fallback to raw data path
+        _debugLog('[VPD] ${ch.channelName}: pyramid empty, fallback to raw data');
+        ch.viewportData = _fallbackViewportData(ch, newestAbsX, tMin, tMax, maxPts);
+        ch.envelopeData = []; // No envelope in fallback mode
+        continue;
       }
-      
-      ch.viewportData = viewportData;
-      // 调试：打印 viewportData.length
-      _debugLog('[VPD]   viewportData.length=${ch.viewportData.length}');
+
+      // 🚀 Phase B+C: Reuse existing list objects (clear+add) to avoid per-frame allocation.
+      // Convert pyramid result (min+max pairs per bucket) to:
+      //   viewportData = avg line (foreground rendering)
+      //   envelopeData = min+max envelope (semi-transparent fill)
+      ch.viewportData.clear();
+      ch.envelopeData.clear();
+      for (int i = 0; i < count; i += 2) {
+        if (i + 1 >= count) break;
+        final xMin = fb[i * 2] - newestAbsX;       // bucket start X (relative)
+        final yMin = fb[i * 2 + 1];                // bucket min value
+        final _ = fb[(i + 1) * 2] - newestAbsX;     // bucket end X (same as start in pyramid pairs)
+        final yMax = fb[(i + 1) * 2 + 1];           // bucket max value
+        final yAvg = (yMin + yMax) * 0.5;
+
+        // Avg line (foreground): one point per bucket
+        ch.viewportData.add(_DataPoint(xMin, yAvg));
+
+        // Envelope fill (background): min+max pair per bucket
+        ch.envelopeData.add(_DataPoint(xMin, yMin));
+        ch.envelopeData.add(_DataPoint(xMin, yMax));
+      }
+      // Catch odd trailing point (shouldn't happen, but safe)
+      if (count % 2 != 0 && count > 0) {
+        final lastX = fb[(count - 1) * 2] - newestAbsX;
+        final lastY = fb[(count - 1) * 2 + 1];
+        ch.viewportData.add(_DataPoint(lastX, lastY));
+      }
+
+      _debugLog('[VPD] ${ch.channelName}: pyramid → ${ch.viewportData.length} avg + ${ch.envelopeData.length} env pts (${count} raw, ${count ~/ 2} buckets)');
     }
     // 🚀 P3-B 优化：ChartViewport 刷新完成，递增计数器
     _viewportRefreshCount++;
+  }
+
+  /// 🚀 Phase C TODO: Remove this fallback method once per-channel pyramid is proven stable.
+  /// Fallback viewport extraction: binary search + step decimation on raw data.
+  /// Used when per-channel pyramid has not been populated yet.
+  List<_DataPoint> _fallbackViewportData(PlotChannel ch, double newestAbsX,
+      double targetMin, double targetMax, int maxPts) {
+    int startIdx = _binarySearch(ch.data, targetMin);
+    int endIdx = _binarySearch(ch.data, targetMax) + 1;
+    startIdx = startIdx.clamp(0, ch.data.length);
+    endIdx = endIdx.clamp(startIdx, ch.data.length);
+    if (startIdx >= endIdx) return [];
+
+    final visible = ch.data.sublist(startIdx, endIdx);
+    if (visible.isEmpty) return [];
+
+    final plotWidth = _plotWidth();
+    final density = visible.length / plotWidth;
+
+    if (density > 0.5) {
+      final targetPoints = plotWidth.round().clamp(100, 1000);
+      final step = (visible.length / targetPoints).ceil().clamp(1, visible.length);
+      return [for (int i = 0; i < visible.length; i += step)
+        _DataPoint(visible[i].x - newestAbsX, visible[i].y)];
+    } else {
+      return visible.map((pt) => _DataPoint(pt.x - newestAbsX, pt.y)).toList();
+    }
   }
 
   /// 分离的数据轮询（策略 B: 减少 FRB 调用）
@@ -747,6 +811,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 return _DataPoint(sampleIdx.toDouble(), pts[i].value);
               });
               ch.currentValue = pts.last.value;
+              // 🚀 Phase A: Feed full data into per-channel pyramid
+              final bridge = FfiBridge.instance;
+              final batch = <(double, double)>[];
+              for (int i = 0; i < pts.length; i++) {
+                batch.add(((i - totalPts + 1).toDouble(), pts[i].value));
+              }
+              bridge.pushChannelBatch(targetIdx, batch);
             }
           } else {
             // Get delta data: all new points since last swap (front buffer has delta only)
@@ -756,8 +827,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 // Compute the next X index from the last point in data
                 final nextX = ch.data.isEmpty ? 0.0 : (ch.data.last.x + 1.0);
                 // Append delta points with sequential X values
+                final bridge = FfiBridge.instance;
                 for (int k = 0; k < latestData.length; k++) {
-                  ch.data.add(_DataPoint(nextX + k, latestData[k].value));
+                  final px = nextX + k;
+                  final py = latestData[k].value;
+                  ch.data.add(_DataPoint(px, py));
+                  bridge.pushChannelPoint(targetIdx, px, py);
                 }
                 ch.currentValue = latestData.last.value;
                 // Keep only _maxPoints points (trim from front, keep newest)
@@ -839,6 +914,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     setState(() {
       _useRealData = !_useRealData;
       _saveConfig();
+
+      // 🚀 Phase C: Clear all per-channel pyramids to prevent demo↔real data mixing.
+      // Pyramids are keyed by channel index; switching modes reuses the same indices
+      // but with different channel lists (_demoChannels vs _realChannels).
+      FfiBridge.instance.clearAllChannelPyramids();
+      // 🚀 Also bump viewportRefreshCount to invalidate _PlotPainter cached picture
+      // (otherwise shouldRepaint returns false, reusing stale demo rendering).
+      _viewportRefreshCount++;
+
       if (_useRealData) {
         // Switch to real data: stop demo timer, start real data timers
         _demoTimer?.cancel();
@@ -1025,6 +1109,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     // 停止 Rust 独立线程（方案3）
     RustLib.instance.api.crateApiDataReceiverStopDataReceiver();
+    // 🚀 Phase C: Free reusable native query buffer
+    if (_queryNative != null) {
+      calloc.free(_queryNative!);
+      _queryNative = null;
+    }
+    _queryBuffer = null;
     super.dispose();
   }
 
@@ -1283,8 +1373,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       for (final ch in _channels) {
         ch.data.clear();
         ch.viewportData.clear();
+        ch.envelopeData.clear();
         ch.currentValue = 0.0;
       }
+      // 🚀 Phase A: Clear per-channel pyramids on data reset
+      FfiBridge.instance.clearAllChannelPyramids();
       _totalPoints = 0;
       if (_scrollMode) {
         _scrollMinTime = 0;
@@ -3513,6 +3606,12 @@ class _PlotPainter extends CustomPainter {
       return h - (y - chYMin) / (chYMax - chYMin) * h;
     }
 
+    // 🚀 Phase B: Render envelope fill (semi-transparent min-max band) before foreground line
+    final envData = ch.envelopeData;
+    if (envData.isNotEmpty && envData.length >= 2) {
+      _drawEnvelope(canvas, ch, envData, ox, oy, w, h, yTransform);
+    }
+
     switch (ch.lineStyle) {
       case LineStyle.dot:
         _drawDots(canvas, ch, data, ox, oy, w, h, yTransform, scale);
@@ -3549,6 +3648,41 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
       points[i * 2 + 1] = yTransform(pt.y) + oy;
     }
     canvas.drawRawPoints(ui.PointMode.points, points, paint);
+  }
+
+  // 🚀 Phase B: Render envelope fill background (semi-transparent min-max band)
+  void _drawEnvelope(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform) {
+    if (data.length < 2) return;
+
+    // Build fill path: top envelope (max values) → reverse along bottom (min values)
+    final path = ui.Path();
+    
+    // Envelope data format: [x0,ymin0], [x0,ymax0], [x1,ymin1], [x1,ymax1], ...
+    // Top line: all max values at even indices+1
+    for (int i = 0; i < data.length; i += 2) {
+      if (i + 1 >= data.length) break;
+      final sx = _xToScreen(data[i].x, w) + ox;
+      final syTop = yTransform(data[i + 1].y) + oy; // max = yMax
+      if (i == 0) {
+        path.moveTo(sx, syTop);
+      } else {
+        path.lineTo(sx, syTop);
+      }
+    }
+    // Bottom line: all min values in reverse
+    for (int i = data.length - 2; i >= 0; i -= 2) {
+      if (i + 1 > data.length) continue;
+      final sx = _xToScreen(data[i].x, w) + ox;
+      final syBottom = yTransform(data[i].y) + oy; // min = yMin
+      path.lineTo(sx, syBottom);
+    }
+    path.close();
+
+    final fillPaint = Paint()
+      ..color = ch.color.withValues(alpha: 0.12)
+      ..style = PaintingStyle.fill
+      ..isAntiAlias = true;
+    canvas.drawPath(path, fillPaint);
   }
 
   void _drawDotLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {

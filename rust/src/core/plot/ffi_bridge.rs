@@ -11,6 +11,8 @@ use lazy_static::lazy_static;
 use parking_lot::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::collections::HashMap;
+
 use crate::core::plot::lockfree_buffer::{LockFreeRingBuffer, RingDataPoint};
 use crate::core::plot::query::{self, PointsBuffer};
 use crate::core::plot::time_bucket::TimeBucketPyramid;
@@ -23,6 +25,10 @@ lazy_static! {
 
     /// Time bucket pyramid: updated on every push, queried on demand
     static ref FFI_PYRAMID: Mutex<TimeBucketPyramid> = Mutex::new(TimeBucketPyramid::new());
+
+    /// Per-channel pyramids (keyed by channel_id: u32)
+    /// Each channel gets its own independent LOD pyramid for parallel query
+    static ref FFI_CH_PYRAMIDS: Mutex<HashMap<u32, TimeBucketPyramid>> = Mutex::new(HashMap::new());
 
     /// Initialization flag
     static ref FFI_READY: AtomicBool = AtomicBool::new(false);
@@ -225,6 +231,115 @@ pub extern "C" fn vcr_pyramid_push_batch(data: *const CDataPoint, count: u32) ->
     true
 }
 
+// ── Per-Channel Pyramid API ────────────────────────────────────────
+
+/// Push a data point into a specific channel's pyramid.
+/// Creates the channel pyramid on first push (lazy init).
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_ch_push(channel_id: u32, timestamp_ms: f64, value: f64) {
+    let mut pyramids = FFI_CH_PYRAMIDS.lock();
+    let pyramid = pyramids.entry(channel_id).or_default();
+    pyramid.push(timestamp_ms, value);
+}
+
+/// Push batch into a specific channel's pyramid.
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_ch_push_batch(
+    channel_id: u32,
+    data: *const CDataPoint,
+    count: u32,
+) -> bool {
+    if data.is_null() || count == 0 {
+        return false;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(data, count as usize) };
+    let mut pyramids = FFI_CH_PYRAMIDS.lock();
+    let pyramid = pyramids.entry(channel_id).or_default();
+    for dp in slice {
+        pyramid.push(dp.timestamp_ms, dp.value);
+    }
+    true
+}
+
+/// Query a channel's pyramid for min+max pairs in [t_min, t_max].
+/// Returns count of DataPoints written (always even: min+max per bucket).
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_ch_query_points(
+    channel_id: u32,
+    t_min: f64,
+    t_max: f64,
+    target_points: u32,
+    out: *mut CDataPoint,
+    max_points: u32,
+) -> u32 {
+    if out.is_null() || max_points == 0 {
+        return 0;
+    }
+    let pyramids = FFI_CH_PYRAMIDS.lock();
+    let pyramid = match pyramids.get(&channel_id) {
+        Some(p) => p,
+        None => return 0,
+    };
+    let points = pyramid.query_as_datapoints(t_min, t_max, target_points as usize);
+    let count = points.len().min(max_points as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
+    for (i, dp) in points.iter().take(count).enumerate() {
+        dest[i] = CDataPoint {
+            timestamp_ms: dp.timestamp_ms,
+            value: dp.value,
+        };
+    }
+    count as u32
+}
+
+/// Query a channel's pyramid for CBucketStats (min/max/avg/count per bucket).
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_ch_query(
+    channel_id: u32,
+    t_min: f64,
+    t_max: f64,
+    target_points: u32,
+    out: *mut CBucketStats,
+    max_buckets: u32,
+) -> u32 {
+    if out.is_null() || max_buckets == 0 {
+        return 0;
+    }
+    let pyramids = FFI_CH_PYRAMIDS.lock();
+    let pyramid = match pyramids.get(&channel_id) {
+        Some(p) => p,
+        None => return 0,
+    };
+    let buckets = pyramid.query(t_min, t_max, target_points as usize);
+    let count = buckets.len().min(max_buckets as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
+    for (i, bucket) in buckets.iter().take(count).enumerate() {
+        dest[i] = CBucketStats {
+            timestamp_ms: bucket.0,
+            min_value: bucket.1,
+            max_value: bucket.2,
+            avg_value: (bucket.1 + bucket.2) * 0.5,
+            count: bucket.3,
+            _pad: 0,
+        };
+    }
+    count as u32
+}
+
+/// Clear a specific channel's pyramid (e.g., on device disconnect).
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_ch_clear(channel_id: u32) {
+    let mut pyramids = FFI_CH_PYRAMIDS.lock();
+    pyramids.remove(&channel_id);
+}
+
+/// Clear all per-channel pyramids.
+#[no_mangle]
+pub extern "C" fn vcr_pyramid_ch_clear_all() {
+    let mut pyramids = FFI_CH_PYRAMIDS.lock();
+    pyramids.clear();
+}
+
 // ── Shutdown ────────────────────────────────────────────────────────
 
 /// Shutdown the FFI bridge (free resources)
@@ -232,6 +347,8 @@ pub extern "C" fn vcr_pyramid_push_batch(data: *const CDataPoint, count: u32) ->
 pub extern "C" fn vcr_ffi_shutdown() {
     FFI_READY.store(false, Ordering::Release);
     FFI_RING.clear();
+    // Clear channel pyramids
+    FFI_CH_PYRAMIDS.lock().clear();
     // Pyramid will be dropped on program exit
 }
 

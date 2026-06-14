@@ -109,6 +109,19 @@ typedef _PyramidPushNative = Void Function(Double timestampMs, Double value);
 typedef _PyramidPushDart = void Function(double timestampMs, double value);
 typedef _PyramidPushBatchNative = Bool Function(Pointer<CDataPoint> data, Uint32 count);
 typedef _PyramidPushBatchDart = bool Function(Pointer<CDataPoint> data, int count);
+// -- Per-channel pyramid
+typedef _PyramidChPushNative = Void Function(Uint32 channelId, Double timestampMs, Double value);
+typedef _PyramidChPushDart = void Function(int channelId, double timestampMs, double value);
+typedef _PyramidChPushBatchNative = Bool Function(Uint32 channelId, Pointer<CDataPoint> data, Uint32 count);
+typedef _PyramidChPushBatchDart = bool Function(int channelId, Pointer<CDataPoint> data, int count);
+typedef _PyramidChQueryNative = Uint32 Function(Uint32 channelId, Double tMin, Double tMax, Uint32 targetPoints, Pointer<CBucketStats> out, Uint32 maxBuckets);
+typedef _PyramidChQueryDart = int Function(int channelId, double tMin, double tMax, int targetPoints, Pointer<CBucketStats> out, int maxBuckets);
+typedef _PyramidChQueryPointsNative = Uint32 Function(Uint32 channelId, Double tMin, Double tMax, Uint32 targetPoints, Pointer<CDataPoint> out, Uint32 maxPoints);
+typedef _PyramidChQueryPointsDart = int Function(int channelId, double tMin, double tMax, int targetPoints, Pointer<CDataPoint> out, int maxPoints);
+typedef _PyramidChClearNative = Void Function(Uint32 channelId);
+typedef _PyramidChClearDart = void Function(int channelId);
+typedef _PyramidChClearAllNative = Void Function();
+typedef _PyramidChClearAllDart = void Function();
 
 // ══════════════════════════════════════════════════════════════════════
 // FFI Bridge Singleton
@@ -133,6 +146,14 @@ class FfiBridge {
   late final _PyramidQueryPointsDart pyramidQueryPoints;
   late final _PyramidPushDart pyramidPush;
   late final _PyramidPushBatchDart pyramidPushBatch;
+
+  // Per-channel pyramid
+  late final _PyramidChPushDart pyramidChPush;
+  late final _PyramidChPushBatchDart pyramidChPushBatch;
+  late final _PyramidChQueryDart pyramidChQuery;
+  late final _PyramidChQueryPointsDart pyramidChQueryPoints;
+  late final _PyramidChClearDart pyramidChClear;
+  late final _PyramidChClearAllDart pyramidChClearAll;
 
   // Query bridge (zero-copy PointsBuffer)
   late final _SetViewportDart setViewport;
@@ -186,6 +207,14 @@ class FfiBridge {
     pyramidQueryPoints = _lib.lookupFunction<_PyramidQueryPointsNative, _PyramidQueryPointsDart>('vcr_pyramid_query_points');
     pyramidPush = _lib.lookupFunction<_PyramidPushNative, _PyramidPushDart>('vcr_pyramid_push');
     pyramidPushBatch = _lib.lookupFunction<_PyramidPushBatchNative, _PyramidPushBatchDart>('vcr_pyramid_push_batch');
+
+    // Per-channel pyramid
+    pyramidChPush = _lib.lookupFunction<_PyramidChPushNative, _PyramidChPushDart>('vcr_pyramid_ch_push');
+    pyramidChPushBatch = _lib.lookupFunction<_PyramidChPushBatchNative, _PyramidChPushBatchDart>('vcr_pyramid_ch_push_batch');
+    pyramidChQuery = _lib.lookupFunction<_PyramidChQueryNative, _PyramidChQueryDart>('vcr_pyramid_ch_query');
+    pyramidChQueryPoints = _lib.lookupFunction<_PyramidChQueryPointsNative, _PyramidChQueryPointsDart>('vcr_pyramid_ch_query_points');
+    pyramidChClear = _lib.lookupFunction<_PyramidChClearNative, _PyramidChClearDart>('vcr_pyramid_ch_clear');
+    pyramidChClearAll = _lib.lookupFunction<_PyramidChClearAllNative, _PyramidChClearAllDart>('vcr_pyramid_ch_clear_all');
 
     // Query bridge (zero-copy PointsBuffer)
     setViewport = _lib.lookupFunction<_SetViewportNative, _SetViewportDart>('vcr_set_viewport');
@@ -284,5 +313,75 @@ class FfiBridge {
     int maxBuckets,
   ) {
     return pyramidQuery(tMin, tMax, targetPoints, out, maxBuckets);
+  }
+
+  // ── Per-Channel Pyramid Convenience API ──────────────────────
+
+  /// Push a single point into channel's pyramid (lazy-init).
+  void pushChannelPoint(int channelId, double timestampMs, double value) {
+    pyramidChPush(channelId, timestampMs, value);
+  }
+
+  /// Push a batch of points into channel's pyramid.
+  void pushChannelBatch(int channelId, List<(double, double)> points) {
+    if (points.isEmpty) return;
+    final ptr = calloc<CDataPoint>(points.length);
+    try {
+      for (var i = 0; i < points.length; i++) {
+        ptr[i]
+          ..timestampMs = points[i].$1
+          ..value = points[i].$2;
+      }
+      pyramidChPushBatch(channelId, ptr, points.length);
+    } finally {
+      calloc.free(ptr);
+    }
+  }
+
+  /// Query channel pyramid into Float64List as [ts, val, ts, val, ...] pairs.
+  /// Format: min+max interleaved per bucket — always even count.
+  int queryChannelPoints(
+    int channelId,
+    double tMin,
+    double tMax,
+    int targetPoints,
+    Float64List buffer,
+  ) {
+    final maxPoints = buffer.length ~/ 2;
+    final nativePtr = calloc<CDataPoint>(maxPoints);
+    try {
+      return queryChannelPointsInto(channelId, tMin, tMax, targetPoints, nativePtr, maxPoints, buffer);
+    } finally {
+      calloc.free(nativePtr);
+    }
+  }
+
+  /// 🚀 Phase C: Query per-channel pyramid with pre-allocated native buffer (zero alloc).
+  int queryChannelPointsInto(
+    int channelId,
+    double tMin,
+    double tMax,
+    int targetPoints,
+    Pointer<CDataPoint> nativeBuf,
+    int maxPoints,
+    Float64List buffer,
+  ) {
+    final count = pyramidChQueryPoints(channelId, tMin, tMax, targetPoints, nativeBuf, maxPoints);
+    for (var i = 0; i < count; i++) {
+      final pt = nativeBuf[i];
+      buffer[i * 2] = pt.timestampMs;
+      buffer[i * 2 + 1] = pt.value;
+    }
+    return count;
+  }
+
+  /// Clear a channel's pyramid (on device disconnect).
+  void clearChannelPyramid(int channelId) {
+    pyramidChClear(channelId);
+  }
+
+  /// Clear all per-channel pyramids.
+  void clearAllChannelPyramids() {
+    pyramidChClearAll();
   }
 }

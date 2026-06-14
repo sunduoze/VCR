@@ -237,19 +237,22 @@ pub struct TimeBucketPyramid {
 
 impl TimeBucketPyramid {
     /// Pre-defined level bucket widths (milliseconds)
+    // Bucket widths in data-native units (sample index for Demo, ms for Real @ 1000Hz).
+    // Level 0 is finest (2 units/bucket ≈ 2 raw points), level 3 coarsest (250 units).
+    // At 1000Hz, 2ms bucket holds ~2 raw data points.
     pub const LEVEL_WIDTHS: [f64; 4] = [
-        1_000.0,   // Level 0: 1 second
-        10_000.0,  // Level 1: 10 seconds
-        60_000.0,  // Level 2: 1 minute
-        600_000.0, // Level 3: 10 minutes
+        2.0,    // Level 0: ~2 raw points per bucket (raw-level detail)
+        10.0,   // Level 1: ~10 raw points per bucket
+        50.0,   // Level 2: ~50 raw points per bucket
+        250.0,  // Level 3: ~250 raw points per bucket
     ];
 
     /// Pre-defined max buckets per level
     pub const LEVEL_MAX_BUCKETS: [usize; 4] = [
-        3600, // Level 0: up to 1 hour of 1s data
-        2160, // Level 1: up to 6 hours of 10s data
-        1440, // Level 2: up to 24 hours of 1min data
-        1008, // Level 3: up to 7 days of 10min data
+        3600, // Level 0: up to 7200 data units
+        2160, // Level 1: up to 21600 data units
+        1440, // Level 2: up to 72000 data units
+        1008, // Level 3: up to 252000 data units
     ];
 
     pub fn new() -> Self {
@@ -280,13 +283,14 @@ impl TimeBucketPyramid {
     ///
     /// Returns the level index where bucket count ≈ target_points.
     pub fn select_level(&self, t_range_ms: f64, target_points: usize) -> usize {
-        for (i, level) in self.levels.iter().enumerate().rev() {
+        // Iterate finest→coarsest: pick the MOST detailed level that fits within target.
+        for (i, level) in self.levels.iter().enumerate() {
             let buckets_in_range = (t_range_ms / level.bucket_width_ms).ceil() as usize;
             if buckets_in_range <= target_points {
                 return i;
             }
         }
-        0 // Default to finest level
+        self.levels.len() - 1 // Default to coarsest level (all levels exceed target)
     }
 
     /// Query the pyramid for buckets in [t_min, t_max]
@@ -394,32 +398,45 @@ mod tests {
     fn test_pyramid_push_and_query() {
         let mut pyramid = TimeBucketPyramid::new();
 
-        // Push 3600 seconds of data at 10Hz (fills all pyramid levels)
-        for i in 0..36000 {
-            let ts = (i as f64) * 100.0; // 100ms per point
+        // With new widths [2, 10, 50, 250], push data within pyramid's range.
+        // Level 3 (250-unit buckets × 1008) covers 252000 units total.
+        // Push 252000 units of data at 1 unit spacing.
+        for i in 0..50000 {
+            let ts = i as f64;
             let val = (ts * 0.001).sin();
             pyramid.push(ts, val);
         }
 
-        // Query last 10 seconds (should return data from level 0)
-        let result = pyramid.query(3_590_000.0, 3_600_000.0, 100);
-        assert!(!result.is_empty(), "query() returned empty for range");
+        // Query a visible viewport (1000 units) — should use fine level
+        let result = pyramid.query(5000.0, 6000.0, 100);
+        assert!(!result.is_empty(), "query() returned empty for 1000-unit range");
 
-        // Query as datapoints
-        let dps = pyramid.query_as_datapoints(0.0, 60000.0, 50);
-        assert!(dps.len() > 0);
+        // Query as datapoints on a larger range
+        let dps = pyramid.query_as_datapoints(0.0, 500.0, 50);
+        assert!(!dps.is_empty(), "query_as_datapoints returned empty");
     }
 
     #[test]
     fn test_level_selection() {
         let pyramid = TimeBucketPyramid::new();
 
-        // 1 second range → should use level 0 (1s buckets)
+        // 1000-unit range → level 1 (2-unit buckets would need 500 > 100 target; 10-unit = 100 fits)
         let level = pyramid.select_level(1000.0, 100);
-        assert_eq!(level, 3); // Level 3 has 10min buckets → 1 bucket for 1s range
+        assert_eq!(level, 1);
 
-        // Large range → coarse level
+        // Very large range → all levels exceed target, fallback to coarsest (level 3)
         let level = pyramid.select_level(3600_000.0, 100);
-        assert_eq!(level, 3); // Level 3: 10min buckets → 6 buckets for 1hr
+        assert_eq!(level, 3);
+    }
+
+    #[test]
+    fn test_level_selection_small_range() {
+        let pyramid = TimeBucketPyramid::new();
+        // Small range (2 units) → fits in level 0 (1 bucket)
+        let level = pyramid.select_level(2.0, 4000);
+        assert_eq!(level, 0);
+        // Medium range (1000 units) with large target → level 0 (500 buckets fits)
+        let level = pyramid.select_level(1000.0, 4000);
+        assert_eq!(level, 0);
     }
 }

@@ -3,7 +3,7 @@ name: Flutter CI
 on:
   push:
     branches: [ "main" ]
-    tags: [ 'v*' ]
+    tags: [ '[vV]*' ]                # 同时匹配 v* 和 V* 标签
     paths:
       - ".github/workflows/flutter_ci.yaml"
       - "lib/**"
@@ -178,7 +178,8 @@ jobs:
   release:
     needs: [build-windows]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 支持 v* 和 V* 标签，同时避免非标签触发
+    if: github.ref_type == 'tag' && (startsWith(github.ref_name, 'v') || startsWith(github.ref_name, 'V'))
     permissions:
       contents: write
     
@@ -198,19 +199,21 @@ jobs:
           echo "=== Windows artifact contents ==="
           find artifacts/windows -type f | head -50
           
-          # 将产物打包成 zip，方便作为 release asset 上传
+          # 根据 tag 名称生成带版本的 zip 文件名
           cd artifacts/windows
-          zip -r ../vcr-windows-release.zip . -x "*.pdb"
+          ZIP_NAME="vcr-windows-${{ github.ref_name }}.zip"
+          zip -r "../$ZIP_NAME" . -x "*.pdb"
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           cd ../..
           
-          echo "=== vcr-windows-release.zip size ==="
-          ls -lh artifacts/vcr-windows-release.zip
+          echo "=== $ZIP_NAME size ==="
+          ls -lh "artifacts/$ZIP_NAME"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            artifacts/vcr-windows-release.zip
+            artifacts/${{ env.ZIP_NAME }}
           draft: false
           prerelease: false
           generate_release_notes: true

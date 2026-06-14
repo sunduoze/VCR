@@ -85,7 +85,7 @@ class _MainShellState extends State<MainShell> {
                   const VcrLogo(size: 40),
                   const SizedBox(height: 8),
                   const Text(
-                    'VCR',
+                    'VCR V0.0.6',
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,

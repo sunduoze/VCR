@@ -401,7 +401,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 const ListTile(
                   title: Text('Version'),
-                  trailing: Text('0.1.0-alpha'),
+                  trailing: Text('V0.0.6'),
                 ),
                 const Divider(height: 1),
                 const ListTile(
@@ -419,7 +419,105 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
+          const SizedBox(height: 24),
+          // Version History
+          _SectionHeader(title: 'Version History'),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _versionEntry('V0.0.6', '2026-06', [
+                    '自适应视口密度：根据实时paint耗时自动调整渲染分辨率',
+                    '帧预算保护：单帧耗时超标时自动跳过后续渲染以排空数据管线',
+                    'dart:ffi 零拷贝桥接：TripleBuffers + PointsBuffer',
+                    'GPU compute shader LTTB 降采样加速',
+                    'LockFreeRingBuffer 无锁环形缓冲 + TypedDataPool 内存池',
+                    '四级时间桶金字塔降采样（LTTB）',
+                    'PictureCache 缓存 + drawRawPoints 零分配绘制',
+                    '双定时器合并 + 条件setState 消除无效重绘',
+                    '滚动条拖动/边缘手柄全面修复',
+                    'Rust 日志系统替换（println! → log::*）',
+                    '暗/亮模式切换 + 16通道黄金角度配色方案',
+                    '虚线网格 + 强制最小视口范围',
+                  ]),
+                  const Divider(height: 24),
+                  _versionEntry('V0.0.5', '2026-05', [
+                    'Chart Isolate 独立渲染线程 + 数据管道',
+                    'ChannelBuffer 多通道环形缓冲区',
+                    'Rust 数据采集引擎（串口/TCP/模拟器）',
+                    'Demo 模式 17 通道模拟波形',
+                    'Lua 脚本引擎集成',
+                    '滚动/缩放/通道独立的 Y 轴',
+                  ]),
+                  const Divider(height: 24),
+                  _versionEntry('V0.0.4', '2026-04', [
+                    'Flutter + Rust 混合架构搭建',
+                    '设备发现与连接管理',
+                    '基础示波器波形显示',
+                    'Debug Console 调试面板',
+                    'Settings 配置管理',
+                  ]),
+                ],
+              ),
+            ),
+          ),
           const SizedBox(height: 32),
+        ],
+      ),
+    );
+  }
+
+  Widget _versionEntry(String version, String date, List<String> changes) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: AppTheme.primary.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  version,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                    color: AppTheme.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(
+                date,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          ...changes.map((c) => Padding(
+                padding: const EdgeInsets.only(left: 12, bottom: 3),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('• ', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                    Expanded(
+                      child: Text(
+                        c,
+                        style: const TextStyle(fontSize: 12, color: AppTheme.textPrimary),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
         ],
       ),
     );

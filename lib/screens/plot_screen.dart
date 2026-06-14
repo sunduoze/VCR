@@ -2149,10 +2149,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final center = (thumbLeft + thumbRight) / 2;
       thumbLeft = center - minThumbWidth / 2;
       thumbRight = center + minThumbWidth / 2;
+      thumbWidth = minThumbWidth;
     }
     // Final clamp: never let thumb extend beyond track bounds
     thumbLeft = thumbLeft.clamp(plotLeft, plotLeft + trackWidth - minThumbWidth);
     thumbRight = thumbRight.clamp(plotLeft + minThumbWidth, plotLeft + trackWidth);
+    thumbWidth = thumbRight - thumbLeft;
 
     return SizedBox(
       height: scrollbarHeight,

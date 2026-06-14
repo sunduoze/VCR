@@ -131,7 +131,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'VCR',
+      title: 'VCR V0.0.6',
       theme: AppTheme.darkTheme,
       initialRoute: AppRoutes.home,
       onGenerateRoute: AppRoutes.onGenerateRoute,

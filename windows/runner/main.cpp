@@ -31,7 +31,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(10, 10);
   Win32Window::Size size(1280, 720);
-  if (!window.Create(L"vcr", origin, size)) {
+  if (!window.Create(L"VCR V0.0.6", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);

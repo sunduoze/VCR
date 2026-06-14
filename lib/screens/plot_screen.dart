@@ -289,23 +289,35 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── Demo ──
   double _demoPhase = 0;  // Demo phase for waveform generation (time in seconds)
   int _sampleIndex = 0;  // Sample index counter for X-axis (displayed as index * deltaTime)
+  bool _plotThemeDark = true;  // dark (true) / light (false)
   Timer? _demoTimer;
 
-  // ── Channel colors pool ──
+  // ── Channel colors pool (oscilloscope-grade, 16 perceptually distinct hues) ──
+  // Span the full hue circle with even spacing; tuned for L=45-65 against dark bg.
   static const _channelColors = [
-    Color(0xFF58A6FF),
-    Color(0xFF3FB950),
-    Color(0xFFD29922),
-    Color(0xFFF85149),
-    Color(0xFFBC8CFF),
-    Color(0xFF39D2C0),
-    Color(0xFFFF7B72),
-    Color(0xFF79C0FF),
-    Color(0xFF56D364),
-    Color(0xFFFFA657),
-    Color(0xFFFFC680),
-    Color(0xFFA5D6FF),
+    Color(0xFF5CADFF),  // #01 Bright Blue        H=210° S=90% L=65%
+    Color(0xFFE85C6C),  // #02 Warm Red           H=355° S=85% L=58%
+    Color(0xFF48C878),  // #03 Medium Green       H=135° S=70% L=56%
+    Color(0xFFD8B030),  // #04 Gold               H=45°  S=90% L=58%
+    Color(0xFFB468D8),  // #05 Violet             H=280° S=70% L=62%
+    Color(0xFFE87040),  // #06 Orange             H=20°  S=90% L=58%
+    Color(0xFF40C0D0),  // #07 Cyan               H=185° S=80% L=58%
+    Color(0xFFD860A0),  // #08 Rose Pink          H=325° S=75% L=60%
+    Color(0xFF8888D8),  // #09 Indigo             H=245° S=65% L=65%
+    Color(0xFF80C848),  // #10 Lime               H=90°  S=75% L=55%
+    Color(0xFF48B898),  // #11 Mint Teal          H=160° S=65% L=54%
+    Color(0xFFA858B8),  // #12 Magenta            H=295° S=60% L=55%
+    Color(0xFFE0C820),  // #13 Bright Yellow      H=55°  S=95% L=60%
+    Color(0xFFB05838),  // #14 Rust Brown         H=25°  S=70% L=45%
+    Color(0xFF8C98A8),  // #15 Steel Gray         H=210° S=15% L=60%
+    Color(0xFFF058A0),  // #16 Hot Pink           H=340° S=85% L=65%
   ];
+
+  /// Assign colors sequentially from the palette so adjacent channels always
+  /// get contrasting hues.  Wraps at palette length for 17+ channels.
+  Color _assignChannelColor() {
+    return _channelColors[_channels.length % _channelColors.length];
+  }
 
   // ── Config persistence ──
   static String get _configPath {
@@ -390,55 +402,57 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _initDemoChannels() {
     final devices = listDevices();
     final deviceName = devices.isNotEmpty ? devices.first.name : 'Demo';
+    // Sequential index for max perceptual distance between adjacent channels
+    Color c(int i) => _channelColors[i % _channelColors.length];
     _channels = [
       PlotChannel(
         deviceId: 'demo_ch1', deviceName: deviceName, channelName: 'Voltage',
-        color: _channelColors[0], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(0), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch2', deviceName: deviceName, channelName: 'Current',
-        color: _channelColors[1], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(1), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch3', deviceName: deviceName, channelName: 'Power',
-        color: _channelColors[2], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(2), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch4', deviceName: deviceName, channelName: 'Temp',
-        color: _channelColors[3], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(3), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch5', deviceName: deviceName, channelName: 'Pressure',
-        color: _channelColors[4], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(4), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch6', deviceName: deviceName, channelName: 'Flow',
-        color: _channelColors[5], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(5), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch7', deviceName: deviceName, channelName: 'Torque',
-        color: _channelColors[6], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(6), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch8', deviceName: deviceName, channelName: 'RPM',
-        color: _channelColors[7], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(7), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       // Fourier square wave approximations (5+ terms)
       PlotChannel(
         deviceId: 'demo_ch9', deviceName: deviceName, channelName: 'Square_1Hz',
-        color: _channelColors[8], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(8), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch10', deviceName: deviceName, channelName: 'Square_3Hz',
-        color: _channelColors[9], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(9), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch11', deviceName: deviceName, channelName: 'PWM_2Hz',
-        color: _channelColors[10], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(10), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
       PlotChannel(
         deviceId: 'demo_ch12', deviceName: deviceName, channelName: 'Step_0.5Hz',
-        color: _channelColors[11], decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        color: c(11), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
       ),
     ];
   }
@@ -682,12 +696,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           
           if (chIdx == -1) {
             if (!_autoAddChannels) continue;
-            final colorIdx = _channels.length % _channelColors.length;
             _channels.add(PlotChannel(
               deviceId: deviceId,
               deviceName: deviceId,
               channelName: chName,
-              color: _channelColors[colorIdx],
+              color: _assignChannelColor(),
               decimals: 3,
               lineStyle: LineStyle.line,
               showYAxis: false,
@@ -1045,6 +1058,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _scrollMinTime = (json['scrollMinTime'] as num?)?.toDouble() ?? 0.0;
         _maxPoints = (json['maxPoints'] as num?)?.toInt() ?? 250000;
         _deltaTime = (json['deltaTime'] as num?)?.toDouble() ?? 1.0;
+        _plotThemeDark = json['plotThemeDark'] as bool? ?? true;
         _maxPointsController.text = _maxPoints.toString();
         _deltaTimeController.text = _deltaTime.toString();
         // Load Flutter log settings from app_config.json
@@ -1101,6 +1115,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         'scrollMinTime': _scrollMinTime,
         'maxPoints': _maxPoints,
         'deltaTime': _deltaTime,
+        'plotThemeDark': _plotThemeDark,
       }));
       // Also sync to app_config.json so settings screen picks it up
       final appData = Platform.environment['APPDATA'] ?? '';
@@ -1693,6 +1708,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             onPressed: _clearData,
             tooltip: 'Clear Data',
           ),
+          // Theme toggle
+          IconButton(
+            icon: Icon(_plotThemeDark ? Icons.dark_mode : Icons.light_mode, size: 20),
+            onPressed: () => setState(() { _plotThemeDark = !_plotThemeDark; _saveConfig(); }),
+            tooltip: _plotThemeDark ? 'Plot Theme: Dark' : 'Plot Theme: Light',
+          ),
           // Scroll mode (oscilloscope sweep) toggle + settings
           IconButton(
             icon: Container(
@@ -2066,6 +2087,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     aaScale: _aaLevel.scale,
                     globalDecimals: _globalDecimals,
                     shareYAxis: _shareYAxis,
+                    isDarkTheme: _plotThemeDark,
                     gpuWaveformImage: _gpuWaveformImage,
                     deltaTime: _deltaTime,
                     viewportRefreshCount: _viewportRefreshCount,
@@ -2121,9 +2143,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       thumbWidth = trackWidth;
     }
 
+    // Minimum thumb width (8px) to prevent rendering artifacts
+    const minThumbWidth = 8.0;
+    if (thumbRight - thumbLeft < minThumbWidth) {
+      final center = (thumbLeft + thumbRight) / 2;
+      thumbLeft = center - minThumbWidth / 2;
+      thumbRight = center + minThumbWidth / 2;
+    }
     // Final clamp: never let thumb extend beyond track bounds
-    thumbLeft = thumbLeft.clamp(plotLeft, plotLeft + trackWidth - 20);
-    thumbRight = thumbRight.clamp(plotLeft + 20, plotLeft + trackWidth);
+    thumbLeft = thumbLeft.clamp(plotLeft, plotLeft + trackWidth - minThumbWidth);
+    thumbRight = thumbRight.clamp(plotLeft + minThumbWidth, plotLeft + trackWidth);
 
     return SizedBox(
       height: scrollbarHeight,
@@ -2202,7 +2231,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     },
                     child: Container(
                       decoration: BoxDecoration(
-                        color: Colors.blue.withAlpha(180),
+                        color: Colors.transparent,
                         border: Border.all(color: Colors.blue, width: 2),
                       ),
                     ),
@@ -2229,11 +2258,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         final dx = d.globalPosition.dx - _scrollbarDragStartX;
                         final dxRatio = dx / trackWidth;
                         var newMin = _scrollbarDragStartXMin + dxRatio * totalRange;
-                        // 允许滑块宽度为0
-                        if (newMin >= _scrollbarDragStartXMax) {
-                          newMin = _scrollbarDragStartXMax;
+                        // Minimum viewport width: at least 10 data points or 1% of range
+                        final minRange = (totalRange * 0.01).clamp(10.0, totalRange);
+                        if (newMin > _scrollbarDragStartXMax - minRange) {
+                          newMin = _scrollbarDragStartXMax - minRange;
                         }
-                        newMin = newMin.clamp(-_maxPoints.toDouble(), _scrollbarDragStartXMax);
+                        newMin = newMin.clamp(-_maxPoints.toDouble(), _scrollbarDragStartXMax - minRange);
                         _xMin = newMin;
                         if (_scrollMode) {
                           _scrollMinTime = newMin.clamp(0.0, double.maxFinite);
@@ -2279,8 +2309,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         final dx = d.globalPosition.dx - _scrollbarDragStartX;
                         final dxRatio = dx / trackWidth;
                         var newMax = _scrollbarDragStartXMax + dxRatio * totalRange;
-                        // 允许滑块宽度为0
-                        newMax = newMax.clamp(_scrollbarDragStartXMin, 0.0);
+                        // Minimum viewport width: at least 10 data points or 1% of range
+                        final minRange = (totalRange * 0.01).clamp(10.0, totalRange);
+                        newMax = newMax.clamp(_scrollbarDragStartXMin + minRange, 0.0);
                         _xMax = newMax;
                         if (_scrollMode) {
                           _scrollWindowWidth = newMax - _scrollbarDragStartXMin;
@@ -2883,40 +2914,113 @@ class _MinimapPainter extends CustomPainter {
 
 class _PlotPainter extends CustomPainter {
   // ═══ Static cached paint objects (zero allocation on paint path) ═══
-  static final _bgPaint = Paint()..color = const Color(0xFF0A0E14);
-  static final _plotBgPaint = Paint()..color = const Color(0xFF0D1117);
   static final _gpuImagePaint = Paint()..filterQuality = FilterQuality.high;
-  static final _borderPaint = Paint()
-    ..color = const Color(0xFF30363D)
-    ..style = PaintingStyle.stroke
-    ..strokeWidth = 1.0;
-  static final _cursorPaint = Paint()
-    ..color = const Color(0x4058A6FF)
-    ..strokeWidth = 0.5;
-  static final _tooltipBgPaint = Paint()..color = const Color(0xCC0D1117);
   static final _gridPaint = Paint()
-    ..color = const Color(0xFF1A2030)
+    ..color = const Color(0xFF4A5A70)
     ..strokeWidth = 0.5;
   static final _zeroPaint = Paint()
-    ..color = const Color(0xFF2A3040)
+    ..color = const Color(0xFF4A5A70)
     ..strokeWidth = 1.0;
+  static final _gridTextStyle = TextStyle(
+    color: const Color(0xFF8B949E),
+    fontSize: 9.0,
+    fontFamily: 'Consolas, monospace',
+  );
   static final _miniBgPaint = Paint()..color = const Color(0xDD161B22);
   static final _aaDownsamplePaint = Paint()
     ..filterQuality = FilterQuality.medium
     ..blendMode = BlendMode.srcOver;
-  static final _overlayStyle = TextStyle(
+  // Reusable TextPainters (one per frame use case, avoid per-frame allocation)
+  static final _overlayTp = TextPainter(textDirection: TextDirection.ltr);
+  static final _crosshairTp = TextPainter(textDirection: TextDirection.ltr);
+
+  // ═══ Dark theme paints ═══
+  static final _dkBg = Paint()..color = const Color(0xFF0A0E14);
+  static final _dkPlotBg = Paint()..color = const Color(0xFF0D1117);
+  static final _dkBorder = Paint()
+    ..color = const Color(0xFF30363D)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.0;
+  // Legacy aliases for GPU waveform path (always dark)
+  static final _bgPaint = Paint()..color = const Color(0xFF0A0E14);
+  static final _plotBgPaint = Paint()..color = const Color(0xFF0D1117);
+  static final _borderPaint = Paint()
+    ..color = const Color(0xFF30363D)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.0;
+  static final _dkCursor = Paint()
+    ..color = const Color(0x4058A6FF)
+    ..strokeWidth = 0.5;
+  static final _dkTooltipBg = Paint()..color = const Color(0xCC0D1117);
+  static final _dkOverlayStyle = TextStyle(
     color: const Color(0xFF58A6FF),
     fontSize: 11.0,
     fontFamily: 'Consolas, monospace',
   );
-  static final _coordStyle = TextStyle(
+  static final _dkCoordStyle = TextStyle(
     color: const Color(0xFFC9D1D9),
     fontSize: 11.0,
     fontFamily: 'Consolas, monospace',
   );
-  // Reusable TextPainters (one per frame use case, avoid per-frame allocation)
-  static final _overlayTp = TextPainter(textDirection: TextDirection.ltr);
-  static final _crosshairTp = TextPainter(textDirection: TextDirection.ltr);
+  static final _dkInfoStyle = TextStyle(
+    color: const Color(0xFFB0B8C4),
+    fontSize: 10.0,
+    fontFamily: 'Consolas, monospace',
+  );
+
+  // ═══ Light theme paints ═══
+  static final _ltBg = Paint()..color = const Color(0xFFF6F8FA);
+  static final _ltPlotBg = Paint()..color = const Color(0xFFFFFFFF);
+  static final _ltBorder = Paint()
+    ..color = const Color(0xFFD0D7DE)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.0;
+  static final _ltCursor = Paint()
+    ..color = const Color(0x400960DA)
+    ..strokeWidth = 0.5;
+  static final _ltTooltipBg = Paint()..color = const Color(0xDDF6F8FA);
+  static final _ltOverlayStyle = TextStyle(
+    color: const Color(0xFF0969DA),
+    fontSize: 11.0,
+    fontFamily: 'Consolas, monospace',
+  );
+  static final _ltCoordStyle = TextStyle(
+    color: const Color(0xFF24292F),
+    fontSize: 11.0,
+    fontFamily: 'Consolas, monospace',
+  );
+  static final _ltInfoStyle = TextStyle(
+    color: const Color(0xFF57606A),
+    fontSize: 10.0,
+    fontFamily: 'Consolas, monospace',
+  );
+  static final _miniBgLightPaint = Paint()..color = const Color(0xDDFFFFFF);
+
+  /// Draw a dashed line between [start] and [end].
+  static void _drawDashedLine(Canvas canvas, Offset start, Offset end, Paint paint,
+      {double dash = 4.0, double gap = 4.0}) {
+    final dx = end.dx - start.dx;
+    final dy = end.dy - start.dy;
+    final length = (end - start).distance;
+    if (length == 0) return;
+    final invLen = 1.0 / length;
+    double pos = 0;
+    bool draw = true;
+    while (pos < length) {
+      final segLen = draw ? dash : gap;
+      if (draw) {
+        final t1 = pos * invLen;
+        final t2 = (pos + segLen).clamp(0, length) * invLen;
+        canvas.drawLine(
+          Offset(start.dx + dx * t1, start.dy + dy * t1),
+          Offset(start.dx + dx * t2, start.dy + dy * t2),
+          paint,
+        );
+      }
+      pos += segLen;
+      draw = !draw;
+    }
+  }
 
   // ── Instance fields ──────────────────────────────────────────
   final List<PlotChannel> channels;
@@ -2930,6 +3034,7 @@ class _PlotPainter extends CustomPainter {
   final ui.Image? gpuWaveformImage;
   final double deltaTime;
   final int viewportRefreshCount;
+  final bool isDarkTheme;
 
   ui.Picture? _cachedPicture;
   int _cacheVersion = 0;
@@ -2946,6 +3051,7 @@ class _PlotPainter extends CustomPainter {
     this.aaScale = 1.0,
     this.globalDecimals = 3,
     this.shareYAxis = false,
+    this.isDarkTheme = true,
     this.gpuWaveformImage,
     this.deltaTime = 1.0,
     required this.viewportRefreshCount,
@@ -3081,32 +3187,34 @@ class _PlotPainter extends CustomPainter {
     if (plotW <= 0 || plotH <= 0) return; // Guard against invalid dimensions
 
     // ── Background ──
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), _bgPaint);
+    final bg = isDarkTheme ? _dkBg : _ltBg;
+    final plotBg = isDarkTheme ? _dkPlotBg : _ltPlotBg;
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bg);
 
     // ── Plot area background ──
     canvas.drawRect(
       Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-      _plotBgPaint,
+      plotBg,
     );
 
-    // ── Grid lines ──
+    // ── Grid lines (dashed) ──
     // Vertical grid (X axis — shared)
     final xTicks = _niceTicks(xMin, xMax, 10);
     for (final tick in xTicks) {
       final sx = _xToScreen(tick, plotW) + plotLeft;
       if (sx < plotLeft || sx > plotLeft + plotW) continue;
-      canvas.drawLine(Offset(sx, plotTop), Offset(sx, plotTop + plotH), _gridPaint);
+      _drawDashedLine(canvas, Offset(sx, plotTop), Offset(sx, plotTop + plotH), _gridPaint);
     }
 
-    // Horizontal grid (Y axis — global for now, per-channel labels rendered separately)
+    // Horizontal grid (Y axis) — dashed
     final yTicks = _niceTicks(yMin, yMax, 8);
     for (final tick in yTicks) {
       final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
       if (sy < plotTop || sy > plotTop + plotH) continue;
-      canvas.drawLine(Offset(plotLeft, sy), Offset(plotLeft + plotW, sy), _gridPaint);
+      _drawDashedLine(canvas, Offset(plotLeft, sy), Offset(plotLeft + plotW, sy), _gridPaint);
     }
 
-    // Zero line
+    // Zero line — solid (same color depth as grid)
     final zeroY = _yToScreen(0, plotH, yMin, yMax) + plotTop;
     if (zeroY >= plotTop && zeroY <= plotTop + plotH) {
       canvas.drawLine(Offset(plotLeft, zeroY), Offset(plotLeft + plotW, zeroY), _zeroPaint);
@@ -3130,7 +3238,18 @@ class _PlotPainter extends CustomPainter {
 
     // ── Per-channel Y axis labels ──
     // If multiple channels show Y-axis, render them on alternating sides with their color
-    if (yAxisChannels.length == 1) {
+    if (yAxisChannels.isEmpty) {
+      // No channel has Y-axis enabled: show default Y-axis scale using global range
+      for (final tick in yTicks) {
+        final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
+        if (sy < plotTop || sy > plotTop + plotH) continue;
+        final tp = TextPainter(
+          text: TextSpan(text: _formatTick(tick, globalDecimals), style: _gridTextStyle),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(plotLeft - tp.width - 4, sy - tp.height / 2));
+      }
+    } else if (yAxisChannels.length == 1) {
       // Single Y-axis: render on left side as before, use global range
       for (final tick in yTicks) {
         final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
@@ -3218,18 +3337,15 @@ class _PlotPainter extends CustomPainter {
     canvas.restore();
 
     // ── Border ──
+    final borderPaint = isDarkTheme ? _dkBorder : _ltBorder;
     canvas.drawRect(
       Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-      _borderPaint,
+      borderPaint,
     );
 
     // ═══ Crosshair drawn in paint() after PictureCache (NOT cached) ═══
 
-    final infoStyle = TextStyle(
-      color: const Color(0xFF8B949E),
-      fontSize: 10.0,
-      fontFamily: 'Consolas, monospace',
-    );
+    final infoStyle = isDarkTheme ? _dkInfoStyle : _ltInfoStyle;
     final infoTp = TextPainter(
       text: TextSpan(text: 'FPS: $fps  Pts: $totalPoints', style: infoStyle),
       textDirection: TextDirection.ltr,
@@ -3260,8 +3376,9 @@ class _PlotPainter extends CustomPainter {
         my < plotTop || my > plotTop + plotH) return;
 
     // ── Cursor lines ──
-    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), _cursorPaint);
-    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), _cursorPaint);
+    final cursorPaint = isDarkTheme ? _dkCursor : _ltCursor;
+    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), cursorPaint);
+    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), cursorPaint);
 
     // ── Coordinate tooltip ──
     final dataX = xMin + (mx - plotLeft) / plotW * (xMax - xMin);
@@ -3272,7 +3389,7 @@ class _PlotPainter extends CustomPainter {
     }
     final coordText = 'X: ${dataX.toStringAsFixed(maxDecimals)}  Y: ${dataY.toStringAsFixed(maxDecimals)}';
     final tp = _crosshairTp
-      ..text = TextSpan(text: coordText, style: _coordStyle)
+      ..text = TextSpan(text: coordText, style: isDarkTheme ? _dkCoordStyle : _ltCoordStyle)
       ..layout();
     var tx = mx + 12;
     var ty = my - tp.height - 8;
@@ -3280,7 +3397,7 @@ class _PlotPainter extends CustomPainter {
     if (ty < plotTop) ty = my + 8;
     canvas.drawRect(
       Rect.fromLTWH(tx - 2, ty - 1, tp.width + 4, tp.height + 2),
-      _miniBgPaint,
+      isDarkTheme ? _miniBgPaint : _miniBgLightPaint,
     );
     tp.paint(canvas, Offset(tx, ty));
 
@@ -3568,7 +3685,8 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
         totalPoints != oldDelegate.totalPoints ||
         aaScale != oldDelegate.aaScale ||
         globalDecimals != oldDelegate.globalDecimals ||
-        shareYAxis != oldDelegate.shareYAxis) {
+        shareYAxis != oldDelegate.shareYAxis ||
+        isDarkTheme != oldDelegate.isDarkTheme) {
       return true;
     }
     // Check channel-level changes (visible/color/style)
@@ -3587,15 +3705,16 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
   void _drawOverlay(Canvas canvas, double w, double h, int fps, int totalPoints) {
     final tp = _overlayTp
-      ..text = TextSpan(text: 'FPS: $fps | Points: $totalPoints', style: _overlayStyle)
+      ..text = TextSpan(text: 'FPS: $fps | Points: $totalPoints', style: isDarkTheme ? _dkOverlayStyle : _ltOverlayStyle)
       ..layout();
     tp.paint(canvas, Offset(w - tp.width - 8, 8));
   }
 
   void _drawCrosshair(Canvas canvas, double mx, double my,
       double plotLeft, double plotTop, double plotW, double plotH, double w, double h) {
-    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), _cursorPaint);
-    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), _cursorPaint);
+    final cursorPaint = isDarkTheme ? _dkCursor : _ltCursor;
+    canvas.drawLine(Offset(mx, plotTop), Offset(mx, plotTop + plotH), cursorPaint);
+    canvas.drawLine(Offset(plotLeft, my), Offset(plotLeft + plotW, my), cursorPaint);
 
     // Show coordinates
     final dataX = xMin + (mx - plotLeft) / plotW * (xMax - xMin);
@@ -3609,7 +3728,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
     final coordText = 'X: ${dataX.toStringAsFixed(maxDecimals)}  Y: ${dataY.toStringAsFixed(maxDecimals)}';
     final tp = _crosshairTp
-      ..text = TextSpan(text: coordText, style: _coordStyle)
+      ..text = TextSpan(text: coordText, style: isDarkTheme ? _dkCoordStyle : _ltCoordStyle)
       ..layout();
 
     // Position tooltip near cursor but avoid clipping
@@ -3621,7 +3740,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     // Background for tooltip
     canvas.drawRect(
       Rect.fromLTWH(tx - 4, ty - 2, tp.width + 8, tp.height + 4),
-      _tooltipBgPaint,
+      isDarkTheme ? _dkTooltipBg : _ltTooltipBg,
     );
     tp.paint(canvas, Offset(tx, ty));
   }

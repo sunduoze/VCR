@@ -1,37 +1,48 @@
 -- =====================================================
 -- 示例5: 串口通信
 -- =====================================================
--- 演示: apiSend, apiSetCb
--- 注意: 需要先连接设备并选择设备ID
+-- 演示: apiSend, apiSetCb, apiUnsetCb
+-- 注意: 需要先连接设备并选择设备
+-- 合并自: 05_uart.lua + 05_uart_test.lua
 
 print('=== 串口通信示例 ===')
-print('[提示] 请先选择设备后点击运行')
+print('[提示] 请先在界面选择设备后点击运行')
 
 -- 注册串口接收回调
 apiSetCb('uart', function(data)
-    print('[接收] 数据:', data)
-    print('[十六进制] :', string.toHex(data))
+    print('[RX]', data)
+    print('[HEX]', string.toHex(data))
 end)
 
--- 发送字符串
-local function sendString(str)
-    print('发送 : ' .. str)
-    local result = apiSend('uart', str)
-    if result then
-        print('发送成功')
-    else
-        print('发送失败 result=false')
-    end
-end
-
--- 必须在协程中使用 sys.wait
+-- 所有发送/等待操作必须在协程中执行
 sys.taskInit(function()
-    -- 发送 AT 命令测试
-    print('---')
-    sendString('AT\r\n')
-    sys.wait(500)
-    sendString('ATI\r\n')
+    -- ----- 1. AT 命令测试 -----
+    print('\n--- AT 命令测试 ---')
+    print('发送: AT')
+    apiSend('uart', 'AT\r\n')
     sys.wait(500)
 
-    print('串口示例已启动')
+    print('发送: ATI')
+    apiSend('uart', 'ATI\r\n')
+    sys.wait(500)
+
+    -- ----- 2. 字符串发送测试 -----
+    print('\n--- 字符串发送测试 ---')
+    local testData = 'Hello UART!\r\n'
+    print('发送:', string.toHex(testData))
+    apiSend('uart', testData)
+    sys.wait(1000)
+
+    -- ----- 3. 第二帧 + 取消回调 -----
+    print('发送: Second frame')
+    apiSend('uart', 'Second frame\r\n')
+    sys.wait(1000)
+
+    print('取消回调')
+    apiUnsetCb('uart')
+    sys.wait(200)
+
+    print('\n串口通信示例完成')
 end)
+
+print('串口任务已在后台运行')

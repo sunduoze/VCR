@@ -21,6 +21,14 @@ const int kDefaultBufferSize = 200 * 1024; // 200 KB
 const int kPollIntervalMs = 200; // 日志轮询间隔
 const int kMaxCommandHistory = 10;
 
+/// Default SCPI commands always shown at front of command history
+const List<String> kDefaultCommands = [
+  'READ?',
+  'VOLT:DC:NPLC 10',
+  '*IDN?',
+  '*RST',
+];
+
 // ============================================================================
 // Per-device console state
 // Each connected device gets its own independent state:
@@ -52,7 +60,7 @@ class ConsoleDeviceState {
   int bufferSize = kDefaultBufferSize;
 
   // ── Command history ──
-  List<String> commandHistory = [];
+  List<String> commandHistory = List<String>.from(kDefaultCommands);
 
   // ── UI display settings ──
   bool showTimestamp = true;
@@ -89,7 +97,8 @@ class ConsoleDeviceState {
     'encoding': encoding,
     'continuousSendInterval': continuousSendInterval,
     'continuousSendTarget': continuousSendTarget,
-    'commandHistory': commandHistory,
+    // Save only user-entered commands (exclude defaults)
+    'commandHistory': commandHistory.where((c) => !kDefaultCommands.contains(c)).toList(),
   };
 
   // Restore from JSON
@@ -111,7 +120,20 @@ class ConsoleDeviceState {
     continuousSendTarget =
         json['continuousSendTarget'] as int? ?? continuousSendTarget;
     commandHistory =
-        (json['commandHistory'] as List?)?.cast<String>() ?? commandHistory;
+        (json['commandHistory'] as List?)?.cast<String>() ?? [];
+    // Always ensure default commands are at the front
+    _prependDefaultCommands();
+  }
+
+  /// Ensure kDefaultCommands appear at the front of commandHistory
+  void _prependDefaultCommands() {
+    for (final cmd in kDefaultCommands.reversed) {
+      commandHistory.remove(cmd); // Remove if already present (old position)
+      commandHistory.insert(0, cmd); // Re-insert at front
+    }
+    // Trim duplicates after prepending
+    final seen = <String>{};
+    commandHistory = commandHistory.where((c) => seen.add(c)).toList();
   }
 
   // Reset counters (used after clear or full recalc)
@@ -1692,6 +1714,8 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
             color: AppTheme.surfaceVariant,
             child: Row(
               children: [
+                _buildQuickButton('READ?', 'Read Value'),
+                _buildQuickButton('VOLT:DC:NPLC 10', 'Set NPLC'),
                 _buildQuickButton('*IDN?', 'Query ID'),
                 _buildQuickButton('*RST', 'Reset'),
                 _buildQuickButton('*CLS', 'Clear'),

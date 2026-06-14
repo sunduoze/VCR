@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../app/theme.dart';
-import '../app/routes.dart';
 import '../screens/home_screen.dart';
 import '../screens/device_list_screen.dart';
 import '../screens/plot_screen.dart';
@@ -46,6 +45,9 @@ class MainShell extends StatefulWidget {
 }
 
 class _MainShellState extends State<MainShell> {
+  // ── Local index for setState-based tab switching (no route navigation) ──
+  late int _currentIndex;
+
   // ── Keep all screens alive (never disposed) ──
   final _screens = const [
     HomeScreen(),
@@ -57,12 +59,18 @@ class _MainShellState extends State<MainShell> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.selectedIndex;
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: Row(
         children: [
           NavigationRail(
-            selectedIndex: widget.selectedIndex,
+            selectedIndex: _currentIndex,
             onDestinationSelected: _navigateTo,
             labelType: NavigationRailLabelType.all,
             backgroundColor: AppTheme.surface,
@@ -133,7 +141,7 @@ class _MainShellState extends State<MainShell> {
           // remain in the widget tree (never disposed/rebuilt). State is kept.
           Expanded(
             child: IndexedStack(
-              index: widget.selectedIndex,
+              index: _currentIndex,
               children: _screens,
             ),
           ),
@@ -143,11 +151,11 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _navigateTo(int index) {
-    if (index == widget.selectedIndex) return;
+    if (index == _currentIndex) return;
 
-    // Save Console state before switching away from it
-    if (widget.selectedIndex == 3) {
-      // Console tab index
+    // Save Console state before switching away from it (belt-and-suspenders;
+    // IndexedStack keeps state alive, but we also persist to disk for crash safety)
+    if (_currentIndex == 3) {
       try {
         DebugConsoleScreen.saveCurrentState();
       } catch (e) {
@@ -155,14 +163,8 @@ class _MainShellState extends State<MainShell> {
       }
     }
 
-    final routes = [
-      AppRoutes.home,
-      AppRoutes.deviceList,
-      AppRoutes.dataMonitor,
-      AppRoutes.debugConsole,
-      AppRoutes.settings,
-      AppRoutes.luaScript,
-    ];
-    Navigator.pushReplacementNamed(context, routes[index]);
+    setState(() {
+      _currentIndex = index;
+    });
   }
 }

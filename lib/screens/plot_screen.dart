@@ -149,6 +149,7 @@ class PlotChannel {
     'yMinManual': yMinManual,
     'yMaxManual': yMaxManual,
     'plotGroupId': plotGroupId,
+    'color': color.toARGB32(),
   };
 
   factory PlotChannel.fromJson(Map<String, dynamic> json) => PlotChannel(
@@ -165,7 +166,9 @@ class PlotChannel {
     yMinManual: (json['yMinManual'] as num?)?.toDouble() ?? -1,
     yMaxManual: (json['yMaxManual'] as num?)?.toDouble() ?? 1,
     plotGroupId: json['plotGroupId'] as String? ?? 'default',
-  );
+  )..color = json['color'] is int
+      ? Color(json['color'] as int)
+      : AppTheme.primary;
 }
 
 class _DataPoint {
@@ -682,12 +685,29 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     try {
       final activeDevices = debugGetActiveSessions();
+
+      // Build device-id → human-readable name lookup
+      final allDevices = listDevices();
+      final deviceNameMap = <String, String>{};
+      for (final d in allDevices) {
+        deviceNameMap[d.id] = d.name;
+      }
+
+      // Clean up channels for disconnected devices
+      _channels.removeWhere((ch) {
+        if (!activeDevices.contains(ch.deviceId) && ch.deviceId != 'demo_ch1' && !ch.deviceId.startsWith('imported_') && !ch.deviceId.startsWith('manual_')) {
+          return true; // Device disconnected — remove channel
+        }
+        return false;
+      });
+
       if (activeDevices.isEmpty) return;
 
       for (final deviceId in activeDevices) {
         // 只获取通道列表（轻量级）
         final channelNames = plotGetChannels(deviceId: deviceId);
-        
+        final devName = deviceNameMap[deviceId] ?? deviceId;
+
         for (final chName in channelNames) {
           // Find or create channel
           final chIdx = _channels.indexWhere(
@@ -698,7 +718,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             if (!_autoAddChannels) continue;
             _channels.add(PlotChannel(
               deviceId: deviceId,
-              deviceName: deviceId,
+              deviceName: devName,
               channelName: chName,
               color: _assignChannelColor(),
               decimals: 3,
@@ -818,6 +838,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _toggleDataSource() {
     setState(() {
       _useRealData = !_useRealData;
+      _saveConfig();
       if (_useRealData) {
         // Switch to real data: stop demo timer, start real data timers
         _demoTimer?.cancel();
@@ -1017,17 +1038,31 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         final json = jsonDecode(content) as Map<String, dynamic>;
         final chConfigs = json['channels'] as List?;
         if (chConfigs != null) {
-          for (int i = 0; i < min(chConfigs.length, _channels.length); i++) {
+          for (final chJson in chConfigs) {
             try {
-              final c = chConfigs[i] as Map<String, dynamic>;
-              _channels[i].visible = c['visible'] as bool? ?? true;
-              _channels[i].decimals = c['decimals'] as int? ?? 3;
-              _channels[i].showYAxis = c['showYAxis'] as bool? ?? true;
-              _channels[i].lineStyle = LineStyle.values.firstWhere(
+              final c = chJson as Map<String, dynamic>;
+              final cDevId = c['deviceId'] as String? ?? '';
+              final cName = c['channelName'] as String? ?? '';
+              // Match by deviceId + channelName (not index) so config survives reordering
+              final matchIdx = _channels.indexWhere(
+                (ch) => ch.deviceId == cDevId && ch.channelName == cName,
+              );
+              if (matchIdx == -1) continue;
+              _channels[matchIdx].visible = c['visible'] as bool? ?? true;
+              _channels[matchIdx].decimals = c['decimals'] as int? ?? 3;
+              _channels[matchIdx].showYAxis = c['showYAxis'] as bool? ?? true;
+              _channels[matchIdx].lineStyle = LineStyle.values.firstWhere(
                 (e) => e.name == c['lineStyle'], orElse: () => LineStyle.line);
-              _channels[i].plotGroupId = c['plotGroupId'] as String? ?? 'default';
+              _channels[matchIdx].plotGroupId = c['plotGroupId'] as String? ?? 'default';
+              _channels[matchIdx].autoScaleY = c['autoScaleY'] as bool? ?? true;
+              _channels[matchIdx].yMinManual = (c['yMinManual'] as num?)?.toDouble() ?? -1;
+              _channels[matchIdx].yMaxManual = (c['yMaxManual'] as num?)?.toDouble() ?? 1;
+              _channels[matchIdx].lineWidth = (c['lineWidth'] as num?)?.toDouble() ?? 1.5;
+              _channels[matchIdx].color = c['color'] is int
+                  ? Color(c['color'] as int)
+                  : _channels[matchIdx].color;
             } catch (e) {
-              debugPrint('Failed to load channel config at index $i: $e');
+              debugPrint('Failed to load channel config: $e');
             }
           }
         }
@@ -1059,6 +1094,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _maxPoints = (json['maxPoints'] as num?)?.toInt() ?? 250000;
         _deltaTime = (json['deltaTime'] as num?)?.toDouble() ?? 1.0;
         _plotThemeDark = json['plotThemeDark'] as bool? ?? true;
+        _autoAddChannels = json['autoAddChannels'] as bool? ?? true;
+        _useRealData = json['useRealData'] as bool? ?? false;
         _maxPointsController.text = _maxPoints.toString();
         _deltaTimeController.text = _deltaTime.toString();
         // Load Flutter log settings from app_config.json
@@ -1076,6 +1113,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         } catch (e) {
           debugPrint('Failed to load Flutter log settings: $e');
         }
+        // Refresh all UI with loaded config values
+        if (mounted) setState(() {});
       }
     } catch (e) {
       debugPrint('Failed to load plot config: $e');
@@ -1116,6 +1155,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         'maxPoints': _maxPoints,
         'deltaTime': _deltaTime,
         'plotThemeDark': _plotThemeDark,
+        'autoAddChannels': _autoAddChannels,
+        'useRealData': _useRealData,
       }));
       // Also sync to app_config.json so settings screen picks it up
       final appData = Platform.environment['APPDATA'] ?? '';
@@ -2346,10 +2387,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   Widget _buildNumericPanel() {
-    // Sort channels by name in Real Data Mode (CH0, CH1, CH10... natural order)
+    // Sort by device first, then channel name (same-device channels adjacent)
     final displayChannels = _useRealData 
         ? (List<PlotChannel>.from(_channels)..sort((a, b) {
-            // Natural sort for channel names like ch0, ch1, ch10
+            final devCompare = a.deviceName.toLowerCase().compareTo(b.deviceName.toLowerCase());
+            if (devCompare != 0) return devCompare;
+            // Natural sort for channel names within same device: ch0, ch1, ch10
             final aMatch = RegExp(r'ch(\d+)', caseSensitive: false).firstMatch(a.channelName);
             final bMatch = RegExp(r'ch(\d+)', caseSensitive: false).firstMatch(b.channelName);
             if (aMatch != null && bMatch != null) {
@@ -3252,12 +3295,12 @@ class _PlotPainter extends CustomPainter {
         tp.paint(canvas, Offset(plotLeft - tp.width - 4, sy - tp.height / 2));
       }
     } else if (yAxisChannels.length == 1) {
-      // Single Y-axis: render on left side as before, use global range
+      // Single Y-axis: render on left side, use that channel's decimal precision
       for (final tick in yTicks) {
         final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
         if (sy < plotTop || sy > plotTop + plotH) continue;
         final tp = TextPainter(
-          text: TextSpan(text: _formatTick(tick, globalDecimals), style: labelStyle),
+          text: TextSpan(text: tick.toStringAsFixed(yAxisChannels.first.decimals), style: labelStyle),
           textDirection: TextDirection.ltr,
         )..layout();
         tp.paint(canvas, Offset(plotLeft - tp.width - 4, sy - tp.height / 2));
@@ -3670,6 +3713,20 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     // 🚀 Mouse/cursor moved? Always repaint (instant crosshair feedback)
     if (mousePosition != oldDelegate.mousePosition) return true;
 
+    // 🚀 Channel config changed (decimals, showYAxis, etc)? Repaint needed
+    if (channels.length != oldDelegate.channels.length) return true;
+    for (int i = 0; i < channels.length; i++) {
+      final a = channels[i];
+      final b = oldDelegate.channels[i];
+      if (a.visible != b.visible ||
+          a.color != b.color ||
+          a.lineStyle != b.lineStyle ||
+          a.decimals != b.decimals ||
+          a.showYAxis != b.showYAxis) {
+        return true;
+      }
+    }
+
     // 🚀 P3-B 优化：只比较 ChartViewport 刷新计数器，不比较数据长度
     // 如果 ChartViewport 未刷新（计数器未变），不需要重绘
     if (viewportRefreshCount == oldDelegate.viewportRefreshCount) {
@@ -3690,17 +3747,6 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
         shareYAxis != oldDelegate.shareYAxis ||
         isDarkTheme != oldDelegate.isDarkTheme) {
       return true;
-    }
-    // Check channel-level changes (visible/color/style)
-    if (channels.length != oldDelegate.channels.length) return true;
-    for (int i = 0; i < channels.length; i++) {
-      final a = channels[i];
-      final b = oldDelegate.channels[i];
-      if (a.visible != b.visible ||
-          a.color != b.color ||
-          a.lineStyle != b.lineStyle) {
-        return true;
-      }
     }
     return false;
   }

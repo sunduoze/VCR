@@ -4,17 +4,19 @@
 -- 演示: 协议解析、校验、回调触发
 -- 假设协议格式: [HEAD][LEN][CMD][DATA...][CHECKSUM]
 -- HEAD: 0xAA
--- LEN: 数据长度(不含HEAD和CHECKSUM)
+-- LEN: 数据长度 (CMD + DATA 的字节数)
 -- CMD: 命令字
--- DATA: N字节
--- CHECKSUM: 累加和取低字节
+-- DATA: N-1 字节
+-- CHECKSUM: 累加和取低字节 (覆盖 LEN+CMD+DATA)
 
 print("=== 协议解析器示例 ===")
 
 local RxState = {
     WAIT_HEAD = 0,
     WAIT_LEN = 1,
-    WAIT_DATA = 2,
+    WAIT_CMD = 2,
+    WAIT_DATA = 3,
+    WAIT_CHECKSUM = 4,
 }
 
 local rxState = RxState.WAIT_HEAD
@@ -34,27 +36,38 @@ local function parseProtocol(byte)
 
     elseif rxState == RxState.WAIT_LEN then
         rxLen = byte
-        rxChecksum = byte
+        rxChecksum = (rxChecksum + byte) & 0xFF
         if rxLen > 0 then
-            rxState = RxState.WAIT_DATA
+            rxState = RxState.WAIT_CMD
         else
             rxState = RxState.WAIT_HEAD
+        end
+
+    elseif rxState == RxState.WAIT_CMD then
+        rxCmd = byte
+        rxChecksum = (rxChecksum + byte) & 0xFF
+        if rxLen > 1 then
+            rxState = RxState.WAIT_DATA
+        else
+            rxState = RxState.WAIT_CHECKSUM
         end
 
     elseif rxState == RxState.WAIT_DATA then
         table.insert(rxData, byte)
         rxChecksum = (rxChecksum + byte) & 0xFF
+        if #rxData >= rxLen - 1 then  -- CMD 已计入 LEN
+            rxState = RxState.WAIT_CHECKSUM
+        end
 
-        if #rxData >= rxLen - 1 then  -- LEN包含CMD
-            -- 最后一个字节是校验
-            rxState = RxState.WAIT_HEAD
-
-            -- 验证校验 (简化示例)
-            local expectedCsum = rxChecksum
-            -- if byte == expectedCsum then
-            --     sys.publish("PROTOCOL_RX", rxCmd, rxData)
-            -- end
-            print("协议解析完成 CMD:", string.format("0x%02X", rxCmd))
+    elseif rxState == RxState.WAIT_CHECKSUM then
+        rxState = RxState.WAIT_HEAD
+        -- 验证校验和
+        if byte == rxChecksum then
+            print(string.format("协议解析完成 CMD: 0x%02X, DATA: [%s], 校验: OK",
+                rxCmd, table.concat(rxData, ", ")))
+        else
+            print(string.format("校验失败: 期望=0x%02X 实际=0x%02X",
+                rxChecksum, byte))
         end
     end
 end

@@ -335,6 +335,16 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
   bool _isPaused = false;
   int _outputTab = 0; // 0=Output, 1=Debug Log
 
+  /// 过滤内部调试消息（仅显示在 Debug Log，不出现在 Output）
+  static bool _isInternalMessage(String msg) {
+    // triggerCB 回调日志、Lua 引擎内部 debug/trace 消息
+    return msg.contains('tiggerCB') ||
+        msg.contains('triggerCB') ||
+        msg.contains('[D]-[api') ||
+        msg.contains('[D]-[sys') ||
+        msg.contains('[T]-['); // trace 级别（LOGLEVEL_TRACE）
+  }
+
   // Device selection
   List<(String, String)> _devices = []; // (id, name)
   String? _selectedDeviceId;
@@ -597,8 +607,11 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
             for (final log in logs) {
               final withTimestamp =
                   '[${DateTime.now().toString().substring(11, 19)}] $log';
-              _outputController.text += '$withTimestamp\n';
               _debugLogController.text += '$withTimestamp\n';
+              // 内部调试消息仅显示在 Debug Log
+              if (!_isInternalMessage(log)) {
+                _outputController.text += '$withTimestamp\n';
+              }
             }
           });
         }
@@ -612,7 +625,8 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
     if (_isRunning) return;
     setState(() {
       _isRunning = true;
-      _outputTab = 1; // 切换到调试日志标签页
+      // 保持当前标签页，不强制切换
+      if (_outputTab != 0 && _outputTab != 1) _outputTab = 0;
     });
     final script = _scriptController.text;
     try {
@@ -624,8 +638,10 @@ class _LuaScriptScreenState extends State<LuaScriptScreen> {
       setState(() {
         _outputController.text += '> Running script...\n';
         for (final log in logs) {
-          _outputController.text += '$log\n';
           _debugLogController.text += '$log\n';
+          if (!_isInternalMessage(log)) {
+            _outputController.text += '$log\n';
+          }
         }
         if (result) {
           _outputController.text += '--- Done ---\n';

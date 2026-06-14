@@ -314,7 +314,7 @@ end
 -- id >= 0: 定时器消息 → sys.tigger(id)
 -- id < 0: 通道消息 → channelCb[type] 回调
 tiggerCB = function(id, msgType, data)
-    print("[tiggerCB] id=" .. tostring(id) .. ", msgType=" .. tostring(msgType))
+    log.debug("tiggerCB", "id=" .. tostring(id) .. ", msgType=" .. tostring(msgType))
     local result, info = pcall(function()
         if id >= 0 then
             sys.tigger(id)

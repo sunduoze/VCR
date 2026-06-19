@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../screens/home_screen.dart';
 import '../screens/device_list_screen.dart';
 import '../screens/device_detail_screen.dart';
 import '../screens/plot_screen.dart';
@@ -19,22 +18,22 @@ class AppRoutes {
   static const String luaScript = '/lua';
   static const String gpuTest = '/gpu-test';
 
-  /// 根据路由名称获取导航索引
+  /// Navigation index (matches MainShell._screens order after Dashboard removal):
+  ///  0 = Devices, 1 = Plot, 2 = Console, 3 = Settings, 4 = Lua
   static int getNavIndex(String? route) {
     switch (route) {
       case home:
-        return 0;
       case deviceList:
       case deviceDetail:
-        return 1;
+        return 0;
       case dataMonitor:
-        return 2;
+        return 1;
       case debugConsole:
-        return 3;
+        return 2;
       case settings:
-        return 4;
+        return 3;
       case luaScript:
-        return 5;
+        return 4;
       default:
         return 0;
     }
@@ -46,11 +45,6 @@ class AppRoutes {
 
     switch (route) {
       case home:
-        return MaterialPageRoute(
-          settings: settings,
-          builder: (_) =>
-              MainShell(selectedIndex: navIndex, child: const HomeScreen()),
-        );
       case deviceList:
         return MaterialPageRoute(
           settings: settings,
@@ -65,7 +59,9 @@ class AppRoutes {
           return MaterialPageRoute(
             builder: (_) => MainShell(
               selectedIndex: navIndex,
-              child: const Scaffold(body: Center(child: Text('设备 ID 缺失'))),
+              child: const Scaffold(
+                body: Center(child: Text('设备 ID 缺失')),
+              ),
             ),
           );
         }
@@ -85,8 +81,10 @@ class AppRoutes {
       case AppRoutes.settings:
         return MaterialPageRoute(
           settings: settings,
-          builder: (_) =>
-              MainShell(selectedIndex: navIndex, child: const SettingsScreen()),
+          builder: (_) => MainShell(
+            selectedIndex: navIndex,
+            child: const SettingsScreen(),
+          ),
         );
       case debugConsole:
         return MaterialPageRoute(
@@ -113,7 +111,7 @@ class AppRoutes {
         return MaterialPageRoute(
           builder: (_) => MainShell(
             selectedIndex: 0,
-            child: const Scaffold(body: Center(child: Text('Page not found'))),
+            child: const DeviceListScreen(),
           ),
         );
     }

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import '../app/theme.dart';
-import '../screens/home_screen.dart';
 import '../screens/device_list_screen.dart';
 import '../screens/plot_screen.dart';
 import '../screens/debug_console_screen.dart';
@@ -50,7 +49,6 @@ class _MainShellState extends State<MainShell> {
 
   // ── Keep all screens alive (never disposed) ──
   final _screens = const [
-    HomeScreen(),
     DeviceListScreen(),
     PlotScreen(),
     DebugConsoleScreen(),
@@ -105,11 +103,6 @@ class _MainShellState extends State<MainShell> {
             ),
             destinations: const [
               NavigationRailDestination(
-                icon: Icon(Icons.dashboard_outlined),
-                selectedIcon: Icon(Icons.dashboard),
-                label: Text('Dashboard'),
-              ),
-              NavigationRailDestination(
                 icon: Icon(Icons.devices_outlined),
                 selectedIcon: Icon(Icons.devices),
                 label: Text('Devices'),
@@ -155,7 +148,8 @@ class _MainShellState extends State<MainShell> {
 
     // Save Console state before switching away from it (belt-and-suspenders;
     // IndexedStack keeps state alive, but we also persist to disk for crash safety)
-    if (_currentIndex == 3) {
+    // Console is now at index 2 (was 3 before Dashboard tab was removed)
+    if (_currentIndex == 2) {
       try {
         DebugConsoleScreen.saveCurrentState();
       } catch (e) {

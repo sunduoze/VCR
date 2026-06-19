@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -218,6 +218,12 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       TextEditingController();
 
   bool _isProgrammaticScroll = false;
+
+  // ── Log change detection (for conditional setState) ──
+  int _lastLogCount = 0;
+
+  // ── User scroll detection (for smart auto-scroll) ──
+  bool _userScrolledUp = false;
 
   // HEX formatter
   static final _hexFormatter = FilteringTextInputFormatter.allow(
@@ -552,9 +558,15 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     if (_isProgrammaticScroll || !_scrollController.hasClients) return;
     final maxScroll = _scrollController.position.maxScrollExtent;
     final currentScroll = _scrollController.position.pixels;
-    if (maxScroll - currentScroll < 50 && !_cs.autoScroll) {
-      _cs.autoScroll = true;
-      setState(() {});
+    final atBottom = maxScroll - currentScroll < 50;
+    if (atBottom) {
+      _userScrolledUp = false;
+      if (!_cs.autoScroll) {
+        _cs.autoScroll = true;
+        setState(() {});
+      }
+    } else {
+      _userScrolledUp = true;
     }
   }
 
@@ -636,6 +648,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   }
 
   void _refreshLog() {
+    if (!mounted) return;
     if (_selectedDeviceId == null) return;
     _syncDeviceStates(); // keep connection/isSerial state in sync (outside build)
     final cs = _cs;
@@ -644,8 +657,14 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       maxSize: cs.bufferSize,
     );
     _updateCounters(cs, newLog);
-    if (mounted) setState(() {});
-    if (cs.autoScroll && _scrollController.hasClients) {
+    // Only rebuild UI if log count changed (new entries arrived)
+    final hasNewData = newLog.length != _lastLogCount;
+    if (hasNewData) {
+      _lastLogCount = newLog.length;
+    }
+    if (hasNewData && mounted) setState(() {});
+    // Smart auto-scroll: only scroll if user hasn't scrolled up
+    if (cs.autoScroll && !_userScrolledUp && _scrollController.hasClients) {
       _isProgrammaticScroll = true;
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
@@ -1296,6 +1315,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     }).toList();
 
     return Scaffold(
+
       appBar: AppBar(
         title: const Text('Console'),
         actions: [
@@ -1609,102 +1629,107 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
             ),
           ),
 
-          // Log display
+          // Log display — with RepaintBoundary + itemExtent for scroll performance
           Expanded(
-            child: Container(
-              color: const Color(0xFF1E1E1E),
-              child: filteredLog.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const VcrLogo(size: 64),
-                          const SizedBox(height: 16),
-                          Text(
-                            'No data yet',
-                            style: TextStyle(
-                              color: Colors.grey[600],
-                              fontSize: 16,
+            child: RepaintBoundary(
+              child: Container(
+                color: const Color(0xFF1E1E1E),
+                child: filteredLog.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const VcrLogo(size: 64),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No data yet',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 16,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            'Connect a device and send data',
-                            style: TextStyle(
-                              color: Colors.grey[700],
-                              fontSize: 12,
+                            const SizedBox(height: 8),
+                            Text(
+                              'Connect a device and send data',
+                              style: TextStyle(
+                                color: Colors.grey[700],
+                                fontSize: 12,
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : NotificationListener<UserScrollNotification>(
-                      onNotification: (n) {
-                        if (n.direction != ScrollDirection.idle &&
-                            _cs.autoScroll) {
-                          _cs.autoScroll = false;
-                          setState(() {});
-                        }
-                        return false;
-                      },
-                      child: Scrollbar(
-                        controller: _scrollController,
-                        thumbVisibility: true,
-                        interactive: true,
-                        thickness: 16.0,
-                        radius: const Radius.circular(8),
-                        child: ScrollConfiguration(
-                          behavior: ScrollConfiguration.of(
-                            context,
-                          ).copyWith(scrollbars: false),
-                          child: ListView.builder(
-                            controller: _scrollController,
-                            padding: const EdgeInsets.only(
-                              right: 20,
-                              top: 8,
-                              bottom: 8,
-                              left: 8,
-                            ),
-                            itemCount: filteredLog.length,
-                            itemBuilder: (context, index) {
-                              final entry = filteredLog[index];
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 1),
-                                child: RichText(
-                                  text: TextSpan(
-                                    style: const TextStyle(
-                                      fontFamily: 'Consolas, monospace',
-                                      fontSize: 13,
-                                      color: Colors.white,
-                                    ),
-                                    children: [
-                                      if (_cs.showTimestamp)
-                                        TextSpan(
-                                          text:
-                                              '[${_formatTimestamp(entry.timestamp)}] ',
-                                          style: TextStyle(
-                                            color: Colors.grey[500],
-                                          ),
-                                        ),
-                                      TextSpan(
-                                        text: '[${entry.direction}] ',
-                                        style: TextStyle(
-                                          color: _getDirectionColor(
-                                            entry.direction,
-                                          ),
-                                          fontWeight: FontWeight.bold,
-                                        ),
+                          ],
+                        ),
+                      )
+                    : NotificationListener<UserScrollNotification>(
+                        onNotification: (n) {
+                          if (n.direction != ScrollDirection.idle &&
+                              _cs.autoScroll) {
+                            _cs.autoScroll = false;
+                            setState(() {});
+                          }
+                          return false;
+                        },
+                        child: Scrollbar(
+                          controller: _scrollController,
+                          thumbVisibility: true,
+                          interactive: true,
+                          thickness: 16.0,
+                          radius: const Radius.circular(8),
+                          child: ScrollConfiguration(
+                            behavior: ScrollConfiguration.of(
+                              context,
+                            ).copyWith(scrollbars: false),
+                            child: ListView.builder(
+                              controller: _scrollController,
+                              padding: const EdgeInsets.only(
+                                right: 20,
+                                top: 8,
+                                bottom: 8,
+                                left: 8,
+                              ),
+                              itemCount: filteredLog.length,
+                              itemExtent: 22.0,
+                              itemBuilder: (context, index) {
+                                final entry = filteredLog[index];
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 1),
+                                  child: RichText(
+                                    text: TextSpan(
+                                      style: const TextStyle(
+                                        fontFamily: 'Consolas, monospace',
+                                        fontSize: 13,
+                                        color: Colors.white,
                                       ),
-                                      TextSpan(text: _formatData(entry)),
-                                    ],
+                                      children: [
+                                        if (_cs.showTimestamp)
+                                          TextSpan(
+                                            text:
+                                                '[${_formatTimestamp(entry.timestamp)}] ',
+                                            style: TextStyle(
+                                              color: Colors.grey[500],
+                                            ),
+                                          ),
+                                        TextSpan(
+                                          text: '[${entry.direction}] ',
+                                          style: TextStyle(
+                                            color: _getDirectionColor(
+                                              entry.direction,
+                                            ),
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        TextSpan(text: _formatData(entry)),
+                                      ],
+                                    ),
+                                    softWrap: false,
+                                    overflow: TextOverflow.clip,
                                   ),
-                                ),
-                              );
-                            },
+                                );
+                              },
+                            ),
                           ),
                         ),
                       ),
-                    ),
+              ),
             ),
           ),
 

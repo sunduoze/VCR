@@ -1,4 +1,4 @@
-import 'dart:convert';
+﻿import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'package:flutter/material.dart';
@@ -130,12 +130,15 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'VCR V0.0.6',
-      theme: AppTheme.darkTheme,
-      initialRoute: AppRoutes.home,
-      onGenerateRoute: AppRoutes.onGenerateRoute,
-      debugShowCheckedModeBanner: false,
+    return ExcludeSemantics(
+      excluding: true,
+      child: MaterialApp(
+        title: 'VCR V0.0.6',
+        theme: AppTheme.darkTheme,
+        initialRoute: AppRoutes.home,
+        onGenerateRoute: AppRoutes.onGenerateRoute,
+        debugShowCheckedModeBanner: false,
+      ),
     );
   }
 }

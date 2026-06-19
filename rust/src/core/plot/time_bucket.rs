@@ -193,22 +193,41 @@ impl TimeBucket {
             // Fixed size: sliding window circular buffer
             if bucket_idx >= self.max_buckets {
                 // 🔧 Slide window forward: drop oldest buckets, reuse slots for newest
-                let overflow = bucket_idx - self.max_buckets + 1;
-                let drop_count = overflow.min(self.max_buckets);
-                // Clear the buckets being dropped (between old write_idx and new write_idx)
-                for offset in 0..drop_count {
-                    let pos = (self.write_idx + offset) % self.max_buckets;
-                    self.buckets[pos] = BucketStats {
-                        timestamp_ms: 0.0,
-                        min_value: f64::MAX,
-                        max_value: f64::MIN,
-                        avg_value: 0.0,
-                        count: 0,
-                    };
+                let is_exact_multiple = bucket_offset % (self.max_buckets as f64) == 0.0;
+                if is_exact_multiple {
+                    // Exact multiple of max_buckets: full wrap, drop ALL buckets
+                    // After this, next write goes to position 0, but bucket_idx should be max-1
+                    // (the "last" position in a full buffer that just wrapped)
+                    for pos in 0..self.max_buckets {
+                        self.buckets[pos] = BucketStats {
+                            timestamp_ms: 0.0,
+                            min_value: f64::MAX,
+                            max_value: f64::MIN,
+                            avg_value: 0.0,
+                            count: 0,
+                        };
+                    }
+                    self.write_idx = 0;
+                    bucket_idx = self.max_buckets - 1; // write to last position in the wrapped buffer
+                } else {
+                    // Partial overflow: drop only the overflow past the first incomplete bucket
+                    let overflow = bucket_idx - self.max_buckets + 1;
+                    let drop_count = overflow.min(self.max_buckets);
+                    // Clear the buckets being dropped (between old write_idx and new write_idx)
+                    for offset in 0..drop_count {
+                        let pos = (self.write_idx + offset) % self.max_buckets;
+                        self.buckets[pos] = BucketStats {
+                            timestamp_ms: 0.0,
+                            min_value: f64::MAX,
+                            max_value: f64::MIN,
+                            avg_value: 0.0,
+                            count: 0,
+                        };
+                    }
+                    self.write_idx = (self.write_idx + drop_count) % self.max_buckets;
+                    // Adjust bucket_idx to fit within the new window
+                    bucket_idx = self.max_buckets - 1;
                 }
-                self.write_idx = (self.write_idx + drop_count) % self.max_buckets;
-                // Adjust bucket_idx to fit within the new window
-                bucket_idx = self.max_buckets - 1;
             }
 
             self.ensure_buckets_circular(bucket_idx + 1);

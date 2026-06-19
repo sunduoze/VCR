@@ -65,6 +65,15 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   List<DeviceInfo> _devices = [];
   List<String> _protocols = []; // protocol labels from getSupportedProtocols()
   List<String> _deviceSortOrder = []; // persisted sort order
+  Timer? _autoRefreshTimer;
+
+  int get _connectedCount =>
+      _devices.where((d) => d.status == DeviceStatus.connected).length;
+  int get _disconnectedCount =>
+      _devices.where((d) => d.status == DeviceStatus.disconnected).length;
+  int get _errorCount =>
+      _devices.where((d) => d.status == DeviceStatus.error).length;
+  int get _totalCount => _devices.length;
 
   @override
   void initState() {
@@ -72,8 +81,16 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     _loadSortOrder();
     _loadDevices();
     _loadProtocols();
-    // Don't auto-scan ports �?user must click refresh in dialog
-    // Scanning happens on-demand when opening add/edit device dialog
+    // Auto-refresh every 3 seconds (like Dashboard did)
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      _loadDevices();
+    });
+  }
+
+  @override
+  void dispose() {
+    _autoRefreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadSortOrder() async {
@@ -303,11 +320,11 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Device Management'),
+        title: const Text('Devices'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => setState(() {}),
+            onPressed: _loadDevices,
             tooltip: 'Refresh',
           ),
           IconButton(
@@ -317,41 +334,124 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
           ),
         ],
       ),
-      body: _devices.isEmpty
-          ? Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const VcrLogo(size: 64),
-                  const SizedBox(height: 16),
-                  Text(
-                    'No devices configured',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      color: AppTheme.textSecondary,
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Status overview row (merged from Dashboard) ──
+            Row(
+              children: [
+                _buildStatCard(
+                  context,
+                  'Connected',
+                  '$_connectedCount',
+                  Icons.link,
+                  AppTheme.success,
+                ),
+                const SizedBox(width: 16),
+                _buildStatCard(
+                  context,
+                  'Disconnected',
+                  '$_disconnectedCount',
+                  Icons.link_off,
+                  AppTheme.textSecondary,
+                ),
+                const SizedBox(width: 16),
+                _buildStatCard(
+                  context,
+                  'Errors',
+                  '$_errorCount',
+                  Icons.error_outline,
+                  AppTheme.error,
+                ),
+                const SizedBox(width: 16),
+                _buildStatCard(
+                  context,
+                  'Total',
+                  '$_totalCount',
+                  Icons.devices,
+                  AppTheme.primary,
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            // ── Device list ──
+            Expanded(
+              child: _devices.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const VcrLogo(size: 64),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No devices configured',
+                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                              color: AppTheme.textSecondary,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Click + to add a device',
+                            style: Theme.of(context).textTheme.bodyMedium,
+                          ),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _loadDevices,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.only(top: 4),
+                        itemCount: _devices.length,
+                        itemBuilder: (context, index) => _DeviceCard(
+                          device: _devices[index],
+                          onEdit: () => _showEditDeviceDialog(_devices[index]),
+                          onRemove: () => _removeDevice(_devices[index].id),
+                          onTap: () => _navigateToConsole(_devices[index]),
+                          onLongPress: () => _navigateToDetail(_devices[index]),
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Click + to add a device',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStatCard(
+    BuildContext context,
+    String label,
+    String value,
+    IconData icon,
+    Color color,
+  ) {
+    return Expanded(
+      child: Card(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: color, size: 20),
+                  const SizedBox(width: 8),
+                  Text(label, style: Theme.of(context).textTheme.bodyMedium),
                 ],
               ),
-            )
-          : RefreshIndicator(
-              onRefresh: _loadDevices,
-              child: ListView.builder(
-                padding: const EdgeInsets.all(16),
-                itemCount: _devices.length,
-                itemBuilder: (context, index) => _DeviceCard(
-                  device: _devices[index],
-                  onEdit: () => _showEditDeviceDialog(_devices[index]),
-                  onRemove: () => _removeDevice(_devices[index].id),
-                  onTap: () => _navigateToConsole(_devices[index]),
-                  onLongPress: () => _navigateToDetail(_devices[index]),
-                ),
+              const SizedBox(height: 8),
+              Text(
+                value,
+                style: Theme.of(
+                  context,
+                ).textTheme.headlineMedium?.copyWith(color: color),
               ),
-            ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

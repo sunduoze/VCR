@@ -170,6 +170,11 @@ List<PlotPoint> plotGetChannelIncrementalData({
 /// 将后端写入的数据复制到前端，UI 线程从前端读取（无锁）
 void plotSwapBuffers() => RustLib.instance.api.crateApiPlotApiPlotSwapBuffers();
 
+/// 🩺 查询所有通道的溢出计数
+/// 返回 [(device_id, channel_name, overflow_count), ...]
+List<(String, String, BigInt)> plotGetOverflowCounts() =>
+    RustLib.instance.api.crateApiPlotApiPlotGetOverflowCounts();
+
 /// 数据点(FRB 兼容)
 class PlotPoint {
   final double timestampMs;

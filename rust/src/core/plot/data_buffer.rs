@@ -41,6 +41,9 @@ pub struct ChannelBuffer {
     front_len: usize,
     /// Swap 锁（防止 swap 和 push 并发）
     swap_lock: Mutex<()>,
+
+    /// 🚀 溢出计数器：记录有多少个数据点因为环形缓冲满而被覆盖
+    pub overflow_count: u64,
 }
 
 impl ChannelBuffer {
@@ -65,11 +68,24 @@ impl ChannelBuffer {
             ],
             front_len: 0,
             swap_lock: Mutex::new(()),
+            overflow_count: 0,
         }
     }
 
     /// 添加数据点（写入后端缓冲区）
     pub fn push(&mut self, timestamp_ms: f64, value: f64) {
+        let is_overflow = self.back_len >= self.back_capacity;
+        if is_overflow {
+            self.overflow_count += 1;
+            // Warn every 1000 overflows to avoid log spam
+            if self.overflow_count % 1000 == 0 {
+                log::warn!(
+                    "[PlotBuffer] ChannelBuffer OVERFLOW: dropped {} points total (capacity={})",
+                    self.overflow_count,
+                    self.back_capacity
+                );
+            }
+        }
         self.back_data[self.back_write_pos] = DataPoint {
             timestamp_ms,
             value,
@@ -160,6 +176,7 @@ impl ChannelBuffer {
         self.back_write_pos = 0;
         self.back_len = 0;
         self.front_len = 0;
+        self.overflow_count = 0;
     }
 
     /// 动态调整后端缓冲区容量
@@ -700,6 +717,21 @@ impl PlotDataManager {
         let new_val = *counter + 1;
         *counter = new_val;
         new_val
+    }
+
+    /// 获取所有通道的溢出计数（用于诊断数据丢失）
+    pub fn get_all_overflow_counts(&self) -> Vec<(String, String, u64)> {
+        let mut result = Vec::new();
+        let devices = self.devices.read().unwrap_or_else(|e| e.into_inner());
+        for (device_id, channels) in devices.iter() {
+            for (ch_name, buffer) in channels.iter() {
+                let overflow = lock_mutex(buffer).overflow_count;
+                if overflow > 0 {
+                    result.push((device_id.clone(), ch_name.clone(), overflow));
+                }
+            }
+        }
+        result
     }
 }
 

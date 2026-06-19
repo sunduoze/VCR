@@ -179,6 +179,7 @@ pub extern "C" fn vcr_pyramid_query(
 /// out: pre-allocated CDataPoint array
 /// max_points: max output points
 /// Returns: actual number of points written (always even: min+max per bucket)
+/// 🚀 Zero-alloc: writes directly into `out` buffer, no intermediate Vec<DataPoint>.
 #[no_mangle]
 pub extern "C" fn vcr_pyramid_query_points(
     t_min: f64,
@@ -192,19 +193,25 @@ pub extern "C" fn vcr_pyramid_query_points(
     }
 
     let pyramid = FFI_PYRAMID.lock();
-    let points = pyramid.query_as_datapoints(t_min, t_max, target_points as usize);
-
-    let count = points.len().min(max_points as usize);
-    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
-
-    for (i, dp) in points.iter().take(count).enumerate() {
-        dest[i] = CDataPoint {
-            timestamp_ms: dp.timestamp_ms,
-            value: dp.value,
+    let buckets = pyramid.query(t_min, t_max, target_points as usize);
+    let max_entries = (buckets.len() * 2).min(max_points as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, max_entries) };
+    let mut wi = 0usize;
+    for &(ts, lo, hi, _count) in &buckets {
+        if wi + 1 >= max_entries {
+            break;
+        }
+        dest[wi] = CDataPoint {
+            timestamp_ms: ts,
+            value: lo,
         };
+        dest[wi + 1] = CDataPoint {
+            timestamp_ms: ts + 0.001,
+            value: hi,
+        };
+        wi += 2;
     }
-
-    count as u32
+    wi as u32
 }
 
 /// Feed data into the pyramid (also pushed to ring buffer in production)
@@ -263,6 +270,7 @@ pub extern "C" fn vcr_pyramid_ch_push_batch(
 
 /// Query a channel's pyramid for min+max pairs in [t_min, t_max].
 /// Returns count of DataPoints written (always even: min+max per bucket).
+/// 🚀 Zero-alloc: writes directly into `out` buffer, no intermediate Vec<DataPoint>.
 #[no_mangle]
 pub extern "C" fn vcr_pyramid_ch_query_points(
     channel_id: u32,
@@ -280,16 +288,27 @@ pub extern "C" fn vcr_pyramid_ch_query_points(
         Some(p) => p,
         None => return 0,
     };
-    let points = pyramid.query_as_datapoints(t_min, t_max, target_points as usize);
-    let count = points.len().min(max_points as usize);
-    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
-    for (i, dp) in points.iter().take(count).enumerate() {
-        dest[i] = CDataPoint {
-            timestamp_ms: dp.timestamp_ms,
-            value: dp.value,
+    // 🚀 Phase D: query buckets and write directly to out buffer (zero intermediate Vec<DataPoint>).
+    // Each bucket → 2 CDataPoint entries (min + max), capped at max_points.
+    let buckets = pyramid.query(t_min, t_max, target_points as usize);
+    let max_entries = (buckets.len() * 2).min(max_points as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, max_entries) };
+    let mut wi = 0usize;
+    for &(ts, lo, hi, _count) in &buckets {
+        if wi + 1 >= max_entries {
+            break;
+        }
+        dest[wi] = CDataPoint {
+            timestamp_ms: ts,
+            value: lo,
         };
+        dest[wi + 1] = CDataPoint {
+            timestamp_ms: ts + 0.001,
+            value: hi,
+        };
+        wi += 2;
     }
-    count as u32
+    wi as u32
 }
 
 /// Query a channel's pyramid for CBucketStats (min/max/avg/count per bucket).

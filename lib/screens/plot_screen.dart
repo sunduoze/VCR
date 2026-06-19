@@ -117,6 +117,9 @@ class PlotChannel {
   double yMaxManual;
   bool autoScaleY; // Per-channel auto-scale
   String plotGroupId; // Which PlotGroup this channel belongs to
+  int? _trimAccumulator; // 🧹 tracks how many times ch.data was trimmed (for lazy pyramid rebuild)
+  double? _smoothedYMin; // 🩺 EMA-smoothed Y-axis range for glitch-free rendering
+  double? _smoothedYMax;
 
   PlotChannel({
     required this.deviceId,
@@ -200,7 +203,7 @@ class PlotScreen extends StatefulWidget {
 class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateMixin {
   // ── Data source ──
   bool _useRealData = false; // false = demo, true = real device
-  Timer? _realDataTimer;
+  Timer? _realDataTimer; // 🚀 单定时器：合并 data fetch + UI update，消除竞态
   StreamSubscription<dynamic>? _chartDataSub;
   
   // ── Plot Groups ──
@@ -263,6 +266,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // 🚀 P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
   int _viewportRefreshCount = 0;
+
+  // 🩺 Diagnostic frame counter (remove when debugging complete)
+  int _frameCount = 0;
 
   // 🚀 Phase C: Reusable query buffers (allocated once, resized lazily)
   Float64List? _queryBuffer;        // Reusable Float64List for _refreshViewportData
@@ -563,20 +569,23 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _debugLog('[TICK] sampleIndex=$_sampleIndex, totalPoints=$_totalPoints, first.ch.data.length=${_channels.isNotEmpty ? _channels.first.data.length : 0}');
       }
 
-      if (_scrollMode) {
-        // Auto-track: always show the latest data at the right edge (x=0)
-        _xMax = 0.0;
-        _xMin = -_effectiveScrollWindowWidth;
-        _scrollMinTime = _xMin;
-      } else {
-        if (_autoScaleX) _fitXAxis();
-        if (_autoScaleY) _fitYAxis();
-      }
-      
-      // 根据帧率控制决定是否更新UI
+      // 🩺 Fix: _refreshViewportData() MUST run BEFORE _fitYAxis() to ensure
+      // Y-axis uses the same data that will be rendered (not stale data from previous frame).
+      // This eliminates a one-frame Y-axis↔data mismatch glitch.
       if (shouldUpdateUI) {
         _lastDemoUpdate = now;
-        _refreshViewportData(); // ← 修复：timer回调中刷新viewportData，否则绘制回退到ch.data(250K点)导致卡顿
+        _refreshViewportData(); // Step 1: populate ch.viewportData with fresh data
+        
+        if (_scrollMode) {
+          // Auto-track: always show the latest data at the right edge (x=0)
+          _xMax = 0.0;
+          _xMin = -_effectiveScrollWindowWidth;
+          _scrollMinTime = _xMin;
+          if (_autoScaleY) _fitYAxis(); // Step 2: use fresh viewportData
+        } else {
+          if (_autoScaleX) _fitXAxis(); // Step 2: use fresh data
+          if (_autoScaleY) _fitYAxis(); // Step 2: use fresh viewportData
+        }
         setState(() {});
       }
     });
@@ -632,24 +641,26 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     final bridge = FfiBridge.instance;
 
-    // 🚀 Phase C: Reuse Float64List buffer (resize lazily only when maxPts changes)
-    final buffer = _queryBuffer;
-    if (buffer == null || buffer.length != maxPts * 2) {
-      _queryBuffer = Float64List(maxPts * 2);
+    // 🚀 Phase C: Reuse Float64List buffer (resize lazily when needed).
+    // Buffer stores (ts,val) pairs — each pyramid datapoint uses 2 Float64 slots.
+    // Max datapoints = maxPts * 2 (each bucket → 2 datapoints: min + max).
+    final maxDatapoints = maxPts * 2;
+    if (_queryBuffer == null || _queryBuffer!.length != maxDatapoints * 2) {
+      _queryBuffer = Float64List(maxDatapoints * 2);
     }
     final fb = _queryBuffer!;
 
     // 🚀 Phase C: Reuse native CDataPoint buffer
     Pointer<CDataPoint> nativeBuf;
-    if (_queryNative != null && _queryNativeCap >= maxPts) {
+    if (_queryNative != null && _queryNativeCap >= maxDatapoints) {
       nativeBuf = _queryNative!;
     } else {
       // Free old buffer if it exists (resize up)
       if (_queryNative != null) {
         calloc.free(_queryNative!);
       }
-      _queryNative = calloc<CDataPoint>(maxPts);
-      _queryNativeCap = maxPts;
+      _queryNative = calloc<CDataPoint>(maxDatapoints);
+      _queryNativeCap = maxDatapoints;
       nativeBuf = _queryNative!;
     }
 
@@ -666,11 +677,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final tMax = newestAbsX + _xMax;
 
       // 🚀 Phase A+B+C: Query per-channel pyramid with reusable buffers
-      final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxPts, fb);
+      // maxDatapoints = maxPts * 2 because each bucket produces 2 datapoints (min+max pair)
+      final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
 
       if (count == 0) {
         // 🚀 Phase C TODO: Remove fallback once per-channel pyramid is proven stable across all data sources.
         // Pyramid empty for this channel → fallback to raw data path
+        print('[FALLBACK] ${ch.channelName}: pyramid returned 0 points (tMin=$tMin tMax=$tMax ch.data.length=${ch.data.length} newestAbsX=$newestAbsX)');
         _debugLog('[VPD] ${ch.channelName}: pyramid empty, fallback to raw data');
         ch.viewportData = _fallbackViewportData(ch, newestAbsX, tMin, tMax, maxPts);
         ch.envelopeData = []; // No envelope in fallback mode
@@ -705,10 +718,38 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.viewportData.add(_DataPoint(lastX, lastY));
       }
 
-      _debugLog('[VPD] ${ch.channelName}: pyramid → ${ch.viewportData.length} avg + ${ch.envelopeData.length} env pts (${count} raw, ${count ~/ 2} buckets)');
+      _debugLog('[VPD] ${ch.channelName}: pyramid → ${ch.viewportData.length} avg + ${ch.envelopeData.length} env pts (${count} raw, ${count ~/ 2} buckets) ch.data.last.x=$newestAbsX tMin=$tMin tMax=$tMax');
+
+      // 🔧 Diagnostic: log X-range of first pyramid result to verify data coverage
+      if (ch.viewportData.isNotEmpty && _frameCount % 60 == 0) {
+        final vpXFirst = ch.viewportData.first.x;
+        final vpXLast = ch.viewportData.last.x;
+        final expectedStart = _xMin;
+        final expectedEnd = _xMax;
+        final driftStart = (vpXFirst - expectedStart).abs();
+        print('[DIAG-PYRAMID-X] ${ch.channelName}: pyramid X range [${vpXFirst.toStringAsFixed(0)}, ${vpXLast.toStringAsFixed(0)}] expected [${expectedStart.toStringAsFixed(0)}, ${expectedEnd.toStringAsFixed(0)}] drift=$driftStart');
+      }
+
+      // 🔧 Debug: log per-channel Y range after viewportData populated
+      if (ch.viewportData.isNotEmpty) {
+        double vpYMin = ch.viewportData.first.y;
+        double vpYMax = ch.viewportData.first.y;
+        for (final pt in ch.viewportData) {
+          if (pt.y < vpYMin) vpYMin = pt.y;
+          if (pt.y > vpYMax) vpYMax = pt.y;
+        }
+        _debugLog('[VPD-Y] ${ch.channelName}: viewportData Y range [${vpYMin.toStringAsFixed(3)}, ${vpYMax.toStringAsFixed(3)}] ch.yMin=${ch.yMin.toStringAsFixed(3)} ch.yMax=${ch.yMax.toStringAsFixed(3)}');
+      }
     }
     // 🚀 P3-B 优化：ChartViewport 刷新完成，递增计数器
     _viewportRefreshCount++;
+    
+    // 🩺 Diagnostic: print refresh summary
+    if (_channels.isNotEmpty && _channels.any((c) => c.visible && c.data.isNotEmpty)) {
+      final summary = _channels.where((c) => c.visible).map((c) => 
+        '${c.channelName}:vpData=${c.viewportData.length} envData=${c.envelopeData.length}').join(', ');
+      print('[DIAG] _refreshViewportData done: $summary');
+    }
   }
 
   /// 🚀 Phase C TODO: Remove this fallback method once per-channel pyramid is proven stable.
@@ -826,18 +867,32 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               if (latestData.isNotEmpty) {
                 // Compute the next X index from the last point in data
                 final nextX = ch.data.isEmpty ? 0.0 : (ch.data.last.x + 1.0);
-                // Append delta points with sequential X values
+                // 🚀 Batch pyramid push: one FFI call instead of N (eliminates mutex contention)
                 final bridge = FfiBridge.instance;
+                final batch = <(double, double)>[];
                 for (int k = 0; k < latestData.length; k++) {
                   final px = nextX + k;
                   final py = latestData[k].value;
                   ch.data.add(_DataPoint(px, py));
-                  bridge.pushChannelPoint(targetIdx, px, py);
+                  batch.add((px, py));
                 }
+                bridge.pushChannelBatch(targetIdx, batch);
                 ch.currentValue = latestData.last.value;
                 // Keep only _maxPoints points (trim from front, keep newest)
                 if (ch.data.length > _maxPoints) {
                   ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+                  // 🧹 Periodically rebuild pyramid to discard old data beyond buffer range.
+                  // Accumulate trim count: rebuild when trimmed exceeds _maxPoints.
+                  ch._trimAccumulator = (ch._trimAccumulator ?? 0) + 1;
+                  if (ch._trimAccumulator! >= (_maxPoints ~/ latestData.length).clamp(1, 10000)) {
+                    ch._trimAccumulator = 0;
+                    final rebuildBatch = <(double, double)>[];
+                    for (final pt in ch.data) {
+                      rebuildBatch.add((pt.x, pt.y));
+                    }
+                    bridge.clearChannelPyramid(targetIdx);
+                    bridge.pushChannelBatch(targetIdx, rebuildBatch);
+                  }
                 }
               }
             } catch (_) {}
@@ -848,11 +903,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
     } catch (e) {
     }
+    _lastFetchEnd = DateTime.now();
   }
 
   /// UI 更新节流（策略 A: 分离数据轮询和 UI 更新）
   /// 每 33ms 更新一次 UI，而非每次数据轮询都更新
   DateTime _lastUIUpdate = DateTime.now();
+  DateTime _lastFetchEnd = DateTime.now(); // 🩺 Diagnostic: track _fetchRealData completion time
 
   void _updateRealDataUI() {
     if (!_useRealData || !mounted || !_isPlaying) return;
@@ -861,6 +918,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final now = DateTime.now();
     if (now.difference(_lastUIUpdate).inMilliseconds < 33) return;
     _lastUIUpdate = now;
+
+    // 🩺 Diagnostic: measure time since last _fetchRealData call ended
+    if (_frameCount % 60 == 0 && _useRealData) {
+      final elapsed = now.difference(_lastFetchEnd).inMilliseconds;
+      if (elapsed > 60) {
+        print('[DIAG-TIMER] _fetchRealData → _updateRealDataUI gap: ${elapsed}ms (frame $_frameCount)');
+      }
+    }
 
     // Update X axis range
     if (_scrollMode) {
@@ -876,39 +941,58 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
       _xMin = -effectiveWidth;
       _scrollMinTime = _xMin;
-    } else {
-      if (_autoScaleX) _fitXAxis();
-      if (_autoScaleY) _fitYAxis();
-    }
-    
-    // Always update Y-axis in scroll mode too
-    if (_scrollMode && _autoScaleY) {
-      _fitYAxis();
     }
 
-    // 调试：X轴范围
-
-    // Fetch ChartViewport data for visible channels
+    // Fetch ChartViewport data for visible channels FIRST
     // 统一使用 _refreshViewportData() 处理 Demo 和 Real 模式
     _refreshViewportData();
-    
+
+    // Fit Y axis AFTER refreshing viewport data (must use fresh data)
+    if (_autoScaleY) {
+      _fitYAxis();
+    }
+    if (!_scrollMode && _autoScaleX) {
+      _fitXAxis();
+    }
+
     // CPU 渲染路径
     setState(() {});
   }
 
   void _startRealData() {
     _realDataTimer?.cancel();
-    _fetchTimer?.cancel();
 
-    // 策略 A: 两个分离的定时器
-    // 1. 数据轮询：100ms（~10fps），降低频率避免FPS下降
-    //    与 _updateRealDataUI 解耦，允许数据轮询更快
-    _fetchTimer = Timer.periodic(const Duration(milliseconds: 100), (_) => _fetchRealData());
-    // 2. UI 更新：100ms（~10fps），保证画面流畅不卡顿
-    _realDataTimer = Timer.periodic(const Duration(milliseconds: 100), (_) => _updateRealDataUI());
+    // 🚀 单定时器架构：数据获取 + UI 更新在同一回调中顺序执行
+    // 消除 _fetchTimer / _realDataTimer 双定时器竞态：
+    // - 旧架构：两个独立 100ms Timer，执行顺序不确定
+    // - 新架构：单个 50ms Timer，先 fetch → 再 UI update，保证 pyramid 数据就绪
+    // _updateRealDataUI 内部保留 33ms 节流，控制实际 UI 刷新率
+    _realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+      _fetchRealData();
+      // 🩺 Diagnostic: track viewportData population
+      if (_channels.isNotEmpty) {
+        final hasData = _channels.where((c) => c.visible && c.data.isNotEmpty);
+        final noViewport = hasData.where((c) => c.viewportData.isEmpty);
+        if (noViewport.isNotEmpty && _frameCount % 20 == 0) {
+          print('[DIAG] ${noViewport.length}/${hasData.length} channels have empty viewportData (frame $_frameCount)');
+        }
+        _frameCount++;
+      }
+      // 🩺 Diagnostic: check Rust-side overflow counts every 200 frames (~10s)
+      if (_frameCount % 200 == 0) {
+        try {
+          final overflow = RustLib.instance.api.crateApiPlotApiPlotGetOverflowCounts();
+          if (overflow.isNotEmpty) {
+            print('[DIAG-OVERFLOW] ChannelBuffer overflow detected:');
+            for (final entry in overflow) {
+              print('  ${entry.$1} / ${entry.$2}: ${entry.$3} drops');
+            }
+          }
+        } catch (_) {}
+      }
+      _updateRealDataUI();
+    });
   }
-
-  Timer? _fetchTimer; // Separate from _realDataTimer
 
   void _toggleDataSource() {
     setState(() {
@@ -924,22 +1008,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _viewportRefreshCount++;
 
       if (_useRealData) {
-        // Switch to real data: stop demo timer, start real data timers
+        // Switch to real data: stop demo timer, start real data timer
         _demoTimer?.cancel();
         // Init real channels if empty
         if (_realChannels.isEmpty) {
           _startRealData();
         } else {
-          // Resume real data timers
+          // Resume real data timer
           _realDataTimer?.cancel();
-          _fetchTimer?.cancel();
-          _fetchTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _fetchRealData());
-          _realDataTimer = Timer.periodic(const Duration(milliseconds: 33), (_) => _updateRealDataUI());
+          _realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+            _fetchRealData();
+            _updateRealDataUI();
+          });
         }
       } else {
-        // Switch to demo: stop real data timers, start demo timer
+        // Switch to demo: stop real data timer, start demo timer
         _realDataTimer?.cancel();
-        _fetchTimer?.cancel();
         // Init demo channels if empty
         if (_demoChannels.isEmpty) {
           _initDemoChannels();
@@ -999,6 +1083,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // Use viewportData for Y-axis fitting (visible data only)
     final data = ch.viewportData.isNotEmpty ? ch.viewportData : ch.data;
     if (!ch.visible || data.isEmpty) return;
+    // 🩺 Diagnostic: check Y-axis oscillation
+    final prevYMin = ch.yMin;
+    final prevYMax = ch.yMax;
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
     for (final pt in data) {
@@ -1008,9 +1095,33 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (minVal.isInfinite) { minVal = -1; maxVal = 1; }
     final range = maxVal - minVal;
     final padding = range * 0.1;
-    ch.yMin = minVal - padding;
-    ch.yMax = maxVal + padding;
+    final targetMin = minVal - padding;
+    final targetMax = maxVal + padding;
+    
+    // 🩺 EMA-smooth Y-axis to eliminate 1-frame range oscillation glitches.
+    // Smoothing factor 0.4: ~40% new + 60% old. Smaller = more stable, larger = faster adaptation.
+    const double ySmooth = 0.4;
+    if (ch._smoothedYMin == null) {
+      ch._smoothedYMin = targetMin;
+      ch._smoothedYMax = targetMax;
+    } else {
+      ch._smoothedYMin = ch._smoothedYMin! * (1.0 - ySmooth) + targetMin * ySmooth;
+      ch._smoothedYMax = ch._smoothedYMax! * (1.0 - ySmooth) + targetMax * ySmooth;
+    }
+    ch.yMin = ch._smoothedYMin!;
+    ch.yMax = ch._smoothedYMax!;
     ch.autoScaleY = true;
+    // 🩺 Diagnostic: detect Y-axis oscillation (target range change > 5%)
+    // Note: smoothed values are used for rendering; this detects raw target oscillations
+    if (prevYMax != double.negativeInfinity) {
+      final yRangeDelta = ((targetMax - targetMin) - (prevYMax - prevYMin)).abs();
+      final oldRange = (prevYMax - prevYMin).abs();
+      if (oldRange > 0.001 && yRangeDelta / oldRange > 0.05) {
+        final smoothDelta = ((ch.yMax - ch.yMin) - (prevYMax - prevYMin)).abs();
+        final smoothPct = (smoothDelta / oldRange * 100).toStringAsFixed(1);
+        print('[DIAG-Y-OSC] ${ch.channelName}: target ${((yRangeDelta/oldRange)*100).toStringAsFixed(1)}% but smoothed only $smoothPct% (prev [${prevYMin.toStringAsFixed(3)}, ${prevYMax.toStringAsFixed(3)}] → target [${targetMin.toStringAsFixed(3)}, ${targetMax.toStringAsFixed(3)}] → rendered [${ch.yMin.toStringAsFixed(3)}, ${ch.yMax.toStringAsFixed(3)}]) dataLen=${data.length}');
+      }
+    }
     // Update global Y range to encompass this channel's new range
     if (minVal - padding < _yMin) _yMin = minVal - padding;
     if (maxVal + padding > _yMax) _yMax = maxVal + padding;
@@ -1101,7 +1212,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker.dispose();
     _demoTimer?.cancel();
     _realDataTimer?.cancel();
-    _fetchTimer?.cancel();
     _chartDataSub?.cancel();
     // GPU 𫔰阌
     if (_gpuInitialized) {
@@ -1177,7 +1287,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _aaLevel = AntiAliasingLevel.values[aaIdx];
         }
         _panelWidth = (json['panelWidth'] as num?)?.toDouble() ?? 220.0;
-        _shareYAxis = json['shareYAxis'] as bool? ?? true;
+        _shareYAxis = json['shareYAxis'] as bool? ?? false;
         _scrollMode = json['scrollMode'] as bool? ?? false;
         _scrollWindowWidth = (json['scrollWindowWidth'] as num?)?.toDouble() ?? 0.0;
         _scrollMinTime = (json['scrollMinTime'] as num?)?.toDouble() ?? 0.0;
@@ -1375,6 +1485,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.viewportData.clear();
         ch.envelopeData.clear();
         ch.currentValue = 0.0;
+        ch._trimAccumulator = null;
       }
       // 🚀 Phase A: Clear per-channel pyramids on data reset
       FfiBridge.instance.clearAllChannelPyramids();
@@ -1814,8 +1925,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               _isPlaying = !_isPlaying;
             });
             if (!_isPlaying) {
-              // Pause: cancel timers to stop all updates
-              _fetchTimer?.cancel();
+              // Pause: cancel timer to stop all updates
               _realDataTimer?.cancel();
             } else if (_useRealData) {
               // Resume: restart timers
@@ -3070,6 +3180,21 @@ class _PlotPainter extends CustomPainter {
   static final _aaDownsamplePaint = Paint()
     ..filterQuality = FilterQuality.medium
     ..blendMode = BlendMode.srcOver;
+  // 🚀 P1: Reusable per-channel Paint + Path objects (zero per-frame allocation)
+  static final _linePaint = Paint()..style = PaintingStyle.stroke;
+  static final _linePath = ui.Path();
+  static final _envelopeFillPaint = Paint()
+    ..style = PaintingStyle.fill
+    ..isAntiAlias = true;
+  static final _envelopePath = ui.Path();
+  // Dot line style: cached paint + path
+  static final _dotLinePaint = Paint()..style = PaintingStyle.stroke;
+  static final _dotPath = ui.Path();
+  static final _dotPointPaint = Paint();
+  // Axis line: reusable per-channel paint
+  static final _axisLinePaint = Paint()
+    ..strokeWidth = 1.0
+    ..style = PaintingStyle.stroke;
   // Reusable TextPainters (one per frame use case, avoid per-frame allocation)
   static final _overlayTp = TextPainter(textDirection: TextDirection.ltr);
   static final _crosshairTp = TextPainter(textDirection: TextDirection.ltr);
@@ -3456,7 +3581,9 @@ class _PlotPainter extends CustomPainter {
 
     // ── Draw channels ──
     for (final ch in channels) {
-      if (!ch.visible || ch.data.isEmpty) continue;
+      if (!ch.visible || ch.data.isEmpty) {
+        continue;
+      }
 
       // Determine which Y range to use for this channel
       final double chYMin;
@@ -3654,7 +3781,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
   void _drawEnvelope(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform) {
     if (data.length < 2) return;
 
-    // Build fill path: top envelope (max values) → reverse along bottom (min values)
+    // 🧪 Diagnostic: use fresh Path to rule out caching issues
     final path = ui.Path();
     
     // Envelope data format: [x0,ymin0], [x0,ymax0], [x1,ymin1], [x1,ymax1], ...
@@ -3678,21 +3805,14 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     }
     path.close();
 
-    final fillPaint = Paint()
-      ..color = ch.color.withValues(alpha: 0.12)
-      ..style = PaintingStyle.fill
-      ..isAntiAlias = true;
-    canvas.drawPath(path, fillPaint);
+    // 🧪 Use cached Paint (updating color is safe)
+    _envelopeFillPaint.color = ch.color.withValues(alpha: 0.25);
+    canvas.drawPath(path, _envelopeFillPaint);
   }
 
   void _drawDotLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
-    // Draw connecting line first (thinner, dimmer)
-    final linePaint = Paint()
-      ..color = ch.color.withValues(alpha: 0.5)
-      ..strokeWidth = ch.lineWidth
-      ..style = PaintingStyle.stroke;
-
-    final path = Path();
+    // 🧪 Diagnostic: fresh Path to rule out caching issues; reuse Paint (safe)
+    final path = ui.Path();
     for (int i = 0; i < data.length; i++) {
       final sx = _xToScreen(data[i].x, w) + ox;
       final sy = yTransform(data[i].y) + oy;
@@ -3702,24 +3822,26 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
         path.lineTo(sx, sy);
       }
     }
-    canvas.drawPath(path, linePaint);
+    _dotLinePaint.color = ch.color.withValues(alpha: 0.5);
+    _dotLinePaint.strokeWidth = ch.lineWidth;
+    canvas.drawPath(path, _dotLinePaint);
 
     // Draw dots on top
-    final dotPaint = Paint()..color = ch.color;
+    _dotPointPaint.color = ch.color;
     for (final pt in data) {
       final sx = _xToScreen(pt.x, w) + ox;
       final sy = yTransform(pt.y) + oy;
-      canvas.drawCircle(Offset(sx, sy), 2.5, dotPaint);
+      canvas.drawCircle(Offset(sx, sy), 2.5, _dotPointPaint);
     }
   }
 
   void _drawLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
+    // 🧪 Diagnostic: use fresh Paint+Path to rule out caching issues
     final paint = Paint()
       ..color = ch.color
       ..strokeWidth = ch.lineWidth
       ..style = PaintingStyle.stroke;
-
-    final path = Path();
+    final path = ui.Path();
     for (int i = 0; i < data.length; i++) {
       final sx = _xToScreen(data[i].x, w) + ox;
       final sy = yTransform(data[i].y) + oy;
@@ -3863,19 +3985,26 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
       }
     }
 
-    // 🚀 P3-B 优化：只比较 ChartViewport 刷新计数器，不比较数据长度
-    // 如果 ChartViewport 未刷新（计数器未变），不需要重绘
-    if (viewportRefreshCount == oldDelegate.viewportRefreshCount) {
-      return false; // ChartViewport 未变化，跳过重绘
+    // 🔧 P3-B revisited: viewportRefreshCount is incremented whenever
+    // _refreshViewportData() runs → new viewportData is available → MUST repaint.
+    // Previously this was a negative check (return false when equal but skip when
+    // different), which meant xMin/xMax/yMin/yMax changes were sometimes missed.
+    if (viewportRefreshCount != oldDelegate.viewportRefreshCount) {
+      return true; // Viewport data was refreshed — always repaint
+    }
+    
+    // 🚀 If viewport counter hasn't changed, check whether coordinates moved
+    // (scrollbar drag / pan / zoom can change coordinates without refreshing viewport data).
+    if (xMin != oldDelegate.xMin || xMax != oldDelegate.xMax ||
+        yMin != oldDelegate.yMin || yMax != oldDelegate.yMax) {
+      return true;
     }
     
     // GPU texture changed?
     if (gpuWaveformImage != oldDelegate.gpuWaveformImage) return true;
     
-    // Only repaint when something actually changed
-    if (xMin != oldDelegate.xMin || xMax != oldDelegate.xMax ||
-        yMin != oldDelegate.yMin || yMax != oldDelegate.yMax ||
-        mousePosition != oldDelegate.mousePosition ||
+    // Only repaint when something actually changed (rare fallback)
+    if (mousePosition != oldDelegate.mousePosition ||
         fps != oldDelegate.fps ||
         totalPoints != oldDelegate.totalPoints ||
         aaScale != oldDelegate.aaScale ||

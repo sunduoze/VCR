@@ -84,7 +84,11 @@ impl TimeBucket {
         if self.is_empty() {
             return None;
         }
-        let first_ts = self.get(0)?.timestamp_ms;
+        // 🔧 Find first non-empty bucket (may be after logical index 0 in sliding window)
+        let first_ts = (0..self.len)
+            .find_map(|i| self.get(i))
+            .filter(|b| b.count > 0)
+            .map(|b| b.timestamp_ms)?;
         let bucket_idx = ((timestamp_ms - first_ts) / self.bucket_width_ms).floor() as isize;
         if bucket_idx < 0 {
             Some(0)
@@ -102,8 +106,20 @@ impl TimeBucket {
             return (0, 0);
         }
 
-        let first_ts = self.get(0).unwrap().timestamp_ms;
-        let last_ts = first_ts + self.len as f64 * self.bucket_width_ms;
+        // 🔧 Find first non-empty bucket (after sliding window, logical index 0 may be empty)
+        let first_bucket = (0..self.len).find_map(|i| self.get(i));
+        let first_ts = match first_bucket {
+            Some(b) if b.count > 0 => b.timestamp_ms,
+            _ => return (0, 0), // All buckets empty
+        };
+
+        // Find last non-empty bucket for accurate time range
+        let last_ts = (0..self.len)
+            .rev()
+            .find_map(|i| self.get(i))
+            .filter(|b| b.count > 0)
+            .map(|b| b.timestamp_ms + self.bucket_width_ms)
+            .unwrap_or(first_ts + self.bucket_width_ms);
 
         if t_max < first_ts || t_min > last_ts {
             return (0, 0);
@@ -141,7 +157,28 @@ impl TimeBucket {
             return;
         }
 
-        let first_ts = self.get(0).unwrap().timestamp_ms;
+        // 🔧 After sliding window, logical index 0 may be empty. Find first non-empty.
+        let first_bucket = match (0..self.len).find_map(|i| self.get(i)) {
+            Some(b) if b.count > 0 => b,
+            _ => {
+                // All buckets empty (e.g. after full window slide): restart fresh
+                self.buckets.clear();
+                self.write_idx = 0;
+                self.len = 0;
+                let aligned_ts =
+                    (timestamp_ms / self.bucket_width_ms).floor() * self.bucket_width_ms;
+                self.buckets.push(BucketStats {
+                    timestamp_ms: aligned_ts,
+                    min_value: value,
+                    max_value: value,
+                    avg_value: value,
+                    count: 1,
+                });
+                self.len = 1;
+                return;
+            }
+        };
+        let first_ts = first_bucket.timestamp_ms;
         let bucket_offset = ((timestamp_ms - first_ts) / self.bucket_width_ms).floor();
 
         if bucket_offset < 0.0 {
@@ -149,25 +186,43 @@ impl TimeBucket {
             return;
         }
 
-        let bucket_idx = bucket_offset as usize;
+        let mut bucket_idx = bucket_offset as usize;
 
-        // Expand or wrap as needed
+        // Expand or wrap: proper sliding window (not frozen after max_buckets)
         if self.max_buckets > 0 {
-            // Fixed size: circular buffer
+            // Fixed size: sliding window circular buffer
             if bucket_idx >= self.max_buckets {
-                // Wrapping: only keep the latest max_buckets
-                return;
+                // 🔧 Slide window forward: drop oldest buckets, reuse slots for newest
+                let overflow = bucket_idx - self.max_buckets + 1;
+                let drop_count = overflow.min(self.max_buckets);
+                // Clear the buckets being dropped (between old write_idx and new write_idx)
+                for offset in 0..drop_count {
+                    let pos = (self.write_idx + offset) % self.max_buckets;
+                    self.buckets[pos] = BucketStats {
+                        timestamp_ms: 0.0,
+                        min_value: f64::MAX,
+                        max_value: f64::MIN,
+                        avg_value: 0.0,
+                        count: 0,
+                    };
+                }
+                self.write_idx = (self.write_idx + drop_count) % self.max_buckets;
+                // Adjust bucket_idx to fit within the new window
+                bucket_idx = self.max_buckets - 1;
             }
 
             self.ensure_buckets_circular(bucket_idx + 1);
+            self.len = self.len.max(bucket_idx + 1).min(self.max_buckets);
 
             let write_pos = (self.write_idx + bucket_idx) % self.max_buckets;
-            let existing = &mut self.buckets[write_pos];
 
-            if existing.count == 0 {
-                // New bucket
-                let aligned_ts = first_ts + bucket_idx as f64 * self.bucket_width_ms;
-                *existing = BucketStats {
+            // 🔧 Compute aligned timestamp BEFORE taking mutable reference
+            if self.buckets[write_pos].count == 0 {
+                // Use absolute alignment (ts / bucket_width) to avoid stale first_ts
+                // after sliding window resets the oldest buckets
+                let aligned_ts =
+                    (timestamp_ms / self.bucket_width_ms).floor() * self.bucket_width_ms;
+                self.buckets[write_pos] = BucketStats {
                     timestamp_ms: aligned_ts,
                     min_value: value,
                     max_value: value,
@@ -176,6 +231,7 @@ impl TimeBucket {
                 };
             } else {
                 // Update existing
+                let existing = &mut self.buckets[write_pos];
                 existing.min_value = existing.min_value.min(value);
                 existing.max_value = existing.max_value.max(value);
                 existing.avg_value = (existing.avg_value * existing.count as f64 + value)
@@ -281,47 +337,63 @@ impl TimeBucketPyramid {
 
     /// Select the best pyramid level for a time range query.
     ///
-    /// Returns the level index where bucket count ≈ target_points.
-    pub fn select_level(&self, t_range_ms: f64, target_points: usize) -> usize {
-        // Iterate finest→coarsest: pick the MOST detailed level that fits within target.
+    /// Select the best pyramid level for a time range query.
+    ///
+    /// Returns the level index where bucket count ≈ target_points AND data overlaps [t_min, t_max].
+    pub fn select_level(&self, t_min: f64, t_max: f64, target_points: usize) -> usize {
+        if t_min >= t_max {
+            return self.levels.len() - 1;
+        }
+        let t_range = t_max - t_min;
+        // Iterate finest→coarsest: pick the MOST detailed level that fits within target
+        // AND has data that overlaps the query range (sliding window may have evicted old data).
         for (i, level) in self.levels.iter().enumerate() {
-            let buckets_in_range = (t_range_ms / level.bucket_width_ms).ceil() as usize;
+            let buckets_in_range = (t_range / level.bucket_width_ms).ceil() as usize;
             if buckets_in_range <= target_points {
-                return i;
+                // Verify this level has data covering [t_min, t_max]
+                let (start, end) = level.query_range_indices(t_min, t_max);
+                if end > start {
+                    return i;
+                }
             }
         }
-        self.levels.len() - 1 // Default to coarsest level (all levels exceed target)
+        self.levels.len() - 1 // Default to coarsest level (all levels exceed target or no data)
     }
 
     /// Query the pyramid for buckets in [t_min, t_max]
     ///
-    /// Returns tuples of (bucket_start_ms, min, max, count) from the best level.
+    /// Returns tuples of (bucket_start_ms, min, max, count) from the best available level.
     pub fn query(&self, t_min: f64, t_max: f64, target_points: usize) -> Vec<(f64, f64, f64, u32)> {
         if t_min >= t_max {
             return vec![];
         }
 
-        let t_range = t_max - t_min;
-        let level_idx = self.select_level(t_range, target_points);
-        let level = &self.levels[level_idx];
+        // Try levels from finest→coarsest: use the first one that has data
+        let start_level = self.select_level(t_min, t_max, target_points);
+        for level_idx in start_level..self.levels.len() {
+            let level = &self.levels[level_idx];
+            let (start, end) = level.query_range_indices(t_min, t_max);
 
-        let (start, end) = level.query_range_indices(t_min, t_max);
-
-        let mut result = Vec::with_capacity(end - start);
-        for i in start..end {
-            if let Some(bucket) = level.get(i) {
-                if bucket.count > 0 {
-                    result.push((
-                        bucket.timestamp_ms,
-                        bucket.min_value,
-                        bucket.max_value,
-                        bucket.count,
-                    ));
+            let mut result = Vec::with_capacity(end.saturating_sub(start));
+            for i in start..end {
+                if let Some(bucket) = level.get(i) {
+                    if bucket.count > 0 {
+                        result.push((
+                            bucket.timestamp_ms,
+                            bucket.min_value,
+                            bucket.max_value,
+                            bucket.count,
+                        ));
+                    }
                 }
+            }
+
+            if !result.is_empty() {
+                return result;
             }
         }
 
-        result
+        vec![]
     }
 
     /// Query and convert to DataPoint pairs (min + max for each bucket)
@@ -421,22 +493,27 @@ mod tests {
         let pyramid = TimeBucketPyramid::new();
 
         // 1000-unit range → level 1 (2-unit buckets would need 500 > 100 target; 10-unit = 100 fits)
-        let level = pyramid.select_level(1000.0, 100);
-        assert_eq!(level, 1);
+        // No data yet, so select_level returns coarsest (level 3) since no level has data
+        let level = pyramid.select_level(0.0, 1000.0, 100);
+        assert_eq!(level, 3);
 
         // Very large range → all levels exceed target, fallback to coarsest (level 3)
-        let level = pyramid.select_level(3600_000.0, 100);
+        let level = pyramid.select_level(0.0, 3600_000.0, 100);
         assert_eq!(level, 3);
     }
 
     #[test]
     fn test_level_selection_small_range() {
-        let pyramid = TimeBucketPyramid::new();
-        // Small range (2 units) → fits in level 0 (1 bucket)
-        let level = pyramid.select_level(2.0, 4000);
+        let mut pyramid = TimeBucketPyramid::new();
+        // Push some data so pyramid is non-empty
+        for i in 0..50 {
+            pyramid.push(i as f64, (i as f64).sin());
+        }
+        // Small range (2 units) → fits in level 0 (1 bucket), data exists
+        let level = pyramid.select_level(0.0, 2.0, 4000);
         assert_eq!(level, 0);
         // Medium range (1000 units) with large target → level 0 (500 buckets fits)
-        let level = pyramid.select_level(1000.0, 4000);
+        let level = pyramid.select_level(0.0, 1000.0, 4000);
         assert_eq!(level, 0);
     }
 }

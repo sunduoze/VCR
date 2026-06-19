@@ -339,3 +339,10 @@ pub fn plot_swap_buffers() {
     log::trace!("[Plot] plot_swap_buffers called");
     PLOT_DATA.swap_all_buffers();
 }
+
+/// 🩺 查询所有通道的溢出计数
+/// 返回 [(device_id, channel_name, overflow_count), ...]
+#[flutter_rust_bridge::frb(sync)]
+pub fn plot_get_overflow_counts() -> Vec<(String, String, u64)> {
+    PLOT_DATA.get_all_overflow_counts()
+}

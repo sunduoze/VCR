@@ -30,6 +30,7 @@ pub mod win_comm {
     extern "system" {
         pub fn EscapeCommFunction(hFile: *mut std::ffi::c_void, dwFunc: u32) -> i32;
         pub fn GetCommModemStatus(hFile: *mut std::ffi::c_void, lpModemStat: *mut u32) -> i32;
+        pub fn SetupComm(hFile: *mut std::ffi::c_void, dwInQueue: u32, dwOutQueue: u32) -> i32;
         pub fn GetLastError() -> u32;
     }
 
@@ -209,7 +210,17 @@ impl Transport for SerialTransport {
         #[cfg(target_os = "windows")]
         let handle = {
             use std::os::windows::io::AsRawHandle;
-            port.as_raw_handle()
+            let h = port.as_raw_handle();
+            // 🚀 Fix: Increase OS serial buffer to 64KB (default 4KB is too small for high-speed devices)
+            // Without this, Windows silently drops data when the OS buffer overflows at high data rates.
+            let result = unsafe { win_comm::SetupComm(h, 65536, 65536) };
+            if result == 0 {
+                let err = unsafe { win_comm::GetLastError() };
+                log::warn!("[Serial] SetupComm failed with code {}. OS buffer may be small (4KB default).", err);
+            } else {
+                log::info!("[Serial] OS buffers set to 64KB (in/out).");
+            }
+            h
         };
         self.port = Some(port);
         #[cfg(target_os = "windows")]

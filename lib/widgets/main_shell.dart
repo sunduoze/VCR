@@ -40,18 +40,19 @@ class MainShell extends StatefulWidget {
   });
 
   @override
-  State<MainShell> createState() => _MainShellState();
+  State<MainShell> createState() => MainShellState();
 }
 
-class _MainShellState extends State<MainShell> {
+class MainShellState extends State<MainShell> {
   // ── Local index for setState-based tab switching (no route navigation) ──
   late int _currentIndex;
 
   // ── Keep all screens alive (never disposed) ──
+  // Order: Devices → Console → Plot → Settings → Lua
   final _screens = const [
     DeviceListScreen(),
+    DebugConsoleScreen(),  // was index 2, now index 1 (before Plot)
     PlotScreen(),
-    DebugConsoleScreen(),
     SettingsScreen(),
     LuaScriptScreen(),
   ];
@@ -108,14 +109,14 @@ class _MainShellState extends State<MainShell> {
                 label: Text('Devices'),
               ),
               NavigationRailDestination(
-                icon: Icon(Icons.show_chart_outlined),
-                selectedIcon: Icon(Icons.show_chart),
-                label: Text('Plot'),
-              ),
-              NavigationRailDestination(
                 icon: Icon(Icons.terminal_outlined),
                 selectedIcon: Icon(Icons.terminal),
                 label: Text('Console'),
+              ),
+              NavigationRailDestination(
+                icon: Icon(Icons.show_chart_outlined),
+                selectedIcon: Icon(Icons.show_chart),
+                label: Text('Plot'),
               ),
               NavigationRailDestination(
                 icon: Icon(Icons.settings_outlined),
@@ -148,8 +149,8 @@ class _MainShellState extends State<MainShell> {
 
     // Save Console state before switching away from it (belt-and-suspenders;
     // IndexedStack keeps state alive, but we also persist to disk for crash safety)
-    // Console is now at index 2 (was 3 before Dashboard tab was removed)
-    if (_currentIndex == 2) {
+    // Console is at index 1 (Devices=0, Console=1, Plot=2, Settings=3, Lua=4)
+    if (_currentIndex == 1) {
       try {
         DebugConsoleScreen.saveCurrentState();
       } catch (e) {
@@ -159,6 +160,15 @@ class _MainShellState extends State<MainShell> {
 
     setState(() {
       _currentIndex = index;
+    });
+  }
+
+  /// 切换到 Console 标签页并选中指定设备（从 Devices 页面调用）
+  void switchToConsoleTab(String deviceId) {
+    // 设置待选中的设备 ID（DebugConsoleScreen 会在 build 中检测并处理）
+    DebugConsoleScreen.pendingDeviceId = deviceId;
+    setState(() {
+      _currentIndex = 1; // Console 标签页索引
     });
   }
 }

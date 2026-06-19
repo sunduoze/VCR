@@ -2,7 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../app/theme.dart';
 import '../app/routes.dart';
-import '../widgets/main_shell.dart' show VcrLogo;
+import '../widgets/main_shell.dart';
 import '../widgets/status_indicator.dart';
 import '../screens/settings_screen.dart' show AppConfig;
 import '../src/rust/api/device_api.dart';
@@ -281,9 +281,16 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
     );
   }
 
-  // 从列表点击设备 → 直接跳转到 Console 并自动选中该设备
+  // 从列表点击设备 → 切换到 Console 标签页并自动选中该设备
   void _navigateToConsole(DeviceInfo device) {
-    Navigator.pushNamed(context, AppRoutes.debugConsole, arguments: device.id);
+    // 通过 MainShell 切换到 Console 标签页（index=1）
+    final mainShell = context.findAncestorStateOfType<MainShellState>();
+    if (mainShell != null) {
+      mainShell.switchToConsoleTab(device.id);
+    } else {
+      // fallback: 如果找不到 MainShell，使用路由导航
+      Navigator.pushNamed(context, AppRoutes.debugConsole, arguments: device.id);
+    }
   }
 
   Future<void> _navigateToDetail(DeviceInfo device) async {

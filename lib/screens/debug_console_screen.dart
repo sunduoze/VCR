@@ -9,6 +9,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:gbk_codec/gbk_codec.dart';
 import '../app/theme.dart';
+import '../models/multi_send_item.dart';
+import '../widgets/multi_send_panel.dart';
 import '../src/rust/api/device_api.dart';
 import '../src/rust/api/debug_api.dart';
 import '../src/rust/core/device/models.dart';
@@ -80,6 +82,9 @@ class ConsoleDeviceState {
   int continuousSendTarget = 100;
   List<int>? continuousSendBytes;
   String? continuousSendDeviceId; // Device ID when continuous send started
+
+  // ── Multi-send panel items ──
+  List<MultiSendItem> multiSendItems = [];
 
   // Serialise to JSON (one device block in console_config.json)
   Map<String, dynamic> toJson() => {
@@ -173,6 +178,8 @@ class ConsoleDeviceState {
 // DebugConsoleScreen — per-device independent state
 // ============================================================================
 class DebugConsoleScreen extends StatefulWidget {
+  /// 待选中的设备 ID（从 Devices 页面导航过来）
+  static String? pendingDeviceId;
   final String? deviceId;
   const DebugConsoleScreen({super.key, this.deviceId});
 
@@ -195,7 +202,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
 
   String? _selectedDeviceId;
 
-  // ── Global (shared) settings ──
+  // ── Global multi-send items (shared across all devices) ──
+  List<MultiSendItem> _globalMultiSendItems = [];
+  bool _globalMultiSendItemsLoaded = false;
   String? _lastExportDir;
   List<String> _deviceSortOrder = [];
   final List<int> _bufferSizePresets = [
@@ -224,6 +233,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
 
   // ── User scroll detection (for smart auto-scroll) ──
   bool _userScrolledUp = false;
+
+  // ── Multi-send panel visibility ──
+  bool _multiSendPanelVisible = false;
 
   // HEX formatter
   static final _hexFormatter = FilteringTextInputFormatter.allow(
@@ -267,6 +279,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   Future<void> _initializeAsync() async {
     await _loadGlobalConfig();
     await _loadSortOrder();
+    await _loadGlobalMultiSendItems();
 
     // Load persisted signal/display/send settings for all devices
     final devices = listDevices();
@@ -347,6 +360,14 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
         targetDeviceId = savedDeviceId;
         debugPrint('[DEBUG]   Using savedDeviceId: $targetDeviceId');
       }
+    }
+
+    // 检查从 Devices 页面导航过来的待选中设备
+    if (DebugConsoleScreen.pendingDeviceId != null && 
+        devices.any((d) => d.id == DebugConsoleScreen.pendingDeviceId)) {
+      targetDeviceId = DebugConsoleScreen.pendingDeviceId;
+      DebugConsoleScreen.pendingDeviceId = null; // 清除待选中状态
+      debugPrint('[DEBUG]   Using pendingDeviceId: $targetDeviceId');
     }
 
     // Fall back to first device if needed
@@ -479,6 +500,40 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       }
     } catch (e) {
       debugPrint('Failed to load signal states for device $deviceId: $e');
+    }
+  }
+
+  // ── Global multi-send items (shared across all devices) ──
+  Future<void> _loadGlobalMultiSendItems() async {
+    if (_globalMultiSendItemsLoaded) return;
+    try {
+      final appData = Platform.environment['APPDATA'] ?? '';
+      if (appData.isEmpty) return;
+      final file = File('$appData\\VCR\\multi_send_items.json');
+      if (await file.exists()) {
+        final raw = await file.readAsString();
+        final jsonList = jsonDecode(raw) as List;
+        _globalMultiSendItems = jsonList
+            .map((j) => MultiSendItem.fromJson(j as Map<String, dynamic>))
+            .toList();
+      }
+    } catch (e) {
+      debugPrint('Failed to load global multi-send items: $e');
+    }
+    _globalMultiSendItemsLoaded = true;
+  }
+
+  Future<void> _saveGlobalMultiSendItems() async {
+    try {
+      final appData = Platform.environment['APPDATA'] ?? '';
+      if (appData.isEmpty) return;
+      final dir = Directory('$appData\\VCR');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      final jsonList = _globalMultiSendItems.map((e) => e.toJson()).toList();
+      final file = File('$appData\\VCR\\multi_send_items.json');
+      await file.writeAsString(jsonEncode(jsonList));
+    } catch (e) {
+      debugPrint('Failed to save global multi-send items: $e');
     }
   }
 
@@ -1287,6 +1342,17 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   // ── Build ──
   @override
   Widget build(BuildContext context) {
+    // 从 Devices 页面导航过来：检测并选中待选设备
+    if (DebugConsoleScreen.pendingDeviceId != null) {
+      final pending = DebugConsoleScreen.pendingDeviceId!;
+      DebugConsoleScreen.pendingDeviceId = null; // 立即清除，防止重复触发
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _selectDevice(pending, loadFromRust: true);
+        }
+      });
+    }
+
     final devices = listDevices();
     _sortDevices(devices);
 
@@ -1319,6 +1385,12 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       appBar: AppBar(
         title: const Text('Console'),
         actions: [
+          // Multi-send panel toggle
+          IconButton(
+            icon: Icon(_multiSendPanelVisible ? Icons.list_alt : Icons.list_alt_outlined),
+            onPressed: () => setState(() => _multiSendPanelVisible = !_multiSendPanelVisible),
+            tooltip: 'Multi-Send Panel',
+          ),
           Tooltip(
             message: 'Set buffer size (up to 500 MB)',
             preferBelow: false,
@@ -1348,8 +1420,12 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
           ),
         ],
       ),
-      body: Column(
+      body: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Expanded(
+            child: Column(
+              children: [
           // Connection bar
           Container(
             padding: const EdgeInsets.all(12),
@@ -1952,6 +2028,26 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
                     ],
                   ),
               ],
+            ),
+          ),
+              ],
+            ),
+          ),
+          if (_multiSendPanelVisible)
+            SizedBox(
+              width: 400,
+              child: MultiSendPanel(
+              deviceId: _selectedDeviceId,
+              connected: _cs.connected,
+              items: _globalMultiSendItems,
+               encoding: _cs.encoding,
+               lineEnding: _cs.lineEnding,
+               onItemsChanged: (items) {
+                setState(() {
+                  _globalMultiSendItems = items;
+                });
+                _saveGlobalMultiSendItems();
+              },
             ),
           ),
         ],

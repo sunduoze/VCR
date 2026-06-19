@@ -267,7 +267,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // 🚀 P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
   int _viewportRefreshCount = 0;
 
-  // 🩺 Diagnostic frame counter (remove when debugging complete)
+  // 🩺 Diagnostic: set true to enable verbose per-frame logging (DISABLE for production)
+  static const bool _verbose = false;
   int _frameCount = 0;
 
   // 🚀 Phase C: Reusable query buffers (allocated once, resized lazily)
@@ -537,7 +538,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final rng = Random();
       
       // Generate sub-samples per tick for smooth curves
-      // Performance: use append (O(1)) + relative X offset to avoid O(n) renumbering
+      // Performance: batch-push to pyramid via single FFI call per channel (not per-point)
+      final batchPerChannel = List.generate(_channels.length, (_) => <(double, double)>[]);
       for (int s = 0; s < _demoSubSamples; s++) {
         _demoPhase += dt;
         final t = _demoPhase;
@@ -546,11 +548,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final val = _demoEval(i, t, noise);
           // Append at end: data[0]=oldest, data[last]=newest
           // Store per-channel sample index (continuous); displayed X = pt.x - data.last.x (offset from newest)
-          _channels[i].data.add(_DataPoint(_demoSampleIndices[i].toDouble(), val));
+          final x = _demoSampleIndices[i].toDouble();
+          _channels[i].data.add(_DataPoint(x, val));
           _channels[i].currentValue = val;
-          // 🚀 Phase A: Feed into per-channel LOD pyramid
-          FfiBridge.instance.pushChannelPoint(i, _demoSampleIndices[i].toDouble(), val);
+          batchPerChannel[i].add((x, val));
           _demoSampleIndices[i]++;
+        }
+      }
+      // 🚀 Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
+      final bridge = FfiBridge.instance;
+      for (int i = 0; i < _channels.length; i++) {
+        if (batchPerChannel[i].isNotEmpty) {
+          bridge.pushChannelBatch(i, batchPerChannel[i]);
         }
       }
       // Trim: only when data exceeds _maxPoints by a safe margin to avoid O(n) per tick.
@@ -559,7 +568,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _debugLog('[TRIM] Trimming data: first.data.length=${_channels.first.data.length}, _maxPoints=$_maxPoints');
         for (final ch in _channels) {
           if (ch.data.length > _maxPoints) {
-            ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+            ch.data.removeRange(0, ch.data.length - _maxPoints);
           }
         }
       }
@@ -632,7 +641,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// instead of O(n) binary search + sublist + step decimation.
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
-    final maxPts = (_screenWidth * 2).round().clamp(500, 4000);
+    final maxPts = _screenWidth.round().clamp(500, 4000);
     // 调试：打印关键参数
     if (_channels.isNotEmpty && _channels.first.data.isNotEmpty) {
       _debugLog('[DEBUG] _refreshViewportData: _xMin=$_xMin _xMax=$_xMax _screenWidth=$_screenWidth maxPts=$maxPts');
@@ -683,7 +692,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (count == 0) {
         // 🚀 Phase C TODO: Remove fallback once per-channel pyramid is proven stable across all data sources.
         // Pyramid empty for this channel → fallback to raw data path
-        print('[FALLBACK] ${ch.channelName}: pyramid returned 0 points (tMin=$tMin tMax=$tMax ch.data.length=${ch.data.length} newestAbsX=$newestAbsX)');
+        if (_verbose) print('[FALLBACK] ${ch.channelName}: pyramid returned 0 points (tMin=$tMin tMax=$tMax ch.data.length=${ch.data.length} newestAbsX=$newestAbsX)');
         _debugLog('[VPD] ${ch.channelName}: pyramid empty, fallback to raw data');
         ch.viewportData = _fallbackViewportData(ch, newestAbsX, tMin, tMax, maxPts);
         ch.envelopeData = []; // No envelope in fallback mode
@@ -727,7 +736,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         final expectedStart = _xMin;
         final expectedEnd = _xMax;
         final driftStart = (vpXFirst - expectedStart).abs();
-        print('[DIAG-PYRAMID-X] ${ch.channelName}: pyramid X range [${vpXFirst.toStringAsFixed(0)}, ${vpXLast.toStringAsFixed(0)}] expected [${expectedStart.toStringAsFixed(0)}, ${expectedEnd.toStringAsFixed(0)}] drift=$driftStart');
+        if (_verbose) print('[DIAG-PYRAMID-X] ${ch.channelName}: pyramid X range [${vpXFirst.toStringAsFixed(0)}, ${vpXLast.toStringAsFixed(0)}] expected [${expectedStart.toStringAsFixed(0)}, ${expectedEnd.toStringAsFixed(0)}] drift=$driftStart');
       }
 
       // 🔧 Debug: log per-channel Y range after viewportData populated
@@ -748,7 +757,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_channels.isNotEmpty && _channels.any((c) => c.visible && c.data.isNotEmpty)) {
       final summary = _channels.where((c) => c.visible).map((c) => 
         '${c.channelName}:vpData=${c.viewportData.length} envData=${c.envelopeData.length}').join(', ');
-      print('[DIAG] _refreshViewportData done: $summary');
+      if (_verbose) print('[DIAG] _refreshViewportData done: $summary');
     }
   }
 
@@ -880,7 +889,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                 ch.currentValue = latestData.last.value;
                 // Keep only _maxPoints points (trim from front, keep newest)
                 if (ch.data.length > _maxPoints) {
-                  ch.data = ch.data.sublist(ch.data.length - _maxPoints);
+                  ch.data.removeRange(0, ch.data.length - _maxPoints);
                   // 🧹 Periodically rebuild pyramid to discard old data beyond buffer range.
                   // Accumulate trim count: rebuild when trimmed exceeds _maxPoints.
                   ch._trimAccumulator = (ch._trimAccumulator ?? 0) + 1;
@@ -923,7 +932,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_frameCount % 60 == 0 && _useRealData) {
       final elapsed = now.difference(_lastFetchEnd).inMilliseconds;
       if (elapsed > 60) {
-        print('[DIAG-TIMER] _fetchRealData → _updateRealDataUI gap: ${elapsed}ms (frame $_frameCount)');
+        if (_verbose) print('[DIAG-TIMER] _fetchRealData → _updateRealDataUI gap: ${elapsed}ms (frame $_frameCount)');
       }
     }
 
@@ -974,7 +983,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         final hasData = _channels.where((c) => c.visible && c.data.isNotEmpty);
         final noViewport = hasData.where((c) => c.viewportData.isEmpty);
         if (noViewport.isNotEmpty && _frameCount % 20 == 0) {
-          print('[DIAG] ${noViewport.length}/${hasData.length} channels have empty viewportData (frame $_frameCount)');
+          if (_verbose) print('[DIAG] ${noViewport.length}/${hasData.length} channels have empty viewportData (frame $_frameCount)');
         }
         _frameCount++;
       }
@@ -983,9 +992,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         try {
           final overflow = RustLib.instance.api.crateApiPlotApiPlotGetOverflowCounts();
           if (overflow.isNotEmpty) {
-            print('[DIAG-OVERFLOW] ChannelBuffer overflow detected:');
+            if (_verbose) print('[DIAG-OVERFLOW] ChannelBuffer overflow detected:');
             for (final entry in overflow) {
-              print('  ${entry.$1} / ${entry.$2}: ${entry.$3} drops');
+              if (_verbose) print('  ${entry.$1} / ${entry.$2}: ${entry.$3} drops');
             }
           }
         } catch (_) {}
@@ -1119,7 +1128,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (oldRange > 0.001 && yRangeDelta / oldRange > 0.05) {
         final smoothDelta = ((ch.yMax - ch.yMin) - (prevYMax - prevYMin)).abs();
         final smoothPct = (smoothDelta / oldRange * 100).toStringAsFixed(1);
-        print('[DIAG-Y-OSC] ${ch.channelName}: target ${((yRangeDelta/oldRange)*100).toStringAsFixed(1)}% but smoothed only $smoothPct% (prev [${prevYMin.toStringAsFixed(3)}, ${prevYMax.toStringAsFixed(3)}] → target [${targetMin.toStringAsFixed(3)}, ${targetMax.toStringAsFixed(3)}] → rendered [${ch.yMin.toStringAsFixed(3)}, ${ch.yMax.toStringAsFixed(3)}]) dataLen=${data.length}');
+        if (_verbose) print('[DIAG-Y-OSC] ${ch.channelName}: target ${((yRangeDelta/oldRange)*100).toStringAsFixed(1)}% but smoothed only $smoothPct% (prev [${prevYMin.toStringAsFixed(3)}, ${prevYMax.toStringAsFixed(3)}] → target [${targetMin.toStringAsFixed(3)}, ${targetMax.toStringAsFixed(3)}] → rendered [${ch.yMin.toStringAsFixed(3)}, ${ch.yMax.toStringAsFixed(3)}]) dataLen=${data.length}');
       }
     }
     // Update global Y range to encompass this channel's new range

@@ -3209,6 +3209,10 @@ class _PlotPainter extends CustomPainter {
   final int viewportRefreshCount;
   final bool isDarkTheme;
 
+  // P2-2: Static layer cache (background/grid/axes — rebuild only on layout/theme change)
+  static ui.Picture? _staticPicture;
+  static int _staticVersion = 0;
+
   ui.Picture? _cachedPicture;
   int _cacheVersion = 0;
 
@@ -3352,159 +3356,59 @@ class _PlotPainter extends CustomPainter {
     final yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
     final leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
     final rightYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 1).length;
-    
-    final plotLeft = 50.0 + leftYAxes * 45.0; // Expand left margin for multiple Y axes
+
+    final plotLeft = 50.0 + leftYAxes * 45.0;
     final plotBottom = 40.0;
-    final plotRight = 10.0 + rightYAxes * 45.0; // Expand right margin for multiple Y axes
+    final plotRight = 10.0 + rightYAxes * 45.0;
     final plotTop = 10.0;
     final plotW = w - plotLeft - plotRight;
     final plotH = h - plotTop - plotBottom;
 
-    if (plotW <= 0 || plotH <= 0) return; // Guard against invalid dimensions
+    if (plotW <= 0 || plotH <= 0) return;
 
-    // ── Background ──
-    final bg = isDarkTheme ? _dkBg : _ltBg;
-    final plotBg = isDarkTheme ? _dkPlotBg : _ltPlotBg;
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bg);
-
-    // ── Plot area background ──
-    canvas.drawRect(
-      Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-      plotBg,
+    // P2-2: Static layer cache — rebuild only on layout/theme/axis-range change
+    // Hash includes: layout geometry + theme + visible Y-axis channels state + axis ranges
+    int staticHash = Object.hash(
+      isDarkTheme,
+      plotLeft, plotTop, plotW, plotH,
+      xMin, xMax, yMin, yMax,
+      deltaTime, globalDecimals,
+      yAxisChannels.length,
     );
-
-    // ── Grid lines (dashed) ──
-    // Vertical grid (X axis — shared)
-    final xTicks = _niceTicks(xMin, xMax, 10);
-    for (final tick in xTicks) {
-      final sx = _xToScreen(tick, plotW) + plotLeft;
-      if (sx < plotLeft || sx > plotLeft + plotW) continue;
-      _drawDashedLine(canvas, Offset(sx, plotTop), Offset(sx, plotTop + plotH), _gridPaint);
+    for (int ci = 0; ci < yAxisChannels.length; ci++) {
+      final ch = yAxisChannels[ci];
+      staticHash = Object.hash(staticHash,
+        ch.visible, ch.showYAxis, ch.decimals, ch.color.toARGB32(),
+        ch.autoScaleY, ch.yMin, ch.yMax, ch.yMinManual, ch.yMaxManual,
+        ci % 2, // left/right side
+      );
     }
 
-    // Horizontal grid (Y axis) — dashed
-    final yTicks = _niceTicks(yMin, yMax, 8);
-    for (final tick in yTicks) {
-      final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
-      if (sy < plotTop || sy > plotTop + plotH) continue;
-      _drawDashedLine(canvas, Offset(plotLeft, sy), Offset(plotLeft + plotW, sy), _gridPaint);
+    if (_staticPicture == null || _staticVersion != staticHash) {
+      final recorder = ui.PictureRecorder();
+      final staticCanvas = Canvas(recorder);
+      _drawStaticLayer(staticCanvas, w, h, scale,
+          plotLeft, plotTop, plotW, plotH, plotRight, plotBottom);
+      _staticPicture = recorder.endRecording();
+      _staticVersion = staticHash;
     }
 
-    // Zero line — solid (same color depth as grid)
-    final zeroY = _yToScreen(0, plotH, yMin, yMax) + plotTop;
-    if (zeroY >= plotTop && zeroY <= plotTop + plotH) {
-      canvas.drawLine(Offset(plotLeft, zeroY), Offset(plotLeft + plotW, zeroY), _zeroPaint);
-    }
+    // Draw cached static layer (background, grid, axes, labels, border, info)
+    canvas.drawPicture(_staticPicture!);
 
-    // ── X axis labels ──
-    final labelStyle = TextStyle(
-      color: const Color(0xFF8B949E),
-      fontSize: 16,
-      fontFamily: 'DS-Digital',
-    );
-    for (final tick in xTicks) {
-      final sx = _xToScreen(tick, plotW) + plotLeft;
-      if (sx < plotLeft || sx > plotLeft + plotW) continue;
-      final tp = TextPainter(
-        text: TextSpan(text: _formatXTick(tick, deltaTime), style: labelStyle),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(canvas, Offset(sx - tp.width / 2, h - plotBottom + 4));
-    }
-
-    // ── Per-channel Y axis labels ──
-    // If multiple channels show Y-axis, render them on alternating sides with their color
-    if (yAxisChannels.isEmpty) {
-      // No channel has Y-axis enabled: show default Y-axis scale using global range
-      for (final tick in yTicks) {
-        final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
-        if (sy < plotTop || sy > plotTop + plotH) continue;
-        final tp = TextPainter(
-          text: TextSpan(text: _formatTick(tick, globalDecimals), style: _gridTextStyle),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, Offset(plotLeft - tp.width - 4, sy - tp.height / 2));
-      }
-    } else if (yAxisChannels.length == 1) {
-      // Single Y-axis: render on left side, use that channel's decimal precision
-      for (final tick in yTicks) {
-        final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
-        if (sy < plotTop || sy > plotTop + plotH) continue;
-        final tp = TextPainter(
-          text: TextSpan(text: tick.toStringAsFixed(yAxisChannels.first.decimals), style: labelStyle),
-          textDirection: TextDirection.ltr,
-        )..layout();
-        tp.paint(canvas, Offset(plotLeft - tp.width - 4, sy - tp.height / 2));
-      }
-    } else {
-      // Multi Y-axis: render each channel's Y labels on alternating sides
-      for (int ci = 0; ci < yAxisChannels.length; ci++) {
-        final ch = yAxisChannels[ci];
-        final chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
-        final chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
-        final chTicks = _niceTicks(chYMin, chYMax, 6);
-        final chLabelStyle = TextStyle(
-          color: ch.color,
-          fontSize: 15,
-          fontFamily: 'DS-Digital',
-        );
-
-        // Even index → left side, odd index → right side
-        final isLeft = ci % 2 == 0;
-        final leftIdx = (ci / 2).floor();
-        final rightIdx = (ci / 2).floor();
-
-        for (final tick in chTicks) {
-          final sy = _yToScreen(tick, plotH, chYMin, chYMax) + plotTop;
-          if (sy < plotTop || sy > plotTop + plotH) continue;
-          // Format with channel's decimal precision
-          final tickText = tick.toStringAsFixed(ch.decimals);
-          final tp = TextPainter(
-            text: TextSpan(text: tickText, style: chLabelStyle),
-            textDirection: TextDirection.ltr,
-          )..layout();
-          if (isLeft) {
-            final xOffset = plotLeft - tp.width - 4 - leftIdx * 45;
-            tp.paint(canvas, Offset(xOffset.clamp(2, double.maxFinite), sy - tp.height / 2));
-          } else {
-            final xOffset = plotLeft + plotW + 4 + rightIdx * 45;
-            tp.paint(canvas, Offset(xOffset, sy - tp.height / 2));
-          }
-        }
-
-        // Draw a colored axis line for this channel
-        final axisPaint = Paint()
-          ..color = ch.color.withValues(alpha: 0.5)
-          ..strokeWidth = 1.0;
-        if (isLeft) {
-          final x = plotLeft - leftIdx * 45 - 2;
-          canvas.drawLine(Offset(x, plotTop), Offset(x, plotTop + plotH), axisPaint);
-        } else {
-          final x = plotLeft + plotW + rightIdx * 45 + 2;
-          canvas.drawLine(Offset(x, plotTop), Offset(x, plotTop + plotH), axisPaint);
-        }
-      }
-    }
-
-    // ── Waveform clipping ──
+    // ── Waveform clipping (dynamic layer) ──
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH));
 
-    // ── Draw channels ──
     for (final ch in channels) {
-      if (!ch.visible || ch.data.isEmpty) {
-        continue;
-      }
+      if (!ch.visible || ch.data.isEmpty) continue;
 
-      // Determine which Y range to use for this channel
       final double chYMin;
       final double chYMax;
       if (shareYAxis) {
-        // Use global Y range when sharing Y axis
         chYMin = yMin;
         chYMax = yMax;
       } else {
-        // Use per-channel Y range
         chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
         chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
       }
@@ -3513,22 +3417,6 @@ class _PlotPainter extends CustomPainter {
     }
 
     canvas.restore();
-
-    // ── Border ──
-    final borderPaint = isDarkTheme ? _dkBorder : _ltBorder;
-    canvas.drawRect(
-      Rect.fromLTWH(plotLeft, plotTop, plotW, plotH),
-      borderPaint,
-    );
-
-    // ═══ Crosshair drawn in paint() after PictureCache (NOT cached) ═══
-
-    final infoStyle = isDarkTheme ? _dkInfoStyle : _ltInfoStyle;
-    final infoTp = TextPainter(
-      text: TextSpan(text: 'FPS: $fps  Pts: $totalPoints', style: infoStyle),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    infoTp.paint(canvas, Offset(plotLeft + plotW - infoTp.width - 4, plotTop + 4));
   }
 
   /// Draws crosshair, tooltip, and per-channel values ON TOP of cached content.
@@ -3601,6 +3489,133 @@ class _PlotPainter extends CustomPainter {
     }
   }
 
+  /// Draws the static (non-waveform) layer: background, grid, axes, labels, border, info.
+  /// Cached via _staticPicture / _staticVersion since these only change on zoom/pan/theme.
+  void _drawStaticLayer(Canvas canvas, double w, double h, double scale,
+      double plotLeft, double plotTop, double plotW, double plotH,
+      double plotRight, double plotBottom) {
+    // ── Background ──
+    final bg = isDarkTheme ? _dkBg : _ltBg;
+    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), bg);
+
+    // ── Plot area background ──
+    final plotBg = isDarkTheme ? _dkPlotBg : _ltPlotBg;
+    canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), plotBg);
+
+    // ── Grid lines (dashed) ──
+    final xTicks = _niceTicks(xMin, xMax, 10);
+    for (final tick in xTicks) {
+      final sx = _xToScreen(tick, plotW) + plotLeft;
+      if (sx < plotLeft || sx > plotLeft + plotW) continue;
+      _drawDashedLine(canvas, Offset(sx, plotTop), Offset(sx, plotTop + plotH), _gridPaint);
+    }
+
+    final yTicks = _niceTicks(yMin, yMax, 8);
+    for (final tick in yTicks) {
+      final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
+      if (sy < plotTop || sy > plotTop + plotH) continue;
+      _drawDashedLine(canvas, Offset(plotLeft, sy), Offset(plotLeft + plotW, sy), _gridPaint);
+    }
+
+    // Zero line
+    final zeroY = _yToScreen(0, plotH, yMin, yMax) + plotTop;
+    if (zeroY >= plotTop && zeroY <= plotTop + plotH) {
+      canvas.drawLine(Offset(plotLeft, zeroY), Offset(plotLeft + plotW, zeroY), _zeroPaint);
+    }
+
+    // ── X axis labels ──
+    final labelStyle = TextStyle(
+      color: const Color(0xFF8B949E),
+      fontSize: 16,
+      fontFamily: 'DS-Digital',
+    );
+    for (final tick in xTicks) {
+      final sx = _xToScreen(tick, plotW) + plotLeft;
+      if (sx < plotLeft || sx > plotLeft + plotW) continue;
+      final tp = TextPainter(
+        text: TextSpan(text: _formatXTick(tick, deltaTime), style: labelStyle),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      tp.paint(canvas, Offset(sx - tp.width / 2, h - plotBottom + 4));
+    }
+
+    // ── Per-channel Y axis labels ──
+    final yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
+    if (yAxisChannels.isEmpty) {
+      for (final tick in yTicks) {
+        final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
+        if (sy < plotTop || sy > plotTop + plotH) continue;
+        final tp = TextPainter(
+          text: TextSpan(text: _formatTick(tick, globalDecimals), style: _gridTextStyle),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(plotLeft - tp.width - 4, sy - tp.height / 2));
+      }
+    } else if (yAxisChannels.length == 1) {
+      for (final tick in yTicks) {
+        final sy = _yToScreen(tick, plotH, yMin, yMax) + plotTop;
+        if (sy < plotTop || sy > plotTop + plotH) continue;
+        final tp = TextPainter(
+          text: TextSpan(text: tick.toStringAsFixed(yAxisChannels.first.decimals), style: labelStyle),
+          textDirection: TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(plotLeft - tp.width - 4, sy - tp.height / 2));
+      }
+    } else {
+      for (int ci = 0; ci < yAxisChannels.length; ci++) {
+        final ch = yAxisChannels[ci];
+        final chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
+        final chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
+        final chTicks = _niceTicks(chYMin, chYMax, 6);
+        final chLabelStyle = TextStyle(
+          color: ch.color,
+          fontSize: 15,
+          fontFamily: 'DS-Digital',
+        );
+        final isLeft = ci % 2 == 0;
+        final leftIdx = (ci ~/ 2);
+        final rightIdx = (ci ~/ 2);
+        for (final tick in chTicks) {
+          final sy = _yToScreen(tick, plotH, chYMin, chYMax) + plotTop;
+          if (sy < plotTop || sy > plotTop + plotH) continue;
+          final tickText = tick.toStringAsFixed(ch.decimals);
+          final tp = TextPainter(
+            text: TextSpan(text: tickText, style: chLabelStyle),
+            textDirection: TextDirection.ltr,
+          )..layout();
+          if (isLeft) {
+            final xOffset = plotLeft - tp.width - 4 - leftIdx * 45;
+            tp.paint(canvas, Offset(xOffset.clamp(2, double.maxFinite), sy - tp.height / 2));
+          } else {
+            final xOffset = plotLeft + plotW + 4 + rightIdx * 45;
+            tp.paint(canvas, Offset(xOffset, sy - tp.height / 2));
+          }
+        }
+        final axisPaint = Paint()
+          ..color = ch.color.withValues(alpha: 0.5)
+          ..strokeWidth = 1.0;
+        if (isLeft) {
+          final x = plotLeft - leftIdx * 45 - 2;
+          canvas.drawLine(Offset(x, plotTop), Offset(x, plotTop + plotH), axisPaint);
+        } else {
+          final x = plotLeft + plotW + rightIdx * 45 + 2;
+          canvas.drawLine(Offset(x, plotTop), Offset(x, plotTop + plotH), axisPaint);
+        }
+      }
+    }
+
+    // ── Border ──
+    final borderPaint = isDarkTheme ? _dkBorder : _ltBorder;
+    canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), borderPaint);
+
+    // ── FPS / point count overlay ──
+    final infoStyle = isDarkTheme ? _dkInfoStyle : _ltInfoStyle;
+    final infoTp = TextPainter(
+      text: TextSpan(text: 'FPS: $fps  Pts: $totalPoints', style: infoStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    infoTp.paint(canvas, Offset(plotLeft + plotW - infoTp.width - 4, plotTop + 4));
+  }
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
     // Use pre-decimated ChartViewport data from Rust if available, otherwise fall back to full data
     List<_DataPoint> data;

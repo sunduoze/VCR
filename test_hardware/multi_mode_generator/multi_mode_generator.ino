@@ -425,5 +425,5 @@ void loop() {
             default: currentMode=4; break;
         }
     }
-    delay(1);
+//    delay(1);
 }

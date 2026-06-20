@@ -1,9 +1,7 @@
 ﻿import 'dart:convert';
 import 'dart:io';
-import 'dart:isolate';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
-import 'chart_isolate.dart';
 import 'src/rust/frb_generated.dart';
 import 'src/rust/api/device_api.dart';
 import 'src/rust/api/virtual_api.dart';
@@ -79,9 +77,6 @@ void main() async {
     debugPrint('[Main] Pipeline start skipped (non-critical): $e');
   }
 
-  // Start Chart Isolate for high-throughput data pipeline
-  _startChartIsolate();
-
   // 🚀 P1: Global crash handler — write unhandled errors to file for Release diagnostics.
   // Accessibility Bridge crashes (AXTree) only reproduce in Release builds,
   // making them impossible to debug without persistent logging.
@@ -129,22 +124,6 @@ Future<void> _autoReconnectIfNeeded() async {
     }
   } catch (e) {
     debugPrint('Error during auto-reconnect: $e');
-  }
-}
-
-// Global reference to Chart Isolate (imported from chart_isolate.dart)
-// Note: chartIsolatePort is defined in chart_isolate.dart
-// ignore: unused_element
-Isolate? _chartIsolate;
-
-Future<void> _startChartIsolate() async {
-  try {
-    final receivePort = ReceivePort();
-    _chartIsolate = await Isolate.spawn(chartIsolateEntry, receivePort.sendPort);
-    chartIsolatePort = await receivePort.first as SendPort;
-    debugPrint('[VCR] Chart Isolate started successfully');
-  } catch (e) {
-    debugPrint('[VCR] Failed to start Chart Isolate: $e');
   }
 }
 

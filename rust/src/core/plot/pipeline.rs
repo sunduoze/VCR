@@ -18,6 +18,41 @@ use lazy_static::lazy_static;
 
 use crate::core::plot::ffi_bridge::FFI_CH_PYRAMIDS;
 
+// ── Viewport range storage (Dart → pipeline communication) ──────────
+
+/// Dart sets this to the current viewport range.
+/// Stored as f64 bit patterns in atomics for lock-free read.
+static VP_T_MIN: AtomicU64 = AtomicU64::new(0);
+static VP_T_MAX: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
+static VP_MAX_PTS: AtomicU64 = AtomicU64::new(2000);
+/// Non-zero when Dart has set the viewport at least once.
+static VP_DIRTY: AtomicBool = AtomicBool::new(false);
+/// Counter incremented when viewport changes — pipeline compares to detect change.
+static VP_GEN: AtomicU64 = AtomicU64::new(0);
+
+/// Set the viewport range from Dart.
+/// Called each frame (or when viewport changes) from Ticker callback.
+pub fn set_viewport_range(t_min: f64, t_max: f64, max_points: u32) {
+    let old_min = VP_T_MIN.swap(f64::to_bits(t_min), Ordering::Release);
+    let old_max = VP_T_MAX.swap(f64::to_bits(t_max), Ordering::Release);
+    VP_MAX_PTS.store(max_points as u64, Ordering::Release);
+    if (old_min != f64::to_bits(t_min)) || (old_max != f64::to_bits(t_max)) {
+        VP_GEN.fetch_add(1, Ordering::Release);
+    }
+    VP_DIRTY.store(true, Ordering::Release);
+}
+
+/// Read current viewport range.
+fn read_viewport_range() -> Option<(f64, f64, u32)> {
+    if !VP_DIRTY.load(Ordering::Acquire) {
+        return None;
+    }
+    let t_min = f64::from_bits(VP_T_MIN.load(Ordering::Acquire));
+    let t_max = f64::from_bits(VP_T_MAX.load(Ordering::Acquire));
+    let max_pts = VP_MAX_PTS.load(Ordering::Acquire) as u32;
+    Some((t_min, t_max, max_pts))
+}
+
 // ── Global pipeline state ──────────────────────────────────────────
 
 lazy_static! {
@@ -43,7 +78,9 @@ const MAX_ENVELOPE_PTS_PER_CHANNEL: usize = 4000 * 2; // 4000 px × 2 pts (min+m
 /// Layout: [ch0_min_pts..., ch0_max_pts..., ch1_min_pts..., ch1_max_pts..., ...]
 /// channel_offsets[i] = byte offset of channel i's data
 /// channel_counts[i] = number of float pairs (x,y) for channel i
-#[repr(C)]
+/// 
+/// NOTE: data is a Vec<f64> (heap-allocated) to avoid stack overflow from
+/// the 4MB inline array (MAX_CHANNELS * MAX_ENVELOPE_PTS_PER_CHANNEL * 8 bytes).
 pub struct RenderEnvelope {
     /// Total number of active channels
     pub num_channels: u32,
@@ -51,8 +88,8 @@ pub struct RenderEnvelope {
     pub channel_offsets: [u32; MAX_CHANNELS],
     /// Number of f64 pairs (x,y) for each channel
     pub channel_counts: [u32; MAX_CHANNELS],
-    /// Interleaved f64 data: x0,y0, x1,y1, ...
-    pub data: [f64; MAX_CHANNELS * MAX_ENVELOPE_PTS_PER_CHANNEL],
+    /// Interleaved f64 data: x0,y0, x1,y1, ... (heap-allocated, ~4MB)
+    pub data: Vec<f64>,
     /// Viewport X range used to compute this envelope
     pub viewport_x_min: f64,
     pub viewport_x_max: f64,
@@ -69,7 +106,7 @@ lazy_static! {
         num_channels: 0,
         channel_offsets: [0u32; MAX_CHANNELS],
         channel_counts: [0u32; MAX_CHANNELS],
-        data: [0f64; MAX_CHANNELS * MAX_ENVELOPE_PTS_PER_CHANNEL],
+        data: vec![0f64; MAX_CHANNELS * MAX_ENVELOPE_PTS_PER_CHANNEL],
         viewport_x_min: 0.0,
         viewport_x_max: 0.0,
         generation: 0,
@@ -212,15 +249,22 @@ fn pipeline_loop() {
 
     let sleep_duration = Duration::from_millis(16); // ~60Hz wake-up
     let mut last_sample_idx: u64 = 0;
+    let mut last_vp_gen: u64 = 0;
 
     while PIPELINE_RUNNING.load(Ordering::Acquire) {
         let current_idx = GLOBAL_SAMPLE_IDX.load(Ordering::Relaxed);
+        let current_vp_gen = VP_GEN.load(Ordering::Acquire);
 
-        if current_idx != last_sample_idx {
+        let new_data = current_idx != last_sample_idx;
+        let vp_changed = current_vp_gen != last_vp_gen;
+
+        if new_data || vp_changed {
             last_sample_idx = current_idx;
-            // 🚀 Render envelope pre-computation (disabled by default — use pyramid query path for now)
-            // Will be enabled in Phase B when Ticker replaces Timer.
-            // update_render_envelope(t_min, t_max, 2000);
+            last_vp_gen = current_vp_gen;
+
+            if let Some((t_min, t_max, max_pts)) = read_viewport_range() {
+                update_render_envelope(t_min, t_max, max_pts);
+            }
         }
 
         thread::sleep(sleep_duration);

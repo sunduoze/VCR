@@ -2,7 +2,6 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
-import 'dart:isolate';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'dart:ffi' hide Size; // 🚀 Phase C: Pointer for native buffer reuse (hide Size to avoid dart:ui conflict)
@@ -11,7 +10,6 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/gestures.dart';
 import 'package:file_picker/file_picker.dart';
 import '../app/theme.dart';
-import '../chart_isolate.dart';
 import '../src/rust/api/device_api.dart';
 import '../src/rust/api/debug_api.dart';
 import '../src/rust/api/plot_api.dart';
@@ -203,7 +201,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── Data source ──
   bool _useRealData = false; // false = demo, true = real device
   Timer? _realDataTimer; // 🚀 单定时器：合并 data fetch + UI update，消除竞态
-  StreamSubscription<dynamic>? _chartDataSub;
   
   // ── Plot Groups ──
   List<PlotGroup> _plotGroups = [
@@ -381,45 +378,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     // Load Flutter log settings asynchronously (don't block initState)
     _loadFlutterLogSettings();
-    _setupChartIsolateListener();
   }
 
-  /// Connects to the Chart Isolate for high-throughput data pipeline.
-  /// Receives transformed data from the isolate and triggers UI updates.
-  void _setupChartIsolateListener() {
-    if (chartIsolatePort == null) {
-      print('[PlotScreen] Chart Isolate not available, falling back to timer mode');
-      return;
-    }
-
-    final receivePort = ReceivePort();
-    _chartDataSub = receivePort.listen((message) {
-      if (message is Float64List) {
-        // Chart Isolate returns interleaved [x0, y0, x1, y1, ...] as Float64List
-        _onChartIsolateData(message);
-      } else if (message is ChartViewport) {
-        // ChartViewport update from isolate
-        _onViewportUpdate(message);
-      }
-    });
-
-    chartIsolatePort!.send(receivePort.sendPort);
-    print('[PlotScreen] Chart Isolate listener connected');
-  }
-
-  /// Handle transformed data from Chart Isolate
-  void _onChartIsolateData(Float64List data) {
-    // Store for rendering; data contains interleaved [x, y] pixel coordinates
-    // Future: setState() or ValueNotifier update here
-  }
-
-  /// Handle ChartViewport updates from Chart Isolate
-  void _onViewportUpdate(ChartViewport vp) {
-    // Update the plot's visible range
-    setState(() {
-      // _xMin = vp.xMin; _xMax = vp.xMax;
-    });
-  }
   void _initDemoChannels() {
     final devices = listDevices();
     final deviceName = devices.isNotEmpty ? devices.first.name : 'Demo';
@@ -621,6 +581,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       ch.viewportData = [];
       ch.envelopeData = [];
     }
+  }
+
+  /// Feed current viewport range to pipeline for async envelope pre-computation.
+  /// Cheap: just atomics, no locks. Pipeline reads this and computes envelopes at ~60Hz.
+  void _notifyPipelineViewport() {
+    if (_xMin == _xMax || _screenWidth <= 0) return;
+    final maxPts = _screenWidth.round().clamp(500, 4000);
+    try {
+      FfiBridge.instance.envelopeSetViewport(_xMin, _xMax, maxPts);
+    } catch (_) {}
   }
 
   void _refreshViewportData() {
@@ -1097,6 +1067,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _refreshViewportData();
         if (_autoScaleY) _fitYAxis();
         if (!_scrollMode && _autoScaleX) _fitXAxis();
+        _notifyPipelineViewport(); // Feed viewport to pipeline for envelope pre-computation
         setState(() {});
       } else {
         _refreshViewportData();
@@ -1107,6 +1078,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
         if (_autoScaleY) _fitYAxis();
         if (!_scrollMode && _autoScaleX) _fitXAxis();
+        _notifyPipelineViewport(); // Feed viewport to pipeline for envelope pre-computation
         setState(() {});
       }
     } finally {
@@ -1119,7 +1091,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker.dispose();
     _demoTimer?.cancel();
     _realDataTimer?.cancel();
-    _chartDataSub?.cancel();
     // GPU 𫔰阌
     if (_gpuInitialized) {
       RustLib.instance.api.crateApiGpuApiGpuCleanup();

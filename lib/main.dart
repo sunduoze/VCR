@@ -1,6 +1,7 @@
 ﻿import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'chart_isolate.dart';
 import 'src/rust/frb_generated.dart';
@@ -81,6 +82,18 @@ void main() async {
   // Start Chart Isolate for high-throughput data pipeline
   _startChartIsolate();
 
+  // 🚀 P1: Global crash handler — write unhandled errors to file for Release diagnostics.
+  // Accessibility Bridge crashes (AXTree) only reproduce in Release builds,
+  // making them impossible to debug without persistent logging.
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details); // Keep default UI error display
+    _logCrashToFile('FlutterError', details.exceptionAsString(), details.stack?.toString());
+  };
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    _logCrashToFile('PlatformError', error.toString(), stack.toString());
+    return false; // Let default handler also run
+  };
+
   runApp(const MyApp());
 }
 
@@ -132,6 +145,24 @@ Future<void> _startChartIsolate() async {
     debugPrint('[VCR] Chart Isolate started successfully');
   } catch (e) {
     debugPrint('[VCR] Failed to start Chart Isolate: $e');
+  }
+}
+
+/// 🚀 P1: Write crash details to a file for post-mortem analysis in Release builds.
+void _logCrashToFile(String category, String error, String? stack) {
+  try {
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final dir = Directory('$exeDir\\VCR\\crash_logs');
+    if (!dir.existsSync()) dir.createSync(recursive: true);
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final file = File('${dir.path}\\crash_$timestamp.txt');
+    file.writeAsStringSync(
+      '[${DateTime.now().toIso8601String()}] $category\n'
+      'Error: $error\n'
+      'Stack: ${stack ?? "(none)"}\n',
+    );
+  } catch (_) {
+    // Silently ignore — crash logger must never cause its own crash.
   }
 }
 

@@ -305,6 +305,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Animation ──
   late Ticker _ticker;
+  bool _tickBusy = false; // P0-2: frame budget guard — skip tick if previous frame still rendering
 
   // ── Demo ──
   double _demoPhase = 0;  // Demo phase for waveform generation (time in seconds)
@@ -510,8 +511,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
   }
 
-  // 帧率控制：防止setState调用过于频繁
-  DateTime _lastDemoUpdate = DateTime.now();
   
   // 每通道独立的样本索引，确保X值连续
   final List<int> _demoSampleIndices = <int>[];
@@ -531,9 +530,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _demoTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {  // ~20fps timer
       if (!mounted || !_isPlaying) return;
       
-      // 限制UI更新频率：每50ms最多更新一次界面（约20fps）
-      final now = DateTime.now();
-      final shouldUpdateUI = now.difference(_lastDemoUpdate).inMilliseconds >= 50;
       final rng = Random();
       
       // Generate sub-samples per tick for smooth curves
@@ -581,9 +577,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // 🩺 Fix: _refreshViewportData() MUST run BEFORE _fitYAxis() to ensure
       // Y-axis uses the same data that will be rendered (not stale data from previous frame).
       // This eliminates a one-frame Y-axis↔data mismatch glitch.
-      if (shouldUpdateUI) {
-        _lastDemoUpdate = now;
-        _refreshViewportData(); // Step 1: populate ch.viewportData with fresh data
+      _refreshViewportData(); // Step 1: populate ch.viewportData with fresh data
         
         if (_scrollMode) {
           // Auto-track: always show the latest data at the right edge (x=0)
@@ -596,24 +590,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           if (_autoScaleY) _fitYAxis(); // Step 2: use fresh viewportData
         }
         setState(() {});
-      }
     });
-  }
-
-  // ── Helper: binary search for ChartViewport data ──
-  // Returns first index where data[i].x >= target.
-  // If no such index, returns data.length.
-  int _binarySearch(List<_DataPoint> data, double target) {
-    int lo = 0, hi = data.length;
-    while (lo < hi) {
-      final mid = (lo + hi) ~/ 2;
-      if (data[mid].x < target) {
-        lo = mid + 1;
-      } else {
-        hi = mid;
-      }
-    }
-    return lo;
   }
 
   // Debug log to file with level control
@@ -697,12 +674,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
 
       if (count == 0) {
-        // 🚀 Phase C TODO: Remove fallback once per-channel pyramid is proven stable across all data sources.
-        // Pyramid empty for this channel → fallback to raw data path
-        if (_verbose) print('[FALLBACK] ${ch.channelName}: pyramid returned 0 points (tMin=$tMin tMax=$tMax ch.data.length=${ch.data.length} newestAbsX=$newestAbsX)');
-        _debugLog('[VPD] ${ch.channelName}: pyramid empty, fallback to raw data');
-        ch.viewportData = _fallbackViewportData(ch, newestAbsX, tMin, tMax, maxPts);
-        ch.envelopeData = []; // No envelope in fallback mode
+        // Pyramid empty for this channel — likely buffer just started or time range mismatch
+        if (_verbose && _frameCount % 60 == 0) print('[GAP] ${ch.channelName}: pyramid returned 0 points (tMin=$tMin tMax=$tMax dataLen=${ch.data.length})');
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
         continue;
       }
 
@@ -765,33 +740,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final summary = _channels.where((c) => c.visible).map((c) => 
         '${c.channelName}:vpData=${c.viewportData.length} envData=${c.envelopeData.length}').join(', ');
       if (_verbose) print('[DIAG] _refreshViewportData done: $summary');
-    }
-  }
-
-  /// 🚀 Phase C TODO: Remove this fallback method once per-channel pyramid is proven stable.
-  /// Fallback viewport extraction: binary search + step decimation on raw data.
-  /// Used when per-channel pyramid has not been populated yet.
-  List<_DataPoint> _fallbackViewportData(PlotChannel ch, double newestAbsX,
-      double targetMin, double targetMax, int maxPts) {
-    int startIdx = _binarySearch(ch.data, targetMin);
-    int endIdx = _binarySearch(ch.data, targetMax) + 1;
-    startIdx = startIdx.clamp(0, ch.data.length);
-    endIdx = endIdx.clamp(startIdx, ch.data.length);
-    if (startIdx >= endIdx) return [];
-
-    final visible = ch.data.sublist(startIdx, endIdx);
-    if (visible.isEmpty) return [];
-
-    final plotWidth = _plotWidth();
-    final density = visible.length / plotWidth;
-
-    if (density > 0.5) {
-      final targetPoints = plotWidth.round().clamp(100, 1000);
-      final step = (visible.length / targetPoints).ceil().clamp(1, visible.length);
-      return [for (int i = 0; i < visible.length; i += step)
-        _DataPoint(visible[i].x - newestAbsX, visible[i].y)];
-    } else {
-      return visible.map((pt) => _DataPoint(pt.x - newestAbsX, pt.y)).toList();
     }
   }
 
@@ -1183,14 +1131,38 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
 
   void _onTick(Duration elapsed) {
-    _fpsFrameCount++;
-    final now = DateTime.now();
-    if (now.difference(_lastFpsTime).inMilliseconds >= 1000) {
-      setState(() {
+    // P0-2: Frame budget guard — skip if prev tick still rendering (prevents cascading lag)
+    if (_tickBusy) return;
+    if (!mounted || !_isPlaying) return;
+    _tickBusy = true;
+    try {
+      _fpsFrameCount++;
+      final now = DateTime.now();
+      if (now.difference(_lastFpsTime).inMilliseconds >= 1000) {
         _fps = _fpsFrameCount;
         _fpsFrameCount = 0;
         _lastFpsTime = now;
-      });
+      }
+      // P0-2: Ticker-driven vsync rendering — lightweight pyramid query + repaint
+      // Timer still handles data generation/fetching; Ticker provides smooth 60fps rendering
+      if (_useRealData) {
+        _refreshViewportData();
+        if (_autoScaleY) _fitYAxis();
+        if (!_scrollMode && _autoScaleX) _fitXAxis();
+        setState(() {});
+      } else {
+        _refreshViewportData();
+        if (_scrollMode) {
+          _xMax = 0.0;
+          _xMin = -_effectiveScrollWindowWidth;
+          _scrollMinTime = _xMin;
+        }
+        if (_autoScaleY) _fitYAxis();
+        if (!_scrollMode && _autoScaleX) _fitXAxis();
+        setState(() {});
+      }
+    } finally {
+      _tickBusy = false;
     }
   }
 

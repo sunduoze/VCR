@@ -2,6 +2,7 @@ pub mod data_buffer;
 pub mod ffi_bridge;
 pub mod lockfree_buffer;
 pub mod lttb;
+pub mod pipeline;
 pub mod query;
 pub mod time_bucket;
 

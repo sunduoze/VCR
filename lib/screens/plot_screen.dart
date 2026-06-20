@@ -117,7 +117,6 @@ class PlotChannel {
   double yMaxManual;
   bool autoScaleY; // Per-channel auto-scale
   String plotGroupId; // Which PlotGroup this channel belongs to
-  int? _trimAccumulator; // 🧹 tracks how many times ch.data was trimmed (for lazy pyramid rebuild)
   double? _smoothedYMin; // 🩺 EMA-smoothed Y-axis range for glitch-free rendering
   double? _smoothedYMax;
 
@@ -862,54 +861,25 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             final allPoints = plotGetAllChannels(deviceId: deviceId);
             final pts = allPoints[chName];
             if (pts != null && pts.isNotEmpty) {
-              // Use sample index as X value: newest point at x=0, older points negative
-              final totalPts = pts.length;
-              ch.data = List.generate(totalPts, (i) {
-                final sampleIdx = i - totalPts + 1; // -N+1, ..., -1, 0
-                return _DataPoint(sampleIdx.toDouble(), pts[i].value);
-              });
+              // 🚀 P0-1: Use Rust timestampMs as X value (synced with pipeline pyramid)
+              ch.data = pts.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
               ch.currentValue = pts.last.value;
-              // 🚀 Phase A: Feed full data into per-channel pyramid
-              final bridge = FfiBridge.instance;
-              final batch = <(double, double)>[];
-              for (int i = 0; i < pts.length; i++) {
-                batch.add(((i - totalPts + 1).toDouble(), pts[i].value));
-              }
-              bridge.pushChannelBatch(targetIdx, batch);
+              // Pipeline pushes from receive loop — no Dart push needed
             }
           } else {
             // Get delta data: all new points since last swap (front buffer has delta only)
             try {
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
-                // Compute the next X index from the last point in data
-                final nextX = ch.data.isEmpty ? 0.0 : (ch.data.last.x + 1.0);
-                // 🚀 Batch pyramid push: one FFI call instead of N (eliminates mutex contention)
-                final bridge = FfiBridge.instance;
-                final batch = <(double, double)>[];
+                // 🚀 P0-1: Use Rust timestampMs (synced with pipeline::push_sample_batch_with_x)
                 for (int k = 0; k < latestData.length; k++) {
-                  final px = nextX + k;
-                  final py = latestData[k].value;
-                  ch.data.add(_DataPoint(px, py));
-                  batch.add((px, py));
+                  ch.data.add(_DataPoint(latestData[k].timestampMs, latestData[k].value));
                 }
-                bridge.pushChannelBatch(targetIdx, batch);
                 ch.currentValue = latestData.last.value;
                 // Keep only _maxPoints points (trim from front, keep newest)
                 if (ch.data.length > _maxPoints) {
                   ch.data.removeRange(0, ch.data.length - _maxPoints);
-                  // 🧹 Periodically rebuild pyramid to discard old data beyond buffer range.
-                  // Accumulate trim count: rebuild when trimmed exceeds _maxPoints.
-                  ch._trimAccumulator = (ch._trimAccumulator ?? 0) + 1;
-                  if (ch._trimAccumulator! >= (_maxPoints ~/ latestData.length).clamp(1, 10000)) {
-                    ch._trimAccumulator = 0;
-                    final rebuildBatch = <(double, double)>[];
-                    for (final pt in ch.data) {
-                      rebuildBatch.add((pt.x, pt.y));
-                    }
-                    bridge.clearChannelPyramid(targetIdx);
-                    bridge.pushChannelBatch(targetIdx, rebuildBatch);
-                  }
+                  // Pyramid self-manages via TimeBucket::max_buckets — no Dart trimming needed
                 }
                 // 🚀 Incremental point counting (avoid O(all_data) fold)
                 _totalPoints += latestData.length;
@@ -1502,7 +1472,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.viewportData.clear();
         ch.envelopeData.clear();
         ch.currentValue = 0.0;
-        ch._trimAccumulator = null;
       }
       // 🚀 Phase A: Clear per-channel pyramids on data reset
       FfiBridge.instance.clearAllChannelPyramids();

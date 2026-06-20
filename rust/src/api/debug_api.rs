@@ -3,6 +3,7 @@ use crate::core::app_context::{
     block_on, get_log_file_path, init_logger, set_file_logging_enabled, set_log_file_path,
     set_log_level, DEBUG, REGISTRY, RT, SESSIONS,
 };
+use crate::core::plot::pipeline;
 use crate::core::plot::PLOT_DATA;
 use crate::core::protocol::CsvParser;
 use crate::core::session::debug_session::DebugLogEntry;
@@ -245,6 +246,9 @@ fn spawn_receive_loop(device_id: String) {
                             let counter = PLOT_DATA.next_counter() as f64;
                             let prefix = result.metadata.get("prefix").map(|s| s.as_str());
                             PLOT_DATA.push_batch_with_names(&id, counter, prefix, &result.channels);
+                            // 🚀 P0-1: Push directly to per-channel pyramids (eliminates Dart round-trip)
+                            // Uses same counter as PLOT_DATA for X-value sync with Dart ch.data
+                            pipeline::push_sample_batch_with_x(counter, &result.channels);
                         }
                     }
                 }))

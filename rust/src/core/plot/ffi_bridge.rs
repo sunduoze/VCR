@@ -21,14 +21,14 @@ use crate::core::plot::time_bucket::TimeBucketPyramid;
 
 lazy_static! {
     /// Lock-free SPSC ring buffer: producer pushes, consumer reads
-    static ref FFI_RING: LockFreeRingBuffer = LockFreeRingBuffer::new(12_000_000);
+    pub static ref FFI_RING: LockFreeRingBuffer = LockFreeRingBuffer::new(12_000_000);
 
     /// Time bucket pyramid: updated on every push, queried on demand
     static ref FFI_PYRAMID: Mutex<TimeBucketPyramid> = Mutex::new(TimeBucketPyramid::new());
 
     /// Per-channel pyramids (keyed by channel_id: u32)
     /// Each channel gets its own independent LOD pyramid for parallel query
-    static ref FFI_CH_PYRAMIDS: Mutex<HashMap<u32, TimeBucketPyramid>> = Mutex::new(HashMap::new());
+    pub static ref FFI_CH_PYRAMIDS: Mutex<HashMap<u32, TimeBucketPyramid>> = Mutex::new(HashMap::new());
 
     /// Initialization flag
     static ref FFI_READY: AtomicBool = AtomicBool::new(false);
@@ -357,6 +357,30 @@ pub extern "C" fn vcr_pyramid_ch_clear(channel_id: u32) {
 pub extern "C" fn vcr_pyramid_ch_clear_all() {
     let mut pyramids = FFI_CH_PYRAMIDS.lock();
     pyramids.clear();
+}
+
+// ── Pipeline Control ───────────────────────────────────────────────
+
+use crate::core::plot::pipeline;
+
+/// Start the background pipeline processing thread.
+#[no_mangle]
+pub extern "C" fn vcr_pipeline_start() -> bool {
+    pipeline::start_pipeline();
+    true
+}
+
+/// Stop the background pipeline processing thread.
+#[no_mangle]
+pub extern "C" fn vcr_pipeline_stop() -> bool {
+    pipeline::stop_pipeline();
+    true
+}
+
+/// Reset pipeline state (clear pyramids, reset counters).
+#[no_mangle]
+pub extern "C" fn vcr_pipeline_reset() {
+    pipeline::reset_pipeline();
 }
 
 // ── Shutdown ────────────────────────────────────────────────────────

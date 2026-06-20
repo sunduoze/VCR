@@ -123,6 +123,14 @@ typedef _PyramidChClearDart = void Function(int channelId);
 typedef _PyramidChClearAllNative = Void Function();
 typedef _PyramidChClearAllDart = void Function();
 
+// Pipeline control
+typedef _PipelineStartNative = Bool Function();
+typedef _PipelineStartDart = bool Function();
+typedef _PipelineStopNative = Bool Function();
+typedef _PipelineStopDart = bool Function();
+typedef _PipelineResetNative = Void Function();
+typedef _PipelineResetDart = void Function();
+
 // ══════════════════════════════════════════════════════════════════════
 // FFI Bridge Singleton
 // ══════════════════════════════════════════════════════════════════════
@@ -154,6 +162,11 @@ class FfiBridge {
   late final _PyramidChQueryPointsDart pyramidChQueryPoints;
   late final _PyramidChClearDart pyramidChClear;
   late final _PyramidChClearAllDart pyramidChClearAll;
+
+  // Pipeline control
+  late final _PipelineStartDart pipelineStart;
+  late final _PipelineStopDart pipelineStop;
+  late final _PipelineResetDart pipelineReset;
 
   // Query bridge (zero-copy PointsBuffer)
   late final _SetViewportDart setViewport;
@@ -215,6 +228,11 @@ class FfiBridge {
     pyramidChQueryPoints = _lib.lookupFunction<_PyramidChQueryPointsNative, _PyramidChQueryPointsDart>('vcr_pyramid_ch_query_points');
     pyramidChClear = _lib.lookupFunction<_PyramidChClearNative, _PyramidChClearDart>('vcr_pyramid_ch_clear');
     pyramidChClearAll = _lib.lookupFunction<_PyramidChClearAllNative, _PyramidChClearAllDart>('vcr_pyramid_ch_clear_all');
+
+    // Pipeline control
+    pipelineStart = _lib.lookupFunction<_PipelineStartNative, _PipelineStartDart>('vcr_pipeline_start');
+    pipelineStop = _lib.lookupFunction<_PipelineStopNative, _PipelineStopDart>('vcr_pipeline_stop');
+    pipelineReset = _lib.lookupFunction<_PipelineResetNative, _PipelineResetDart>('vcr_pipeline_reset');
 
     // Query bridge (zero-copy PointsBuffer)
     setViewport = _lib.lookupFunction<_SetViewportNative, _SetViewportDart>('vcr_set_viewport');
@@ -384,4 +402,16 @@ class FfiBridge {
   void clearAllChannelPyramids() {
     pyramidChClearAll();
   }
+
+  // ── Pipeline Lifecycle ─────────────────────────────────────────
+
+  /// Start the background data pipeline processing thread.
+  /// Called once at app startup after RustLib.init().
+  bool startPipeline() => pipelineStart();
+
+  /// Stop the background data pipeline processing thread.
+  bool stopPipeline() => pipelineStop();
+
+  /// Reset pipeline state (clear all pyramids and counters).
+  void resetPipeline() => pipelineReset();
 }

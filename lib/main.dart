@@ -8,6 +8,7 @@ import 'src/rust/api/device_api.dart';
 import 'src/rust/api/virtual_api.dart';
 import 'src/rust/api/lua_api.dart';
 import 'src/rust/api/debug_api.dart';
+import 'core/ffi_bridge.dart';
 
 import 'app/theme.dart';
 import 'app/routes.dart';
@@ -68,6 +69,14 @@ void main() async {
   // Auto-reconnect: fire-and-forget — don't block UI startup.
   // Connections happen in background; UI starts immediately.
   _autoReconnectIfNeeded();
+
+  // 🚀 P0-1: Start background data pipeline (pyramid ingestion from receive loop)
+  // Eliminates Dart→Rust round-trip — data flows: Serial → pipeline → FFI_CH_PYRAMIDS → Dart query
+  try {
+    FfiBridge.instance.startPipeline();
+  } catch (e) {
+    debugPrint('[Main] Pipeline start skipped (non-critical): $e');
+  }
 
   // Start Chart Isolate for high-throughput data pipeline
   _startChartIsolate();

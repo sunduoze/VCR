@@ -21,7 +21,8 @@ void main() async {
 
   // Load and apply saved log settings
   try {
-    final configFile = File('${Platform.environment['APPDATA']}\\VCR\\app_config.json');
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final configFile = File('$exeDir\\VCR\\app_config.json');
     if (await configFile.exists()) {
       final config = jsonDecode(await configFile.readAsString()) as Map<String, dynamic>;
       
@@ -78,8 +79,8 @@ void main() async {
 /// Runs as fire-and-forget from main() — does not delay runApp().
 Future<void> _autoReconnectIfNeeded() async {
   try {
-    final appData = Platform.environment['APPDATA'] ?? '';
-    final configPath = '$appData\\VCR\\app_config.json';
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final configPath = '$exeDir\\VCR\\app_config.json';
     final file = File(configPath);
     if (!file.existsSync()) return;
 

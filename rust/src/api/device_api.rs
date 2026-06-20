@@ -416,9 +416,12 @@ pub fn load_persisted_devices() -> i32 {
     count
 }
 
-/// 获取持久化文件路径（%APPDATA%\instrument_upper_computer\devices.json）
+/// 获取持久化文件路径（exe 所在目录下的 VCR/devices.json）
 fn get_persistence_path() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    let base = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
     base.join("VCR").join("devices.json")
 }
 

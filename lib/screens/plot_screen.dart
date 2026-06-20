@@ -342,8 +342,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Config persistence ──
   static String get _configPath {
-    final appData = Platform.environment['APPDATA'] ?? '';
-    return '$appData\\VCR\\plot_config.json';
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    return '$exeDir\\VCR\\plot_config.json';
   }
 
   @override
@@ -1309,8 +1309,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _deltaTimeController.text = _deltaTime.toString();
         // Load Flutter log settings from app_config.json
         try {
-          final appData = Platform.environment['APPDATA'] ?? '';
-          final appFile = File('$appData\\VCR\\app_config.json');
+          final exeDir = File(Platform.resolvedExecutable).parent.path;
+          final appFile = File('$exeDir\\VCR\\app_config.json');
           if (await appFile.exists()) {
             final appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
             final logLevel = appConfig['logLevel'] as String? ?? 'info';
@@ -1332,8 +1332,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   Future<void> _loadFlutterLogSettings() async {
     try {
-      final appData = Platform.environment['APPDATA'] ?? '';
-      final appFile = File('$appData\\VCR\\app_config.json');
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final appFile = File('$exeDir\\VCR\\app_config.json');
       if (await appFile.exists()) {
         final appConfig = jsonDecode(await appFile.readAsString()) as Map<String, dynamic>;
         final logLevel = appConfig['logLevel'] as String? ?? 'info';
@@ -1352,7 +1352,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final file = File(_configPath);
       final dir = file.parent;
       if (!await dir.exists()) await dir.create(recursive: true);
-      await file.writeAsString(jsonEncode({
+      await file.writeAsString(JsonEncoder.withIndent('  ').convert({
         'channels': _channels.map((ch) => ch.toJson()).toList(),
         'plotGroups': _plotGroups.map((g) => g.toJson()).toList(),
         'aaLevel': _aaLevel.index,
@@ -1368,8 +1368,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         'useRealData': _useRealData,
       }));
       // Also sync to app_config.json so settings screen picks it up
-      final appData = Platform.environment['APPDATA'] ?? '';
-      final appFile = File('$appData\\VCR\\app_config.json');
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final appFile = File('$exeDir\\VCR\\app_config.json');
       Map<String, dynamic> appConfig = {};
       if (await appFile.exists()) {
         try {
@@ -1380,7 +1380,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
       appConfig['plotAALevel'] = _aaLevel.index;
       if (!await appFile.parent.exists()) await appFile.parent.create(recursive: true);
-      await appFile.writeAsString(jsonEncode(appConfig));
+      await appFile.writeAsString(JsonEncoder.withIndent('  ').convert(appConfig));
     } catch (e) {
       debugPrint('Failed to save plot config: $e');
     }

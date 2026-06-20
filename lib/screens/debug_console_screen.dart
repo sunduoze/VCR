@@ -243,8 +243,8 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   );
 
   static String get _configPath {
-    final appData = Platform.environment['APPDATA'] ?? '';
-    return '$appData\\VCR\\console_config.json';
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    return '$exeDir\\VCR\\console_config.json';
   }
 
   // ── Current device state accessor ──
@@ -480,7 +480,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       config['devices'] = deviceConfigs;
       config['lastSelectedDeviceId'] = _selectedDeviceId;
 
-      await file.writeAsString(jsonEncode(config));
+      await file.writeAsString(JsonEncoder.withIndent('  ').convert(config));
     } catch (e) {
       debugPrint('Failed to save signal states: $e');
     }
@@ -507,9 +507,8 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   Future<void> _loadGlobalMultiSendItems() async {
     if (_globalMultiSendItemsLoaded) return;
     try {
-      final appData = Platform.environment['APPDATA'] ?? '';
-      if (appData.isEmpty) return;
-      final file = File('$appData\\VCR\\multi_send_items.json');
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final file = File('$exeDir\\VCR\\multi_send_items.json');
       if (await file.exists()) {
         final raw = await file.readAsString();
         final jsonList = jsonDecode(raw) as List;
@@ -525,13 +524,12 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
 
   Future<void> _saveGlobalMultiSendItems() async {
     try {
-      final appData = Platform.environment['APPDATA'] ?? '';
-      if (appData.isEmpty) return;
-      final dir = Directory('$appData\\VCR');
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      final dir = Directory('$exeDir\\VCR');
       if (!await dir.exists()) await dir.create(recursive: true);
       final jsonList = _globalMultiSendItems.map((e) => e.toJson()).toList();
-      final file = File('$appData\\VCR\\multi_send_items.json');
-      await file.writeAsString(jsonEncode(jsonList));
+      final file = File('$exeDir\\VCR\\multi_send_items.json');
+      await file.writeAsString(JsonEncoder.withIndent('  ').convert(jsonList));
     } catch (e) {
       debugPrint('Failed to save global multi-send items: $e');
     }
@@ -602,7 +600,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       config['lastSelectedDeviceId'] = _selectedDeviceId;
       config['lastExportDir'] = _lastExportDir;
 
-      await file.writeAsString(jsonEncode(config));
+      await file.writeAsString(JsonEncoder.withIndent('  ').convert(config));
     } catch (e) {
       debugPrint('Failed to save global config: $e');
     }

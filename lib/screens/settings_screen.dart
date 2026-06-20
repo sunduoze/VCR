@@ -7,10 +7,12 @@ import '../src/rust/frb_generated.dart';
 /// App-wide configuration helper
 /// Stores: autoReconnect, lastConnectedDevices, deviceSortOrder
 class AppConfig {
-  static String get _path {
-    final appData = Platform.environment['APPDATA'] ?? '';
-    return '$appData\\VCR\\app_config.json';
+  static String get _vcrDir {
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    return '$exeDir\\VCR';
   }
+
+  static String get _path => '$_vcrDir\\app_config.json';
 
   static Future<Map<String, dynamic>> load() async {
     try {
@@ -32,7 +34,7 @@ class AppConfig {
       if (!await dir.exists()) {
         await dir.create(recursive: true);
       }
-      await file.writeAsString(jsonEncode(config));
+      await file.writeAsString(JsonEncoder.withIndent('  ').convert(config));
     } catch (e) {
       debugPrint('Failed to save app config: $e');
     }

@@ -21,7 +21,7 @@ import '../src/rust/api/debug_api.dart';
 /// - Send button shows label (right-click to edit), max ~10 Chinese chars visual width
 /// - HEX / Order / Delay columns
 /// - Batch send with order support (0=immediate first, 1-999=ordered)
-/// - Auto-saves to %APPDATA%\VCR\multi_send_items.json
+/// - Auto-saves to exeDir\VCR\multi_send_items.json
 /// - Drag-to-reorder via ReorderableListView
 
 class MultiSendPanel extends StatefulWidget {
@@ -106,9 +106,8 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
   }
 
   Future<void> _loadItems() async {
-    final appData = Platform.environment['APPDATA'] ?? '';
-    if (appData.isEmpty) return;
-    _configFile = File('$appData\\VCR\\multi_send_items.json');
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    _configFile = File('$exeDir\\VCR\\multi_send_items.json');
     if (_configFile == null) return;
     try {
       if (await _configFile!.exists()) {
@@ -139,7 +138,7 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
       if (!await dir.exists()) await dir.create(recursive: true);
       final jsonList =
           widget.items.map((item) => item.toJson()).toList();
-      await _configFile!.writeAsString(jsonEncode(jsonList));
+      await _configFile!.writeAsString(JsonEncoder.withIndent('  ').convert(jsonList));
     } catch (e) {
       debugPrint('MultiSend: failed to save items: $e');
     }

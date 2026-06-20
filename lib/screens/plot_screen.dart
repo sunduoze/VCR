@@ -588,25 +588,92 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _notifyPipelineViewport() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = _screenWidth.round().clamp(500, 4000);
+    // Convert relative x range to absolute timestamps for Rust pyramid query
+    double anchorX = 0;
+    for (final ch in _channels) {
+      if (ch.data.isNotEmpty) { anchorX = ch.data.last.x; break; }
+    }
+    final tMinAbs = anchorX + _xMin;
+    final tMaxAbs = anchorX + _xMax;
     try {
-      FfiBridge.instance.envelopeSetViewport(_xMin, _xMax, maxPts);
+      FfiBridge.instance.envelopeSetViewport(tMinAbs, tMaxAbs, maxPts);
     } catch (_) {}
+  }
+
+  /// Read pre-computed envelope from Rust pipeline (zero-copy via C-ABI pointer).
+  /// Returns true if envelope data was successfully read and populated.
+  bool _refreshViewportDataFromEnvelope() {
+    final bridge = FfiBridge.instance;
+
+    // Check generation — odd means pipeline is currently updating the envelope
+    final gen1 = bridge.envelopeGetGeneration();
+    if (gen1 & 1 != 0) return false;
+
+    final dataPtr = bridge.envelopeGetDataPtr();
+    if (dataPtr.address == 0) return false;
+
+    final numCh = bridge.envelopeGetNumChannels();
+    if (numCh == 0) return false;
+
+    for (int ci = 0; ci < numCh && ci < _channels.length; ci++) {
+      final ch = _channels[ci];
+      if (!ch.visible || ch.data.isEmpty) {
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
+        continue;
+      }
+
+      final offset = bridge.envelopeGetChannelOffset(ci);
+      final count = bridge.envelopeGetChannelCount(ci);
+      if (count == 0) {
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
+        continue;
+      }
+
+      final newestAbsX = ch.data.last.x;
+      ch.viewportData.clear();
+      ch.envelopeData.clear();
+
+      // Envelope format: [ts, val, ts, val, ...] alternating min/max per bucket
+      for (int i = 0; i < count; i += 2) {
+        if (i + 1 >= count) break;
+        final tsMin = dataPtr[offset + i * 2];
+        final yMin = dataPtr[offset + i * 2 + 1];
+        final yMax = dataPtr[offset + (i + 1) * 2 + 1];
+        final yAvg = (yMin + yMax) * 0.5;
+        final xRel = tsMin - newestAbsX;
+
+        ch.viewportData.add(_DataPoint(xRel, yAvg));
+        ch.envelopeData.add(_DataPoint(xRel, yMin));
+        ch.envelopeData.add(_DataPoint(xRel, yMax));
+      }
+      if (count % 2 != 0 && count > 0) {
+        final lastX = dataPtr[offset + (count - 1) * 2] - newestAbsX;
+        final lastY = dataPtr[offset + (count - 1) * 2 + 1];
+        ch.viewportData.add(_DataPoint(lastX, lastY));
+      }
+    }
+
+    // Verify generation didn't change during read (pipeline update mid-read)
+    final gen2 = bridge.envelopeGetGeneration();
+    if (gen1 != gen2) return false; // Mid-update, discard
+
+    _viewportRefreshCount++;
+    return true;
   }
 
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
-    final maxPts = _screenWidth.round().clamp(500, 4000);
-    // 调试：打印关键参数
-    if (_channels.isNotEmpty && _channels.first.data.isNotEmpty) {
-      _debugLog('[DEBUG] _refreshViewportData: _xMin=$_xMin _xMax=$_xMax _screenWidth=$_screenWidth maxPts=$maxPts');
-      _debugLog('[DEBUG]   first ch.data.length=${_channels.first.data.length} newestAbsX=${_channels.first.data.last.x}');
-    }
 
+    // 🚀 P0-4: Try zero-copy envelope read first (pre-computed by Rust pipeline thread)
+    if (_refreshViewportDataFromEnvelope()) return;
+
+    // Fallback: per-channel pyramid query
+    final maxPts = _screenWidth.round().clamp(500, 4000);
     final bridge = FfiBridge.instance;
 
-    // 🚀 Phase C: Reuse Float64List buffer (resize lazily when needed).
-    // Buffer stores (ts,val) pairs — each pyramid datapoint uses 2 Float64 slots.
-    // Max datapoints = maxPts * 2 (each bucket → 2 datapoints: min + max).
+    // 🚀 Reusable Float64List buffer for pyramid query results
     final maxDatapoints = maxPts * 2;
     if (_queryBuffer == null || _queryBuffer!.length != maxDatapoints * 2) {
       _queryBuffer = Float64List(maxDatapoints * 2);
@@ -635,82 +702,38 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
-      final newestAbsX = ch.data.last.x; // 最新点的绝对索引
-      final tMin = newestAbsX + _xMin;   // 视口绝对坐标范围
+      final newestAbsX = ch.data.last.x;
+      final tMin = newestAbsX + _xMin;
       final tMax = newestAbsX + _xMax;
 
-      // 🚀 Phase A+B+C: Query per-channel pyramid with reusable buffers
-      // maxDatapoints = maxPts * 2 because each bucket produces 2 datapoints (min+max pair)
       final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
 
       if (count == 0) {
-        // Pyramid empty for this channel — likely buffer just started or time range mismatch
-        if (_verbose && _frameCount % 60 == 0) print('[GAP] ${ch.channelName}: pyramid returned 0 points (tMin=$tMin tMax=$tMax dataLen=${ch.data.length})');
         ch.viewportData.clear();
         ch.envelopeData.clear();
         continue;
       }
 
-      // 🚀 Phase B+C: Reuse existing list objects (clear+add) to avoid per-frame allocation.
-      // Convert pyramid result (min+max pairs per bucket) to:
-      //   viewportData = avg line (foreground rendering)
-      //   envelopeData = min+max envelope (semi-transparent fill)
       ch.viewportData.clear();
       ch.envelopeData.clear();
       for (int i = 0; i < count; i += 2) {
         if (i + 1 >= count) break;
-        final xMin = fb[i * 2] - newestAbsX;       // bucket start X (relative)
-        final yMin = fb[i * 2 + 1];                // bucket min value
-        final _ = fb[(i + 1) * 2] - newestAbsX;     // bucket end X (same as start in pyramid pairs)
-        final yMax = fb[(i + 1) * 2 + 1];           // bucket max value
+        final xMin = fb[i * 2] - newestAbsX;
+        final yMin = fb[i * 2 + 1];
+        final yMax = fb[(i + 1) * 2 + 1];
         final yAvg = (yMin + yMax) * 0.5;
-
-        // Avg line (foreground): one point per bucket
         ch.viewportData.add(_DataPoint(xMin, yAvg));
-
-        // Envelope fill (background): min+max pair per bucket
         ch.envelopeData.add(_DataPoint(xMin, yMin));
         ch.envelopeData.add(_DataPoint(xMin, yMax));
       }
-      // Catch odd trailing point (shouldn't happen, but safe)
       if (count % 2 != 0 && count > 0) {
         final lastX = fb[(count - 1) * 2] - newestAbsX;
         final lastY = fb[(count - 1) * 2 + 1];
         ch.viewportData.add(_DataPoint(lastX, lastY));
       }
 
-      _debugLog('[VPD] ${ch.channelName}: pyramid → ${ch.viewportData.length} avg + ${ch.envelopeData.length} env pts (${count} raw, ${count ~/ 2} buckets) ch.data.last.x=$newestAbsX tMin=$tMin tMax=$tMax');
-
-      // 🔧 Diagnostic: log X-range of first pyramid result to verify data coverage
-      if (ch.viewportData.isNotEmpty && _frameCount % 60 == 0) {
-        final vpXFirst = ch.viewportData.first.x;
-        final vpXLast = ch.viewportData.last.x;
-        final expectedStart = _xMin;
-        final expectedEnd = _xMax;
-        final driftStart = (vpXFirst - expectedStart).abs();
-        if (_verbose) print('[DIAG-PYRAMID-X] ${ch.channelName}: pyramid X range [${vpXFirst.toStringAsFixed(0)}, ${vpXLast.toStringAsFixed(0)}] expected [${expectedStart.toStringAsFixed(0)}, ${expectedEnd.toStringAsFixed(0)}] drift=$driftStart');
-      }
-
-      // 🔧 Debug: log per-channel Y range after viewportData populated
-      if (ch.viewportData.isNotEmpty) {
-        double vpYMin = ch.viewportData.first.y;
-        double vpYMax = ch.viewportData.first.y;
-        for (final pt in ch.viewportData) {
-          if (pt.y < vpYMin) vpYMin = pt.y;
-          if (pt.y > vpYMax) vpYMax = pt.y;
-        }
-        _debugLog('[VPD-Y] ${ch.channelName}: viewportData Y range [${vpYMin.toStringAsFixed(3)}, ${vpYMax.toStringAsFixed(3)}] ch.yMin=${ch.yMin.toStringAsFixed(3)} ch.yMax=${ch.yMax.toStringAsFixed(3)}');
-      }
     }
-    // 🚀 P3-B 优化：ChartViewport 刷新完成，递增计数器
     _viewportRefreshCount++;
-    
-    // 🩺 Diagnostic: print refresh summary
-    if (_channels.isNotEmpty && _channels.any((c) => c.visible && c.data.isNotEmpty)) {
-      final summary = _channels.where((c) => c.visible).map((c) => 
-        '${c.channelName}:vpData=${c.viewportData.length} envData=${c.envelopeData.length}').join(', ');
-      if (_verbose) print('[DIAG] _refreshViewportData done: $summary');
-    }
   }
 
   /// 分离的数据轮询（策略 B: 减少 FRB 调用）
@@ -1064,13 +1087,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // P0-2: Ticker-driven vsync rendering — lightweight pyramid query + repaint
       // Timer still handles data generation/fetching; Ticker provides smooth 60fps rendering
       if (_useRealData) {
-        _refreshViewportData();
+        _notifyPipelineViewport(); // Feed viewport BEFORE refresh → pipeline computes async
+        _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
         if (_autoScaleY) _fitYAxis();
         if (!_scrollMode && _autoScaleX) _fitXAxis();
-        _notifyPipelineViewport(); // Feed viewport to pipeline for envelope pre-computation
         setState(() {});
       } else {
-        _refreshViewportData();
+        _notifyPipelineViewport(); // Feed viewport BEFORE refresh
+        _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
         if (_scrollMode) {
           _xMax = 0.0;
           _xMin = -_effectiveScrollWindowWidth;
@@ -1078,7 +1102,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
         if (_autoScaleY) _fitYAxis();
         if (!_scrollMode && _autoScaleX) _fitXAxis();
-        _notifyPipelineViewport(); // Feed viewport to pipeline for envelope pre-computation
         setState(() {});
       }
     } finally {

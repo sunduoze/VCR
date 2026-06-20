@@ -197,6 +197,9 @@ pub fn update_render_envelope(t_min: f64, t_max: f64, target_points: u32) {
 
     let mut envelope = RENDER_ENVELOPE.lock();
 
+    // Bump generation to odd (signals "update in progress" to readers)
+    envelope.generation = envelope.generation.wrapping_add(1);
+
     // Sort channel IDs for consistent ordering
     let mut channel_ids: Vec<u32> = pyramids.keys().copied().collect();
     channel_ids.sort_unstable();
@@ -239,6 +242,7 @@ pub fn update_render_envelope(t_min: f64, t_max: f64, target_points: u32) {
     envelope.num_channels = num_channels as u32;
     envelope.viewport_x_min = t_min;
     envelope.viewport_x_max = t_max;
+    // Bump generation to even (signals "update complete" to readers)
     envelope.generation = envelope.generation.wrapping_add(1);
 }
 

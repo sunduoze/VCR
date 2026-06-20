@@ -99,11 +99,14 @@ lazy_static::lazy_static! {
 /// Each app launch creates a new log file.
 /// Must be called once at app startup (e.g. from RustLib.init).
 pub fn init_logger() {
-    // Determine log file path next to the executable
+    // Determine log file path: exe_dir/log/vcr_debug_<ts>.log
     let log_path = if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
+            let log_dir = dir.join("log");
+            let _ = std::fs::create_dir_all(&log_dir);
             let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
-            dir.join(format!("vcr_debug_{}.log", ts))
+            log_dir
+                .join(format!("vcr_debug_{}.log", ts))
                 .to_string_lossy()
                 .to_string()
         } else {
@@ -161,9 +164,14 @@ pub fn set_log_file_path(path: &str) {
 #[allow(static_mut_refs)]
 pub fn get_log_file_path() -> String {
     unsafe {
-        LOG_FILE_PATH
-            .clone()
-            .unwrap_or_else(|| "vcr_debug.log".to_string())
+        LOG_FILE_PATH.clone().unwrap_or_else(|| {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    return dir.join("log").join("vcr_debug.log").to_string_lossy().to_string();
+                }
+            }
+            "vcr_debug.log".to_string()
+        })
     }
 }
 

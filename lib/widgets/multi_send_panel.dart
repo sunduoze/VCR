@@ -47,6 +47,8 @@ class MultiSendPanel extends StatefulWidget {
 }
 
 class _MultiSendPanelState extends State<MultiSendPanel> {
+  static const double kRowHeight = 36.0;
+  static double get kInputHeight => kRowHeight - 6.0;
   final ScrollController _scrollController = ScrollController();
   final Map<String, TextEditingController> _cmdControllers = {};
   final Map<String, TextEditingController> _orderControllers = {};
@@ -144,6 +146,20 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
     }
   }
 
+  /// Convert display line-ending label to actual control characters.
+  String get _actualLineEnding {
+    switch (widget.lineEnding) {
+      case 'CR':
+        return '\r';
+      case 'LF':
+        return '\n';
+      case 'CRLF':
+        return '\r\n';
+      default:
+        return '';
+    }
+  }
+
   List<int> _encodeCommand(MultiSendItem item) {
     String text = item.command.trim();
     if (text.isEmpty) return [];
@@ -156,10 +172,11 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
         if (byte == null) return [];
         bytes.add(byte);
       }
+      // HEX mode: no automatic line ending appended
       return bytes;
     }
-    // Text mode: append line ending then encode
-    final encoded = '$text${widget.lineEnding}';
+    // Text mode: append actual line ending then encode
+    final encoded = '$text$_actualLineEnding';
     if (widget.encoding.toLowerCase() == 'gbk') {
       try {
         return gbk.encode(encoded);
@@ -393,16 +410,17 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
 
         // Headers
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+          height: kRowHeight,
+          padding: const EdgeInsets.symmetric(horizontal: 4),
           color: AppTheme.surfaceVariant.withAlpha((0.5 * 255).round()),
           child: const Row(children: [
+            SizedBox(width: 24),
+            SizedBox(width: 26, child: Center(child: Text('HEX', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)))),
+            SizedBox(width: 34, child: Center(child: Text('Ord', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)))),
+            Expanded(flex: 4, child: Padding(padding: EdgeInsets.only(left: 6), child: Text('Command', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)))),
+            SizedBox(width: 44, child: Center(child: Text('Dly', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)))),
+            SizedBox(width: 80, child: Center(child: Text('Send', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)))),
             SizedBox(width: 22),
-            SizedBox(width: 30, child: Center(child: Text('HEX', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold)))),
-            SizedBox(width: 34, child: Center(child: Text('Ord', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold)))),
-            Expanded(flex: 4, child: Padding(padding: EdgeInsets.only(left: 4), child: Text('Command', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)))),
-            SizedBox(width: 54, child: Center(child: Text('Delay(ms)', style: TextStyle(fontSize: 8, fontWeight: FontWeight.bold)))),
-            SizedBox(width: 72, child: Center(child: Text('Send', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold)))),
-            SizedBox(width: 20),
           ]),
         ),
 
@@ -487,95 +505,109 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
 
     return Container(
       key: key,
+      height: kRowHeight,
       decoration: BoxDecoration(
         border: Border(
             bottom: BorderSide(
                 color: AppTheme.border.withAlpha((0.3 * 255).round()))),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
-      child: Row(children: [
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
         // Drag handle
         ReorderableDragStartListener(
           index: index,
-          child: const SizedBox(
-              width: 22, height: 36,
-              child: Icon(Icons.drag_handle, size: 14, color: Colors.grey)),
+          child: SizedBox(
+              width: 24, height: kRowHeight,
+              child: Center(
+                  child: Icon(Icons.drag_handle, size: 16, color: Colors.grey))),
         ),
 
-        // HEX checkbox
+        // HEX checkbox — aligned with text fields
         SizedBox(
-          width: 30,
-          child: Checkbox(
-            value: item.isHex,
-            onChanged: (v) {
-              final updated = List<MultiSendItem>.from(widget.items);
-              updated[index] = MultiSendItem(
-                id: item.id,
-                label: item.label,
-                command: item.command,
-                isHex: v ?? false,
-                order: item.order,
-                delayMs: item.delayMs,
-              );
-              widget.onItemsChanged(updated);
-              _saveItemsDebounced();
-              if (mounted) setState(() {});
-            },
-            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-            visualDensity: VisualDensity.compact,
+          width: 26,
+          child: Align(
+            alignment: Alignment.center,
+            child: Transform.translate(
+              offset: const Offset(0, 1), // nudge down to align with TextField baseline
+              child: Checkbox(
+              value: item.isHex,
+              onChanged: (v) {
+                final updated = List<MultiSendItem>.from(widget.items);
+                updated[index] = MultiSendItem(
+                  id: item.id,
+                  label: item.label,
+                  command: item.command,
+                  isHex: v ?? false,
+                  order: item.order,
+                  delayMs: item.delayMs,
+                );
+                widget.onItemsChanged(updated);
+                _saveItemsDebounced();
+                if (mounted) setState(() {});
+              },
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              visualDensity: VisualDensity.compact,
+              ),
+            ),
           ),
         ),
 
         // Order input
         SizedBox(
           width: 34,
-          height: 30,
-          child: TextField(
-            controller: orderCtrl,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.zero,
-              isDense: true,
+          child: Center(
+            child: SizedBox(
+              width: 32,
+              height: kInputHeight,
+              child: TextField(
+                controller: orderCtrl,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+                  isDense: true,
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (v) {
+                  final order = int.tryParse(v) ?? 0;
+                  final updated = List<MultiSendItem>.from(widget.items);
+                  updated[index] = MultiSendItem(
+                    id: item.id,
+                    label: item.label,
+                    command: item.command,
+                    isHex: item.isHex,
+                    order: order.clamp(0, 999),
+                    delayMs: item.delayMs,
+                  );
+                  widget.onItemsChanged(updated);
+                  final expected = '${order.clamp(0, 999)}';
+                  if (orderCtrl.text != expected) {
+                    orderCtrl.text = expected;
+                    orderCtrl.selection = TextSelection.fromPosition(
+                        TextPosition(offset: expected.length));
+                  }
+                  _saveItemsDebounced();
+                },
+              ),
             ),
-            keyboardType: TextInputType.number,
-            onChanged: (v) {
-              final order = int.tryParse(v) ?? 0;
-              final updated = List<MultiSendItem>.from(widget.items);
-              updated[index] = MultiSendItem(
-                id: item.id,
-                label: item.label,
-                command: item.command,
-                isHex: item.isHex,
-                order: order.clamp(0, 999),
-                delayMs: item.delayMs,
-              );
-              widget.onItemsChanged(updated);
-              // Keep controller in sync (only if parse result differs from text)
-              final expected = '${order.clamp(0, 999)}';
-              if (orderCtrl.text != expected) {
-                orderCtrl.text = expected;
-                orderCtrl.selection = TextSelection.fromPosition(
-                    TextPosition(offset: expected.length));
-              }
-              _saveItemsDebounced();
-            },
           ),
         ),
 
         // Command input
         Expanded(
           flex: 4,
-          child: SizedBox(
-            height: 30,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
             child: TextField(
               controller: cmdCtrl,
               style: const TextStyle(fontSize: 12, fontFamily: 'monospace'),
               decoration: InputDecoration(
                 border: const OutlineInputBorder(),
                 contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 6, vertical: 0),
+                    const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                 isDense: true,
                 hintText: 'Enter command...',
                 hintStyle: TextStyle(fontSize: 11, color: Colors.grey[600]),
@@ -597,58 +629,70 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
           ),
         ),
 
-        // Delay input (ms)
+        // Delay input
         SizedBox(
-          width: 54,
-          height: 30,
-          child: TextField(
-            controller: delayCtrl,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
-            decoration: const InputDecoration(
-              border: OutlineInputBorder(),
-              contentPadding: EdgeInsets.zero,
-              isDense: true,
-              hintText: 'ms',
+          width: 44,
+          child: Center(
+            child: SizedBox(
+              width: 40,
+              height: kInputHeight,
+              child: TextField(
+                controller: delayCtrl,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 11, fontFamily: 'monospace'),
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 2, vertical: 3),
+                  isDense: true,
+                  hintText: 'ms',
+                  hintStyle: TextStyle(fontSize: 9, color: Color(0xFF9E9E9E)),
+                ),
+                keyboardType: TextInputType.number,
+                onChanged: (v) {
+                  final delay = int.tryParse(v) ?? 0;
+                  final updated = List<MultiSendItem>.from(widget.items);
+                  updated[index] = MultiSendItem(
+                    id: item.id,
+                    label: item.label,
+                    command: item.command,
+                    isHex: item.isHex,
+                    order: item.order,
+                    delayMs: delay,
+                  );
+                  widget.onItemsChanged(updated);
+                  _saveItemsDebounced();
+                },
+              ),
             ),
-            keyboardType: TextInputType.number,
-            onChanged: (v) {
-              final delay = int.tryParse(v) ?? 0;
-              final updated = List<MultiSendItem>.from(widget.items);
-              updated[index] = MultiSendItem(
-                id: item.id,
-                label: item.label,
-                command: item.command,
-                isHex: item.isHex,
-                order: item.order,
-                delayMs: delay,
-              );
-              widget.onItemsChanged(updated);
-              _saveItemsDebounced();
-            },
           ),
         ),
 
         // Send button
         SizedBox(
-          width: 72,
-          height: 30,
-          child: GestureDetector(
-            onSecondaryTap: () => _editButtonLabel(item, index),
-            child: ElevatedButton(
-              onPressed: widget.connected ? () => _sendSingle(item) : null,
-              style: ElevatedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                minimumSize: const Size(0, 30),
-                backgroundColor: Colors.orange.shade700,
-                foregroundColor: Colors.white,
-                textStyle: const TextStyle(fontSize: 10),
-              ),
-              child: Text(
-                _getButtonText(item),
-                overflow: TextOverflow.ellipsis,
-                textAlign: TextAlign.center,
-                style: const TextStyle(fontSize: 10),
+          width: 80,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: GestureDetector(
+              onSecondaryTap: () => _editButtonLabel(item, index),
+              child: ElevatedButton(
+                onPressed: widget.connected ? () => _sendSingle(item) : null,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                  minimumSize: Size.fromHeight(kInputHeight),
+                  maximumSize: Size.fromHeight(kInputHeight),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  visualDensity: VisualDensity.compact,
+                  backgroundColor: Colors.orange.shade700,
+                  foregroundColor: Colors.white,
+                  textStyle: const TextStyle(fontSize: 11),
+                ),
+                child: Text(
+                  _getButtonText(item),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11),
+                ),
               ),
             ),
           ),
@@ -656,23 +700,24 @@ class _MultiSendPanelState extends State<MultiSendPanel> {
 
         // Delete button
         SizedBox(
-          width: 20,
-          height: 30,
-          child: IconButton(
-            padding: EdgeInsets.zero,
-            icon: const Icon(Icons.close, size: 14, color: Colors.red),
-            onPressed: () {
-              final updated = List<MultiSendItem>.from(widget.items);
-              final removed = updated.removeAt(index);
-              widget.onItemsChanged(updated);
-              _cmdControllers.remove(removed.id)?.dispose();
-              _orderControllers.remove(removed.id)?.dispose();
-              _delayControllers.remove(removed.id)?.dispose();
-              _saveItemsDebounced();
-              if (mounted) setState(() {});
-            },
-            constraints: const BoxConstraints(minWidth: 20, minHeight: 30),
-            tooltip: 'Remove',
+          width: 22,
+          child: Center(
+            child: IconButton(
+              padding: EdgeInsets.zero,
+              icon: const Icon(Icons.close, size: 15, color: Colors.red),
+              onPressed: () {
+                final updated = List<MultiSendItem>.from(widget.items);
+                final removed = updated.removeAt(index);
+                widget.onItemsChanged(updated);
+                _cmdControllers.remove(removed.id)?.dispose();
+                _orderControllers.remove(removed.id)?.dispose();
+                _delayControllers.remove(removed.id)?.dispose();
+                _saveItemsDebounced();
+                if (mounted) setState(() {});
+              },
+              constraints: const BoxConstraints(minWidth: 18, minHeight: 18),
+              tooltip: 'Remove',
+            ),
           ),
         ),
       ]),

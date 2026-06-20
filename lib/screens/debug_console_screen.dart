@@ -86,7 +86,7 @@ class ConsoleDeviceState {
   // ── Multi-send panel items ──
   List<MultiSendItem> multiSendItems = [];
 
-  // Serialise to JSON (one device block in console_config.json)
+  // Serialise full state (one device block in console_config.json)
   Map<String, dynamic> toJson() => {
     'dtrEnabled': dtrEnabled,
     'rtsEnabled': rtsEnabled,
@@ -105,6 +105,49 @@ class ConsoleDeviceState {
     // Save only user-entered commands (exclude defaults)
     'commandHistory': commandHistory.where((c) => !kDefaultCommands.contains(c)).toList(),
   };
+
+  // Serialise only shared (cross-device) settings for the global config key.
+  // Excludes hardware signals (DTR/RTS/Break) and per-device command history.
+  Map<String, dynamic> toGlobalJson() => {
+    'bufferSize': bufferSize,
+    'showTimestamp': showTimestamp,
+    'showHex': showHex,
+    'showTx': showTx,
+    'showRx': showRx,
+    'autoScroll': autoScroll,
+    'sendFormat': sendFormat,
+    'lineEnding': lineEnding,
+    'encoding': encoding,
+    'continuousSendInterval': continuousSendInterval,
+    'continuousSendTarget': continuousSendTarget,
+  };
+
+  /// Apply shared global settings on top of per-device state.
+  /// Only overwrites settings that ARE present in the global map.
+  void applyGlobalSettings(Map<String, dynamic> json) {
+    if (json.containsKey('bufferSize'))
+      bufferSize = json['bufferSize'] as int;
+    if (json.containsKey('showTimestamp'))
+      showTimestamp = json['showTimestamp'] as bool;
+    if (json.containsKey('showHex'))
+      showHex = json['showHex'] as bool;
+    if (json.containsKey('showTx'))
+      showTx = json['showTx'] as bool;
+    if (json.containsKey('showRx'))
+      showRx = json['showRx'] as bool;
+    if (json.containsKey('autoScroll'))
+      autoScroll = json['autoScroll'] as bool;
+    if (json.containsKey('sendFormat'))
+      sendFormat = json['sendFormat'] as String;
+    if (json.containsKey('lineEnding'))
+      lineEnding = json['lineEnding'] as String;
+    if (json.containsKey('encoding'))
+      encoding = json['encoding'] as String;
+    if (json.containsKey('continuousSendInterval'))
+      continuousSendInterval = json['continuousSendInterval'] as int;
+    if (json.containsKey('continuousSendTarget'))
+      continuousSendTarget = json['continuousSendTarget'] as int;
+  }
 
   // Restore from JSON
   void fromJson(Map<String, dynamic> json) {
@@ -479,6 +522,8 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       deviceConfigs[_selectedDeviceId!] = cs.toJson();
       config['devices'] = deviceConfigs;
       config['lastSelectedDeviceId'] = _selectedDeviceId;
+      // Save shared display/send settings globally (shared across all devices)
+      config['global'] = cs.toGlobalJson();
 
       await file.writeAsString(JsonEncoder.withIndent('  ').convert(config));
     } catch (e) {
@@ -493,9 +538,15 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       if (await file.exists()) {
         final content = await file.readAsString();
         final json = jsonDecode(content) as Map<String, dynamic>;
+        // 1. Load per-device state (hardware signals + legacy per-device settings)
         final deviceConfigs = json['devices'] as Map<String, dynamic>?;
         if (deviceConfigs != null && deviceConfigs.containsKey(deviceId)) {
           cs.fromJson(deviceConfigs[deviceId] as Map<String, dynamic>);
+        }
+        // 2. Apply global shared settings on top (overrides per-device display/send settings)
+        final global = json['global'] as Map<String, dynamic>?;
+        if (global != null) {
+          cs.applyGlobalSettings(global);
         }
       }
     } catch (e) {
@@ -591,6 +642,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
         }
       }
 
+      // Preserve existing global key if present (set by _saveSignalStates)
+      final global = config['global'];
+
       // Save per-device blocks
       final deviceConfigs = <String, dynamic>{};
       for (final entry in _deviceStates.entries) {
@@ -599,6 +653,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       config['devices'] = deviceConfigs;
       config['lastSelectedDeviceId'] = _selectedDeviceId;
       config['lastExportDir'] = _lastExportDir;
+      if (global != null) config['global'] = global;
 
       await file.writeAsString(JsonEncoder.withIndent('  ').convert(config));
     } catch (e) {

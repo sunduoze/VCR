@@ -234,32 +234,30 @@ fn bytes_to_ascii(data: &[u8]) -> String {
         .collect()
 }
 
-/// Split data by line endings (\r\n, \r, \n), returning (raw_bytes, display_string) for each line
-/// Handles all three line ending styles properly
+/// Split data by line endings (\r\n, \r, \n), returning (raw_bytes, display_string) for each line.
+/// Line ending characters are kept as part of the line data — not stripped — so they appear
+/// in the console output (visible in HEX mode, or as control chars in text mode).
 fn split_by_line_endings(data: &[u8]) -> Vec<(Vec<u8>, String)> {
     let mut result = Vec::new();
     let mut start = 0;
     let mut i = 0;
 
     while i < data.len() {
-        // Check for \r\n first (Windows line ending)
+        let end: usize;
         if i + 1 < data.len() && data[i] == b'\r' && data[i + 1] == b'\n' {
-            // Found \r\n - extract line without the ending
-            let line_data = &data[start..i];
-            let line_display = bytes_to_ascii(line_data);
-            result.push((line_data.to_vec(), line_display));
-            start = i + 2; // Skip past \r\n
-            i = start;
+            end = i + 2; // \r\n pair — keep both
         } else if data[i] == b'\r' || data[i] == b'\n' {
-            // Found \r or \n alone - extract line without the ending
-            let line_data = &data[start..i];
-            let line_display = bytes_to_ascii(line_data);
-            result.push((line_data.to_vec(), line_display));
-            start = i + 1; // Skip past the line ending
-            i = start;
+            end = i + 1; // single \r or \n — keep it
         } else {
             i += 1;
+            continue;
         }
+        // Extract line INCLUDING the line ending character(s)
+        let line_data = &data[start..end];
+        let line_display = bytes_to_ascii(line_data);
+        result.push((line_data.to_vec(), line_display));
+        start = end;
+        i = end;
     }
 
     // Handle remaining data after last line ending (if any)

@@ -838,61 +838,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
     } catch (e) {
     }
-    _lastFetchEnd = DateTime.now();
   }
 
   /// UI 更新节流（策略 A: 分离数据轮询和 UI 更新）
   /// 每 33ms 更新一次 UI，而非每次数据轮询都更新
-  DateTime _lastUIUpdate = DateTime.now();
-  DateTime _lastFetchEnd = DateTime.now(); // 🩺 Diagnostic: track _fetchRealData completion time
 
-  void _updateRealDataUI() {
-    if (!_useRealData || !mounted || !_isPlaying) return;
-
-    // 策略 A: UI 节流，每 33ms（约 30fps）更新一次
-    final now = DateTime.now();
-    if (now.difference(_lastUIUpdate).inMilliseconds < 33) return;
-    _lastUIUpdate = now;
-
-    // 🩺 Diagnostic: measure time since last _fetchRealData call ended
-    if (_frameCount % 60 == 0 && _useRealData) {
-      final elapsed = now.difference(_lastFetchEnd).inMilliseconds;
-      if (elapsed > 60) {
-        if (_verbose) print('[DIAG-TIMER] _fetchRealData → _updateRealDataUI gap: ${elapsed}ms (frame $_frameCount)');
-      }
-    }
-
-    // Update X axis range
-    if (_scrollMode) {
-      // Newest data at x=0, auto-track
-      _xMax = 0.0;
-      // For real data, limit scroll window to actual data length
-      double effectiveWidth = _effectiveScrollWindowWidth;
-      if (_useRealData && _channels.isNotEmpty) {
-        final maxDataLen = _channels.map((c) => c.data.length).fold(0, (a, b) => a > b ? a : b);
-        if (maxDataLen > 0 && maxDataLen < effectiveWidth) {
-          effectiveWidth = maxDataLen.toDouble();
-        }
-      }
-      _xMin = -effectiveWidth;
-      _scrollMinTime = _xMin;
-    }
-
-    // Fetch ChartViewport data for visible channels FIRST
-    // 统一使用 _refreshViewportData() 处理 Demo 和 Real 模式
-    _refreshViewportData();
-
-    // Fit Y axis AFTER refreshing viewport data (must use fresh data)
-    if (_autoScaleY) {
-      _fitYAxis();
-    }
-    if (!_scrollMode && _autoScaleX) {
-      _fitXAxis();
-    }
-
-    // CPU 渲染路径
-    setState(() {});
-  }
 
   void _startRealData() {
     _realDataTimer?.cancel();
@@ -925,7 +875,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           }
         } catch (_) {}
       }
-      _updateRealDataUI();
     });
   }
 
@@ -953,7 +902,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _realDataTimer?.cancel();
           _realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
             _fetchRealData();
-            _updateRealDataUI();
           });
         }
       } else {
@@ -3149,19 +3097,12 @@ class _PlotPainter extends CustomPainter {
     ..blendMode = BlendMode.srcOver;
   // 🚀 P1: Reusable per-channel Paint + Path objects (zero per-frame allocation)
   static final _linePaint = Paint()..style = PaintingStyle.stroke;
-  static final _linePath = ui.Path();
   static final _envelopeFillPaint = Paint()
     ..style = PaintingStyle.fill
     ..isAntiAlias = true;
-  static final _envelopePath = ui.Path();
   // Dot line style: cached paint + path
   static final _dotLinePaint = Paint()..style = PaintingStyle.stroke;
-  static final _dotPath = ui.Path();
   static final _dotPointPaint = Paint();
-  // Axis line: reusable per-channel paint
-  static final _axisLinePaint = Paint()
-    ..strokeWidth = 1.0
-    ..style = PaintingStyle.stroke;
   // Reusable TextPainters (one per frame use case, avoid per-frame allocation)
   static final _overlayTp = TextPainter(textDirection: TextDirection.ltr);
   static final _crosshairTp = TextPainter(textDirection: TextDirection.ltr);
@@ -3270,8 +3211,6 @@ class _PlotPainter extends CustomPainter {
 
   ui.Picture? _cachedPicture;
   int _cacheVersion = 0;
-  double _cachedXMin = 0, _cachedXMax = 0;
-  double _cachedYMin = 0, _cachedYMax = 0;
 
   _PlotPainter({
     required this.channels,
@@ -3400,10 +3339,6 @@ class _PlotPainter extends CustomPainter {
         _paintInternal(cacheCanvas, w, h, 1.0);
         _cachedPicture = recorder.endRecording();
         _cacheVersion = contentHash;
-        _cachedXMin = xMin;
-        _cachedXMax = xMax;
-        _cachedYMin = yMin;
-        _cachedYMax = yMax;
         canvas.drawPicture(_cachedPicture!);
       }
     }

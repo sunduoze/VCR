@@ -572,7 +572,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           }
         }
       }
-      _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
+      // Demo mode: incremental count (sum of all sub-samples across all channels)
+      _totalPoints += _channels.length * _demoSubSamples;
       // 每100帧输出一次调试信息
       if (_sampleIndex % 100 == 0) {
         _debugLog('[TICK] sampleIndex=$_sampleIndex, totalPoints=$_totalPoints, first.ch.data.length=${_channels.isNotEmpty ? _channels.first.data.length : 0}');
@@ -639,6 +640,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Called after scrollbar drag, zoom, or any ChartViewport change.
   /// 🚀 Phase A: Uses per-channel Rust LOD pyramid (pre-computed bucket aggregation)
   /// instead of O(n) binary search + sublist + step decimation.
+  void _clearViewportCaches() {
+    for (final ch in _channels) {
+      ch.viewportData = [];
+      ch.envelopeData = [];
+    }
+  }
+
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = _screenWidth.round().clamp(500, 4000);
@@ -903,13 +911,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     bridge.pushChannelBatch(targetIdx, rebuildBatch);
                   }
                 }
+                // 🚀 Incremental point counting (avoid O(all_data) fold)
+                _totalPoints += latestData.length;
               }
             } catch (_) {}
           }
         }
       }
-      
-      _totalPoints = _channels.fold(0, (sum, ch) => sum + ch.data.length);
     } catch (e) {
     }
     _lastFetchEnd = DateTime.now();
@@ -2248,12 +2256,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     _yMin = _dragStartYMin + dy / h * yRange;
                     _yMax = _dragStartYMax + dy / h * yRange;
                   }
-                  _refreshViewportData();
+                  // ⚡ skip _refreshViewportData during drag for smooth panning
+                  _clearViewportCaches();
                 });
               },
               onPanEnd: (_) {
                 _isDragging = false;
                 _dragStart = null;
+                _refreshViewportData(); // refresh viewport data on release
               },
               child: Listener(
                 onPointerSignal: (signal) {
@@ -2479,10 +2489,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       } else {
                         _autoScaleX = false;
                       }
-                      setState(() => _refreshViewportData());
+                      setState(() { _clearViewportCaches(); }); // ⚡ drag-only: skip _refreshViewportData (17 FFI calls) for smooth UI
                     },
                     onHorizontalDragEnd: (d) {
                       _scrollbarDrag = _ScrollbarDrag.none;
+                      _refreshViewportData(); // refresh viewport data on release
                     },
                     child: Container(
                       decoration: BoxDecoration(
@@ -2526,10 +2537,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         } else {
                           _autoScaleX = false;
                         }
-                        setState(() => _refreshViewportData());
+                        setState(() { _clearViewportCaches(); }); // ⚡ drag-only: skip _refreshViewportData
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;
+                        _refreshViewportData();
                       },
                       child: Container(
                         decoration: BoxDecoration(
@@ -2573,10 +2585,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         } else {
                           _autoScaleX = false;
                         }
-                        setState(() => _refreshViewportData());
+                        setState(() { _clearViewportCaches(); }); // ⚡ drag-only: skip _refreshViewportData
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;
+                        _refreshViewportData();
                       },
                       child: Container(
                         decoration: BoxDecoration(
@@ -3172,6 +3185,10 @@ class _MinimapPainter extends CustomPainter {
 }
 
 class _PlotPainter extends CustomPainter {
+  // ═══ Per-frame reusable Float32List buffers for drawRawPoints ═══
+  Float32List? _lineBuf;
+  Float32List? _envBuf;
+
   // ═══ Static cached paint objects (zero allocation on paint path) ═══
   static final _gpuImagePaint = Paint()..filterQuality = FilterQuality.high;
   static final _gridPaint = Paint()
@@ -3417,13 +3434,22 @@ class _PlotPainter extends CustomPainter {
       picture.dispose();
     } else {
       // 🚀 P1-A 优化：PictureRecorder 缓存
-      // 🚀 P3-B 修复：使用 viewportRefreshCount 而非 totalPoints（totalPoints 每次都变）
-      bool cacheValid = (_cachedPicture != null &&
-          _cacheVersion == viewportRefreshCount &&
-          _cachedXMin == xMin &&
-          _cachedXMax == xMax &&
-          _cachedYMin == yMin &&
-          _cachedYMax == yMax);
+      // Content-based hash: tracks actual viewport data shape, not frame counter.
+      // The counter changes every frame in real-time mode → cache was always invalid.
+      int contentHash = Object.hash(xMin, xMax, yMin, yMax);
+      for (final ch in channels) {
+        if (ch.visible) {
+          final vd = ch.viewportData;
+          contentHash = Object.hash(contentHash, vd.length, ch.envelopeData.length);
+          if (vd.isNotEmpty) {
+            // Sample first/mid/last points (X + Y) to detect real data changes
+            final mid = vd.length ~/ 2;
+            contentHash = Object.hash(contentHash,
+                vd.first.x, vd.first.y, vd[mid].x, vd[mid].y, vd.last.x, vd.last.y);
+          }
+        }
+      }
+      bool cacheValid = (_cachedPicture != null && _cacheVersion == contentHash);
       
       if (cacheValid) {
         canvas.drawPicture(_cachedPicture!);
@@ -3432,7 +3458,7 @@ class _PlotPainter extends CustomPainter {
         final cacheCanvas = Canvas(recorder);
         _paintInternal(cacheCanvas, w, h, 1.0);
         _cachedPicture = recorder.endRecording();
-        _cacheVersion = viewportRefreshCount;
+        _cacheVersion = contentHash;
         _cachedXMin = xMin;
         _cachedXMax = xMax;
         _cachedYMin = yMin;
@@ -3788,79 +3814,75 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
   // 🚀 Phase B: Render envelope fill background (semi-transparent min-max band)
   void _drawEnvelope(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform) {
-    if (data.length < 2) return;
+    if (data.length < 4) return; // need ≥2 buckets (4 points: min0,max0,min1,max1)
 
-    // 🧪 Diagnostic: use fresh Path to rule out caching issues
-    final path = ui.Path();
-    
     // Envelope data format: [x0,ymin0], [x0,ymax0], [x1,ymin1], [x1,ymax1], ...
-    // Top line: all max values at even indices+1
-    for (int i = 0; i < data.length; i += 2) {
-      if (i + 1 >= data.length) break;
-      final sx = _xToScreen(data[i].x, w) + ox;
-      final syTop = yTransform(data[i + 1].y) + oy; // max = yMax
-      if (i == 0) {
-        path.moveTo(sx, syTop);
-      } else {
-        path.lineTo(sx, syTop);
-      }
+    // Build polygon: top edge (ymax) forward, bottom edge (ymin) reverse
+    // drawRawPoints(PointMode.polygon) auto-closes → no explicit close needed
+    final n = data.length;
+    if (_envBuf == null || _envBuf!.length < n * 2) {
+      _envBuf = Float32List(n * 2);
     }
-    // Bottom line: all min values in reverse
-    for (int i = data.length - 2; i >= 0; i -= 2) {
-      if (i + 1 > data.length) continue;
-      final sx = _xToScreen(data[i].x, w) + ox;
-      final syBottom = yTransform(data[i].y) + oy; // min = yMin
-      path.lineTo(sx, syBottom);
+    final buf = _envBuf!;
+    int pi = 0;
+    // Top edge: yMax values (odd indices: 1, 3, 5, ...)
+    for (int i = 1; i < n; i += 2) {
+      buf[pi++] = _xToScreen(data[i].x, w) + ox;
+      buf[pi++] = yTransform(data[i].y) + oy;
     }
-    path.close();
+    // Bottom edge reverse: yMin values (even indices: ..., 4, 2, 0)
+    for (int i = n - 2; i >= 0; i -= 2) {
+      buf[pi++] = _xToScreen(data[i].x, w) + ox;
+      buf[pi++] = yTransform(data[i].y) + oy;
+    }
 
-    // 🧪 Use cached Paint (updating color is safe)
     _envelopeFillPaint.color = ch.color.withValues(alpha: 0.25);
-    canvas.drawPath(path, _envelopeFillPaint);
+    canvas.drawRawPoints(ui.PointMode.polygon, buf, _envelopeFillPaint);
   }
 
   void _drawDotLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
-    // 🧪 Diagnostic: fresh Path to rule out caching issues; reuse Paint (safe)
-    final path = ui.Path();
-    for (int i = 0; i < data.length; i++) {
-      final sx = _xToScreen(data[i].x, w) + ox;
-      final sy = yTransform(data[i].y) + oy;
-      if (i == 0) {
-        path.moveTo(sx, sy);
-      } else {
-        path.lineTo(sx, sy);
-      }
+    if (data.isEmpty) return;
+
+    // Reuse/resize buffer (2 floats per point: x, y)
+    final n = data.length;
+    if (_lineBuf == null || _lineBuf!.length < n * 2) {
+      _lineBuf = Float32List(n * 2);
     }
+    final buf = _lineBuf!;
+    for (int i = 0; i < n; i++) {
+      buf[i * 2] = _xToScreen(data[i].x, w) + ox;
+      buf[i * 2 + 1] = yTransform(data[i].y) + oy;
+    }
+    // Semi-transparent line
     _dotLinePaint.color = ch.color.withValues(alpha: 0.5);
     _dotLinePaint.strokeWidth = ch.lineWidth;
-    canvas.drawPath(path, _dotLinePaint);
+    canvas.drawRawPoints(ui.PointMode.polygon, buf, _dotLinePaint);
 
-    // Draw dots on top
+    // Dots on top (same buffer, PointMode.points)
     _dotPointPaint.color = ch.color;
-    for (final pt in data) {
-      final sx = _xToScreen(pt.x, w) + ox;
-      final sy = yTransform(pt.y) + oy;
-      canvas.drawCircle(Offset(sx, sy), 2.5, _dotPointPaint);
-    }
+    _dotPointPaint.strokeWidth = 2.5;
+    _dotPointPaint.strokeCap = StrokeCap.round;
+    canvas.drawRawPoints(ui.PointMode.points, buf, _dotPointPaint);
   }
 
   void _drawLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
-    // 🧪 Diagnostic: use fresh Paint+Path to rule out caching issues
-    final paint = Paint()
-      ..color = ch.color
-      ..strokeWidth = ch.lineWidth
-      ..style = PaintingStyle.stroke;
-    final path = ui.Path();
-    for (int i = 0; i < data.length; i++) {
-      final sx = _xToScreen(data[i].x, w) + ox;
-      final sy = yTransform(data[i].y) + oy;
-      if (i == 0) {
-        path.moveTo(sx, sy);
-      } else {
-        path.lineTo(sx, sy);
-      }
+    if (data.isEmpty) return;
+
+    // Reuse static Paint (update mutable fields only)
+    _linePaint.color = ch.color;
+    _linePaint.strokeWidth = ch.lineWidth;
+
+    // Reuse/resize Float32List buffer (2 floats per point: x, y)
+    final n = data.length;
+    if (_lineBuf == null || _lineBuf!.length < n * 2) {
+      _lineBuf = Float32List(n * 2);
     }
-    canvas.drawPath(path, paint);
+    final buf = _lineBuf!;
+    for (int i = 0; i < n; i++) {
+      buf[i * 2] = _xToScreen(data[i].x, w) + ox;
+      buf[i * 2 + 1] = yTransform(data[i].y) + oy;
+    }
+    canvas.drawRawPoints(ui.PointMode.polygon, buf, _linePaint);
   }
 
   void _drawFilled(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale, double chYMin, double chYMax) {

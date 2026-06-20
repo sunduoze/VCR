@@ -2,7 +2,6 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollDirection;
 import '../widgets/main_shell.dart' show VcrLogo;
 import 'package:flutter/services.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
@@ -20,7 +19,7 @@ import 'settings_screen.dart' show AppConfig;
 // ============================================================================
 // 常量
 const int kDefaultBufferSize = 200 * 1024; // 200 KB
-const int kPollIntervalMs = 200; // 日志轮询间隔
+const int kPollIntervalMs = 50; // 日志轮询间隔 (20 FPS)
 const int kMaxCommandHistory = 10;
 
 /// Default SCPI commands always shown at front of command history
@@ -274,6 +273,10 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   // ── Log change detection (for conditional setState) ──
   int _lastLogCount = 0;
 
+  // ── TextSpan cache: avoid rebuilding RichText trees on every setState ──
+  List<TextSpan> _cachedLineSpans = [];
+  int _cachedSpanHash = 0;
+
   // ── User scroll detection (for smart auto-scroll) ──
   bool _userScrolledUp = false;
 
@@ -283,6 +286,22 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   // HEX formatter
   static final _hexFormatter = FilteringTextInputFormatter.allow(
     RegExp(r'[0-9A-Fa-f ]'),
+  );
+
+  // ── Static text styles (created once, reused across all frames) ──
+  static const _kLogLineStyle = TextStyle(
+    fontFamily: 'Consolas, monospace',
+    fontSize: 13,
+    color: Colors.white,
+  );
+  static const _kTimestampStyle = TextStyle(color: Color(0xFF9E9E9E)); // grey[500]
+  static const _kTxStyle = TextStyle(
+    color: Colors.orange,
+    fontWeight: FontWeight.bold,
+  );
+  static const _kRxStyle = TextStyle(
+    color: Colors.green,
+    fontWeight: FontWeight.bold,
   );
 
   static String get _configPath {
@@ -771,16 +790,21 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       _lastLogCount = newLog.length;
     }
     if (hasNewData && mounted) setState(() {});
-    // Smart auto-scroll: only scroll if user hasn't scrolled up
+    // Smart auto-scroll via post-frame callback: wait until layout finishes
+    // before jumping, so maxScrollExtent reflects the new content height.
     if (cs.autoScroll && !_userScrolledUp && _scrollController.hasClients) {
-      _isProgrammaticScroll = true;
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 100),
-        curve: Curves.easeOut,
-      );
-      Future.delayed(const Duration(milliseconds: 150), () {
-        _isProgrammaticScroll = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        if (!_scrollController.hasClients) return;
+        final maxScroll = _scrollController.position.maxScrollExtent;
+        final current = _scrollController.position.pixels;
+        // Only jump if we'd actually move (gap > 1 line height).
+        // Avoids micro-jumps that cause scrollbar jitter.
+        if (maxScroll - current > 22.0) {
+          _isProgrammaticScroll = true;
+          _scrollController.jumpTo(maxScroll);
+          _isProgrammaticScroll = false;
+        }
       });
     }
   }
@@ -1282,9 +1306,6 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     final dt = DateTime.fromMillisecondsSinceEpoch(ts.toInt());
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}:${dt.second.toString().padLeft(2, '0')}.${dt.millisecond.toString().padLeft(3, '0')}';
   }
-
-  Color _getDirectionColor(String dir) =>
-      dir == 'TX' ? Colors.orange : Colors.green;
 
   String _formatData(DebugLogEntry entry) {
     return _cs.showHex
@@ -1788,76 +1809,79 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
                           ],
                         ),
                       )
-                    : NotificationListener<UserScrollNotification>(
-                        onNotification: (n) {
-                          if (n.direction != ScrollDirection.idle &&
-                              _cs.autoScroll) {
-                            _cs.autoScroll = false;
-                            setState(() {});
-                          }
-                          return false;
-                        },
-                        child: Scrollbar(
+                    : Scrollbar(
                           controller: _scrollController,
                           thumbVisibility: true,
                           interactive: true,
-                          thickness: 16.0,
-                          radius: const Radius.circular(8),
-                          child: ScrollConfiguration(
-                            behavior: ScrollConfiguration.of(
-                              context,
-                            ).copyWith(scrollbars: false),
-                            child: ListView.builder(
-                              controller: _scrollController,
-                              padding: const EdgeInsets.only(
-                                right: 20,
-                                top: 8,
-                                bottom: 8,
-                                left: 8,
-                              ),
-                              itemCount: filteredLog.length,
-                              itemExtent: 22.0,
-                              itemBuilder: (context, index) {
-                                final entry = filteredLog[index];
-                                return Padding(
-                                  padding: const EdgeInsets.only(bottom: 1),
-                                  child: RichText(
-                                    text: TextSpan(
-                                      style: const TextStyle(
-                                        fontFamily: 'Consolas, monospace',
-                                        fontSize: 13,
-                                        color: Colors.white,
-                                      ),
-                                      children: [
-                                        if (_cs.showTimestamp)
-                                          TextSpan(
-                                            text:
-                                                '[${_formatTimestamp(entry.timestamp)}] ',
-                                            style: TextStyle(
-                                              color: Colors.grey[500],
-                                            ),
-                                          ),
+                          thickness: 12.0,
+                          radius: const Radius.circular(6),
+                          child: Builder(builder: (context) {
+                            // ── Rebuild TextSpan cache only when log or display settings change ──
+                            final spanHash = Object.hash(
+                              filteredLog.length,
+                              _cs.showTx,
+                              _cs.showRx,
+                              _cs.showTimestamp,
+                              _cs.showHex,
+                            );
+                            if (_cachedSpanHash != spanHash) {
+                              _cachedLineSpans = List.generate(
+                                filteredLog.length,
+                                (i) {
+                                  final e = filteredLog[i];
+                                  return TextSpan(
+                                    style: _kLogLineStyle,
+                                    children: [
+                                      if (_cs.showTimestamp)
                                         TextSpan(
-                                          text: '[${entry.direction}] ',
-                                          style: TextStyle(
-                                            color: _getDirectionColor(
-                                              entry.direction,
-                                            ),
-                                            fontWeight: FontWeight.bold,
-                                          ),
+                                          text: '[${_formatTimestamp(e.timestamp)}] ',
+                                          style: _kTimestampStyle,
                                         ),
-                                        TextSpan(text: _formatData(entry)),
-                                      ],
+                                      TextSpan(
+                                        text: '[${e.direction}] ',
+                                        style: e.direction == 'TX'
+                                            ? _kTxStyle
+                                            : _kRxStyle,
+                                      ),
+                                      TextSpan(text: _formatData(e)),
+                                    ],
+                                  );
+                                },
+                              );
+                              _cachedSpanHash = spanHash;
+                            }
+                            return ScrollConfiguration(
+                              behavior: ScrollConfiguration.of(
+                                context,
+                              ).copyWith(scrollbars: false),
+                              child: ListView.builder(
+                                controller: _scrollController,
+                                physics: const ClampingScrollPhysics(),
+                                padding: const EdgeInsets.only(
+                                  right: 20,
+                                  top: 8,
+                                  bottom: 8,
+                                  left: 8,
+                                ),
+                                itemCount: filteredLog.length,
+                                itemExtent: 22.0,
+                                itemBuilder: (ctx, index) {
+                                  return RepaintBoundary(
+                                    key: ValueKey(index),
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(bottom: 1),
+                                      child: RichText(
+                                        text: _cachedLineSpans[index],
+                                        softWrap: false,
+                                        overflow: TextOverflow.clip,
+                                      ),
                                     ),
-                                    softWrap: false,
-                                    overflow: TextOverflow.clip,
-                                  ),
-                                );
-                              },
-                            ),
-                          ),
+                                  );
+                                },
+                              ),
+                            );
+                          }),
                         ),
-                      ),
               ),
             ),
           ),

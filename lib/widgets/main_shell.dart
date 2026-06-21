@@ -51,7 +51,7 @@ class MainShellState extends State<MainShell> {
   // Order: Devices → Console → Plot → Settings → Lua
   final _screens = const [
     DeviceListScreen(),
-    DebugConsoleScreen(),  // was index 2, now index 1 (before Plot)
+    DebugConsoleScreen(),
     PlotScreen(),
     SettingsScreen(),
     LuaScriptScreen(),

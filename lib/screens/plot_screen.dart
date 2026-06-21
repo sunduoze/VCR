@@ -421,13 +421,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     _maxPointsController.text = _maxPoints.toString();
     _deltaTimeController.text = _deltaTime.toString();
-    // 启动 Rust 独立线程接收数据（方案3）
-    try {
-      RustLib.instance.api.crateApiDataReceiverStartDataReceiver();
-      print('✅ 数据接收线程启动成功');
-    } catch (e) {
-      print('❌ 数据接收线程启动失败: $e');
-    }
+    // Start data receiver (required for real device data flow)
+    RustLib.instance.api.crateApiDataReceiverStartDataReceiver();
     // Load Flutter log settings asynchronously (don't block initState)
     _loadFlutterLogSettings();
   }
@@ -3561,10 +3556,18 @@ class _PlotPainter extends CustomPainter {
     // P2-2: Static layer cache — rebuild only on layout/theme/axis-range change
     // Hash includes: layout geometry + theme + visible Y-axis channels state + axis ranges
     // P3-3: Added shareYAxis to hash (toggling shareYAxis changes grid rendering)
+    // Memory-leak fix: round float values to 4 significant digits so that tiny
+    // auto-scale fluctuations (<0.01% of range) don't invalidate the cache every frame.
+    double _hashRound(double v) {
+      if (v == 0.0) return 0.0;
+      final abs = v.abs();
+      final scale = abs < 1e-6 ? 1e12 : abs > 1e6 ? 1 : 1e6 / abs;
+      return (v * scale).roundToDouble() / scale;
+    }
     int staticHash = Object.hash(
       isDarkTheme,
       plotLeft, plotTop, plotW, plotH,
-      xMin, xMax, yMin, yMax,
+      _hashRound(xMin), _hashRound(xMax), _hashRound(yMin), _hashRound(yMax),
       deltaTime, globalDecimals,
       shareYAxis,
       yAxisChannels.length,
@@ -3573,12 +3576,19 @@ class _PlotPainter extends CustomPainter {
       final ch = yAxisChannels[ci];
       staticHash = Object.hash(staticHash,
         ch.visible, ch.showYAxis, ch.decimals, ch.color.toARGB32(),
-        ch.autoScaleY, ch.yMin, ch.yMax, ch.yMinManual, ch.yMaxManual,
+        ch.autoScaleY, _hashRound(ch.yMin), _hashRound(ch.yMax),
+        _hashRound(ch.yMinManual), _hashRound(ch.yMaxManual),
         ci % 2, // left/right side
       );
     }
 
     if (_staticPicture == null || _staticVersion != staticHash) {
+      // 🩺 Memory leak fix: dispose old Picture before creating new one.
+      // Skia Picture wraps native GPU resources; without explicit dispose(),
+      // the old picture's resources leak until Dart GC runs (which may take
+      // minutes → multi-GB accumulation). Root cause of the ~9.5GB issue.
+      _staticPicture?.dispose();
+      _staticPicture = null;
       final recorder = ui.PictureRecorder();
       final staticCanvas = Canvas(recorder);
       _drawStaticLayer(staticCanvas, w, h, scale,

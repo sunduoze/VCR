@@ -18,8 +18,7 @@ class AppRoutes {
   static const String luaScript = '/lua';
   static const String gpuTest = '/gpu-test';
 
-  /// Navigation index (matches MainShell._screens order after Dashboard removal):
-  ///  0 = Devices, 1 = Plot, 2 = Console, 3 = Settings, 4 = Lua
+  /// Navigation index: 0=Devices, 1=Plot, 2=Console, 3=Settings, 4=Lua
   static int getNavIndex(String? route) {
     switch (route) {
       case home:

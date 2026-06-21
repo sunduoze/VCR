@@ -1,6 +1,6 @@
 /**
  * 多功能串口数据生成器 - 上位机性能测试专用
- * 修复：移除 Serial.printf，补全 flashTest 函数
+ * 增加 Mode 17: ANSI 文字样式测试，每步输出带时间戳
  */
 
 #include "ST7735S_SoftSPI.h"
@@ -16,6 +16,7 @@ W25Q64 flash;
 // ======================= 配置存储 =======================
 #define CONFIG_SECTOR_ADDR  0x7FF000
 #define CONFIG_MAGIC        0xA5
+const int MODE_COUNT = 17;  // 提前定义，避免后面使用时报错
 
 void saveModeToFlash(uint8_t mode) {
     uint8_t buf[2] = {CONFIG_MAGIC, mode};
@@ -27,7 +28,7 @@ void saveModeToFlash(uint8_t mode) {
 bool loadModeFromFlash(uint8_t *mode) {
     uint8_t buf[2];
     flash.readData(CONFIG_SECTOR_ADDR, buf, 2);
-    if (buf[0] == CONFIG_MAGIC && buf[1] >= 1 && buf[1] <= 16) {
+    if (buf[0] == CONFIG_MAGIC && buf[1] >= 1 && buf[1] <= MODE_COUNT) {
         *mode = buf[1];
         return true;
     }
@@ -84,9 +85,9 @@ const char* modeNames[] = {
     "1:Fixed CSV", "2:Plot Cmd", "3:Fourier Sq", "4:Lorenz",
     "5:Multi-Wave", "6:ECG", "7:Resp", "8:RandomWalk",
     "9:HighRate", "10:BigPacket", "11:Binary", "12:16Ch",
-    "13:Jitter", "14:CPU Load", "15:SweepFreq", "16:Spike"
+    "13:Jitter", "14:CPU Load", "15:SweepFreq", "16:Spike",
+    "17:ANSI Style"
 };
-const int MODE_COUNT = 16;
 
 // ======================= LCD 显示 =======================
 void updateLCD() {
@@ -95,7 +96,7 @@ void updateLCD() {
     sprintf(line1, "Mode:%d", currentMode);
     tft.showString(5, 2, line1, TFT_BLUE, TFT_GRAY, 16);
     tft.showString(5, 22, modeNames[currentMode-1], TFT_RED, TFT_GRAY, 16);
-    tft.showString(5, 44, "mode1~16/help", TFT_GREEN, TFT_GRAY, 16);
+    tft.showString(5, 44, "mode1~17/help", TFT_GREEN, TFT_GRAY, 16);
     tft.showString(5, 64, "pause5s", TFT_MAGENTA, TFT_GRAY, 16);
 }
 
@@ -227,7 +228,7 @@ void runMode8() {
 
 // ======================= 新增测试模式 =======================
 
-// 模式9：高数据率模式（每1ms发送一个简单整数，测试上位机极限）
+// 模式9：高数据率模式
 void runMode9() {
     static unsigned long last=0;
     static int cnt=0;
@@ -239,7 +240,7 @@ void runMode9() {
     }
 }
 
-// 模式10：大数据包模式（一次发送约512字节，测试缓冲区）
+// 模式10：大数据包模式
 void runMode10() {
     static unsigned long last=0;
     if(millis()-last>=200) {
@@ -253,7 +254,7 @@ void runMode10() {
     }
 }
 
-// 模式11：二进制数据模式（发送4个float，原始二进制，需上位机支持）
+// 模式11：二进制数据模式
 void runMode11() {
     static unsigned long last=0;
     static float val=0;
@@ -265,7 +266,7 @@ void runMode11() {
     }
 }
 
-// 模式12：16通道数据（测试多曲线性能）
+// 模式12：16通道数据
 void runMode12() {
     static unsigned long last=0;
     static int idx=0;
@@ -283,18 +284,18 @@ void runMode12() {
     }
 }
 
-// 模式13：抖动/丢包模拟（随机跳过一些数据包）
+// 模式13：抖动/丢包模拟
 void runMode13() {
     static unsigned long last=0;
     if(millis()-last>=10) {
         last=millis();
-        if(rand()%10 < 2) return;  // 20%丢包率
+        if(rand()%10 < 2) return;
         Serial.print(millis()); Serial.print(",");
         Serial.println(sin(millis()*0.001)*100, 2);
     }
 }
 
-// 模式14：CPU负载测试（大量浮点运算同时发送数据）
+// 模式14：CPU负载测试
 void runMode14() {
     static unsigned long last=0;
     if(millis()-last>=50) {
@@ -306,7 +307,7 @@ void runMode14() {
     }
 }
 
-// 模式15：扫频模式（频率从1Hz到100Hz线性扫描，测试上位机动态刷新）
+// 模式15：扫频模式
 void runMode15() {
     static unsigned long last=0;
     static float freq=1.0;
@@ -323,7 +324,7 @@ void runMode15() {
     }
 }
 
-// 模式16：尖峰脉冲模式（测试上位机对突变的响应）
+// 模式16：尖峰脉冲模式
 void runMode16() {
     static unsigned long last=0;
     static int cnt=0;
@@ -336,11 +337,75 @@ void runMode16() {
     }
 }
 
+// ======================= 模式17：ANSI 文字样式测试（带时间戳） =======================
+int ansiStep = 0;
+unsigned long ansiLastTime = 0;
+bool ansiFinished = false;
+unsigned long ansiRestartTime = 0;
+
+void runMode17() {
+    const unsigned long STEP_INTERVAL = 2000;   // 每条序列间隔 2 秒
+    const unsigned long RESTART_DELAY = 5000;   // 全部完成后等待 5 秒重新开始
+
+    if (ansiFinished) {
+        if (millis() - ansiRestartTime >= RESTART_DELAY) {
+            ansiFinished = false;
+            ansiStep = 0;
+            Serial.println("\n=== Restarting ANSI Text Style Test ===");
+        }
+        return;
+    }
+
+    if (millis() - ansiLastTime < STEP_INTERVAL) return;
+    ansiLastTime = millis();
+
+    const char* descriptions[] = {
+        "Foreground Red",
+        "Background Blue",
+        "Bold Text",
+        "Underlined Text",
+        "256-Color Foreground (196)",
+        "True-Color Foreground (Orange)",
+        "True-Color Background (Purple)"
+    };
+
+    const char* sequences[] = {
+        "\033[31mRed Text\033[0m",
+        "\033[44mBlue Background\033[0m",
+        "\033[1mBold\033[0m",
+        "\033[4mUnderlined\033[0m",
+        "\033[38;5;196m256-color red\033[0m",
+        "\033[38;2;255;165;0mTrue Orange\033[0m",
+        "\033[48;2;128;0;128mPurple BG\033[0m"
+    };
+
+    int totalSteps = sizeof(descriptions) / sizeof(descriptions[0]);
+
+    if (ansiStep >= totalSteps) {
+        Serial.println("\n=== ANSI Text Style Test Finished. Restart in 5 s... ===");
+        ansiFinished = true;
+        ansiRestartTime = millis();
+        return;
+    }
+
+    // 输出当前步骤，附加系统运行时间（秒，保留3位小数）
+    Serial.print("[");
+    Serial.print(millis() / 1000.0, 3);
+    Serial.print("s] --- Step ");
+    Serial.print(ansiStep + 1);
+    Serial.print(": ");
+    Serial.print(descriptions[ansiStep]);
+    Serial.println(" ---");
+    Serial.print(sequences[ansiStep]);
+
+    ansiStep++;
+}
+
 // ======================= 串口命令 =======================
 void printHelp() {
-    Serial.println("=== Test Modes (1-16) ===");
+    Serial.println("=== Test Modes (1-17) ===");
     char buf[64];
-    for(int i=1;i<=16;i++) {
+    for(int i=1;i<=MODE_COUNT;i++) {
         sprintf(buf, "mode%d - %s", i, modeNames[i-1]);
         Serial.println(buf);
     }
@@ -355,13 +420,17 @@ void setMode(int newMode) {
     currentMode=newMode;
     updateLCD();
     saveModeToFlash(currentMode);
-    // 重置模式状态
+    // 重置各模式状态
     m3_head=false; m3_idx=0;
     m5_head=false; m5_idx=0;
     m6_head=false; ecgTime=0;
     m7_head=false; respTime=0;
     m8_head=false; walkPos=0;
     lx=0.1; ly=0; lz=0;
+    // 重置 ANSI 测试状态
+    ansiStep = 0;
+    ansiLastTime = 0;
+    ansiFinished = false;
     outputPaused=true;
     pauseEndTime=millis()+PAUSE_DURATION;
     char msg[64];
@@ -422,8 +491,8 @@ void loop() {
             case 11: runMode11(); break; case 12: runMode12(); break;
             case 13: runMode13(); break; case 14: runMode14(); break;
             case 15: runMode15(); break; case 16: runMode16(); break;
+            case 17: runMode17(); break;
             default: currentMode=4; break;
         }
     }
-//    delay(1);
 }

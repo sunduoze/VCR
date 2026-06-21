@@ -3169,6 +3169,12 @@ class _PlotPainter extends CustomPainter {
     ..style = PaintingStyle.stroke
     ..strokeWidth = 0.5
     ..strokeCap = StrokeCap.round;
+  // P4: Gap marker paints — shaded column + edge lines at data discontinuities
+  static final _gapMarkerPaint = Paint()
+    ..style = PaintingStyle.fill;
+  static final _gapEdgePaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeCap = StrokeCap.round;
   // Dot line style: cached paint + path
   static final _dotLinePaint = Paint()..style = PaintingStyle.stroke;
   static final _dotPointPaint = Paint();
@@ -3437,11 +3443,13 @@ class _PlotPainter extends CustomPainter {
 
     // P2-2: Static layer cache — rebuild only on layout/theme/axis-range change
     // Hash includes: layout geometry + theme + visible Y-axis channels state + axis ranges
+    // P3-3: Added shareYAxis to hash (toggling shareYAxis changes grid rendering)
     int staticHash = Object.hash(
       isDarkTheme,
       plotLeft, plotTop, plotW, plotH,
       xMin, xMax, yMin, yMax,
       deltaTime, globalDecimals,
+      shareYAxis,
       yAxisChannels.length,
     );
     for (int ci = 0; ci < yAxisChannels.length; ci++) {
@@ -3462,8 +3470,16 @@ class _PlotPainter extends CustomPainter {
       _staticVersion = staticHash;
     }
 
-    // Draw cached static layer (background, grid, axes, labels, border, info)
+    // Draw cached static layer (background, grid, axes, labels, border)
     canvas.drawPicture(_staticPicture!);
+
+    // ── FPS / point count overlay (dynamic, changes every frame) ──
+    final infoStyle = isDarkTheme ? _dkInfoStyle : _ltInfoStyle;
+    final infoTp = TextPainter(
+      text: TextSpan(text: 'FPS: $fps  Pts: $totalPoints', style: infoStyle),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    infoTp.paint(canvas, Offset(plotLeft + plotW - infoTp.width - 4, plotTop + 4));
 
     // ── Waveform clipping (dynamic layer) ──
     canvas.save();
@@ -3677,13 +3693,6 @@ class _PlotPainter extends CustomPainter {
     final borderPaint = isDarkTheme ? _dkBorder : _ltBorder;
     canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), borderPaint);
 
-    // ── FPS / point count overlay ──
-    final infoStyle = isDarkTheme ? _dkInfoStyle : _ltInfoStyle;
-    final infoTp = TextPainter(
-      text: TextSpan(text: 'FPS: $fps  Pts: $totalPoints', style: infoStyle),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    infoTp.paint(canvas, Offset(plotLeft + plotW - infoTp.width - 4, plotTop + 4));
   }
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
     // P0-2: Use GC-free _DataBuf (viewportData is always populated by envelope read)
@@ -3702,6 +3711,9 @@ class _PlotPainter extends CustomPainter {
       _drawEnvelope(canvas, ch, envData, ox, oy, w, h, yTransform);
       _drawMinMaxLines(canvas, ch, envData, ox, oy, w, h, yTransform);
     }
+
+    // P4: Gap markers — shaded regions at temporal discontinuities
+    _drawGapMarkers(canvas, ch, data, ox, oy, w, h, yTransform);
 
     switch (ch.lineStyle) {
       case LineStyle.dot:
@@ -3802,6 +3814,44 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
 
     _minMaxLinePaint.color = ch.color.withValues(alpha: 0.40);
     canvas.drawRawPoints(ui.PointMode.lines, buf, _minMaxLinePaint);
+  }
+
+  /// P4: Draw gap markers where data has temporal discontinuities.
+  /// Gaps are detected when the time interval between consecutive viewport points
+  /// exceeds 3× the expected bucket interval. Markers appear as thin shaded columns.
+  void _drawGapMarkers(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
+    if (data.length < 2) return;
+
+    final expectedInterval = (data.lastX - data.firstX) / (data.length - 1);
+    if (expectedInterval <= 0) return;
+
+    final gapThreshold = expectedInterval * 3.0;
+
+    // Reuse static paint, update color per channel
+    _gapMarkerPaint.color = ch.color.withValues(alpha: 0.18);
+    _gapMarkerPaint.strokeWidth = 2.5;
+
+    for (int i = 1; i < data.length; i++) {
+      final dt = data.x(i) - data.x(i - 1);
+      if (dt > gapThreshold) {
+        // Gap detected between i-1 and i: draw shaded column between the two X positions
+        final x1 = _xToScreen(data.x(i - 1), w) + ox;
+        final x2 = _xToScreen(data.x(i), w) + ox;
+        if (x2 - x1 < 4) continue; // too narrow to see
+
+        canvas.drawRect(
+          Rect.fromLTWH(x1 + 1, oy, x2 - x1 - 2, h),
+          _gapMarkerPaint,
+        );
+
+        // Draw vertical dashed edges at gap boundaries
+        final edgeW = 1.0;
+        _gapEdgePaint.color = ch.color.withValues(alpha: 0.35);
+        _gapEdgePaint.strokeWidth = edgeW;
+        canvas.drawLine(Offset(x1, oy), Offset(x1, oy + h), _gapEdgePaint);
+        canvas.drawLine(Offset(x2, oy), Offset(x2, oy + h), _gapEdgePaint);
+      }
+    }
   }
 
   void _drawDotLine(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {

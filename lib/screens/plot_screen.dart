@@ -95,6 +95,15 @@ class PlotGroup {
   );
 }
 
+/// Threshold for envelope vs trace rendering mode.
+/// samplesPerPixel < ENVELOPE_THRESHOLD -> trace mode (raw polyline)
+/// samplesPerPixel >= ENVELOPE_THRESHOLD -> envelope mode (min-max band)
+const double ENVELOPE_THRESHOLD = 2.0;
+
+/// Feature flag: enable AnalogSegment envelope reads (parallel to TimeBucketPyramid).
+/// When true, reads envelope from AnalogSegment; when false, uses existing RENDER_ENVELOPE.
+const bool USE_ANALOG_ENVELOPE = false;
+
 class PlotChannel {
   final String deviceId;
   String deviceName;
@@ -715,7 +724,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
     // 🚀 P0-4: Try zero-copy envelope read first (pre-computed by Rust pipeline thread)
-    if (_refreshViewportDataFromEnvelope()) return;
+    if (USE_ANALOG_ENVELOPE) {
+      if (_refreshViewportFromAnalog()) return;
+    } else {
+      if (_refreshViewportDataFromEnvelope()) return;
+    }
 
     // Fallback: per-channel pyramid query
     final maxPts = _screenWidth.round().clamp(500, 4000);
@@ -782,6 +795,83 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     }
     _viewportRefreshCount++;
+  }
+
+  // ── AnalogSegment envelope read (alternative to RENDER_ENVELOPE) ──
+  // Called when USE_ANALOG_ENVELOPE is true.
+  // Reads per-channel envelope from AnalogSegment via C-ABI (f32 min/max pairs).
+  bool _refreshViewportFromAnalog() {
+    final bridge = FfiBridge.instance;
+
+    // Use the existing render envelope's viewport range
+    final gen1 = bridge.envelopeGetGeneration();
+    if (gen1 & 1 != 0) return false;
+
+    final numCh = bridge.envelopeGetNumChannels();
+    if (numCh == 0) return false;
+
+    // per-sample CEnvelopeSample output buffer (f32 min/max), max 8000 samples
+    final maxSamples = _screenWidth.round().clamp(500, 8000);
+    final sampleBuf = calloc<CEnvelopeSample>(maxSamples);
+
+    // Compute samplesPerPixel from viewport and total sample count
+    bool anyData = false;
+    for (int ci = 0; ci < numCh && ci < _channels.length; ci++) {
+      final ch = _channels[ci];
+      if (!ch.visible || ch.data.isEmpty) {
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
+        continue;
+      }
+
+      final sampleCount = bridge.analogSampleCount(ci);
+      if (sampleCount == 0) {
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
+        continue;
+      }
+
+      // Calculate samplesPerPixel: total samples / num pixels in viewport
+      final timeRange = _xMax - _xMin;
+      final timePerPx = timeRange > 0 ? timeRange / _screenWidth : 0.0;
+      final samplesPerPixel = timePerPx > 0 ? sampleCount * timePerPx / timeRange : ENVELOPE_THRESHOLD;
+
+      // Compute sample range (approximate: map time range to sample range)
+      final newestAbsX = ch.data.last.x;
+      final sampleOffset = newestAbsX - (_xMax); // approx
+      final startSample = ((sampleOffset - _xMin.abs()) * 1.0).round().clamp(0, sampleCount - 1);
+      final endSample = startSample + (_screenWidth * samplesPerPixel).round();
+      final clampedEnd = endSample.clamp(startSample + 1, sampleCount);
+
+      final count = bridge.analogGetEnvelope(
+        ci, startSample, clampedEnd, samplesPerPixel.toDouble(), sampleBuf, maxSamples,
+      );
+
+      ch.viewportData.clear();
+      ch.envelopeData.clear();
+
+      if (count > 0) {
+        for (int i = 0; i < count; i++) {
+          final sample = sampleBuf[i];
+          final yMin = sample.min.toDouble();
+          final yMax = sample.max.toDouble();
+          final yAvg = (yMin + yMax) * 0.5;
+          final xRel = (sampleOffset + startSample + i).toDouble(); // approximate relX
+
+          ch.viewportData.add(xRel, yAvg);
+          ch.envelopeData.add(xRel, yMin);
+          ch.envelopeData.add(xRel, yMax);
+        }
+        anyData = true;
+      }
+    }
+
+    calloc.free(sampleBuf);
+
+    final gen2 = bridge.envelopeGetGeneration();
+    if (gen1 != gen2) return false;
+
+    return anyData;
   }
 
   /// 分离的数据轮询（策略 B: 减少 FRB 调用）
@@ -3705,6 +3795,15 @@ class _PlotPainter extends CustomPainter {
       return h - (y - chYMin) / (chYMax - chYMin) * h;
     }
 
+    // ── Trace mode: samplesPerPixel < ENVELOPE_THRESHOLD → raw polyline, no envelope ──
+    // When zoomed in deeply (few samples covering many pixels), envelope bands
+    // produce ugly wide vertical bars. A simple polyline is cleaner.
+    final samplesPerPixel = data.length / w;
+    if (samplesPerPixel < ENVELOPE_THRESHOLD) {
+      _drawTrace(canvas, ch, data, ox, oy, w, h, yTransform);
+      return;
+    }
+
     // 🚀 Phase B: Render envelope fill (semi-transparent min-max band) before foreground line
     final envData = ch.envelopeData;
     if (envData.isNotEmpty && envData.length >= 2) {
@@ -3897,6 +3996,29 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
       buf[i * 2 + 1] = yTransform(data.y(i)) + oy;
     }
     canvas.drawRawPoints(ui.PointMode.polygon, buf, _linePaint);
+  }
+
+  // ── Trace mode: raw sample polyline (no envelope, no downsampling) ──
+  // Used when samplesPerPixel < ENVELOPE_THRESHOLD (zoomed in).
+  void _drawTrace(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
+    if (data.isEmpty) return;
+
+    _linePaint.color = ch.color;
+    _linePaint.strokeWidth = ch.lineWidth;
+
+    final n = data.length;
+    final reqLen = n * 2;
+    if (_lineBuf == null || _lineBuf!.length < reqLen) {
+      _lineBuf = Float32List(reqLen);
+    }
+    final buf = _lineBuf!;
+    int pi = 0;
+    for (int i = 0; i < n; i++) {
+      buf[pi++] = _xToScreen(data.x(i), w) + ox;
+      buf[pi++] = yTransform(data.y(i)) + oy;
+    }
+    final view = buf.length > pi ? Float32List.sublistView(buf, 0, pi) : buf;
+    canvas.drawRawPoints(ui.PointMode.polygon, view, _linePaint);
   }
 
   void _drawFilled(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale, double chYMin, double chYMax) {

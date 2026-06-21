@@ -1,4 +1,4 @@
-// Data Pipeline — Phase A: Background processing thread for lock-free data flow
+﻿// Data Pipeline — Phase A: Background processing thread for lock-free data flow
 //
 // Architecture (reference framework aligned):
 //   Serial receive → PENDING_BATCHES (batch buffer) → Pipeline thread → Per-channel pyramids
@@ -14,12 +14,16 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use parking_lot::Mutex;
 use lazy_static::lazy_static;
 
 use crate::core::plot::ffi_bridge::FFI_CH_PYRAMIDS;
+use crate::core::plot::analog_segment::AnalogSegment;
+use std::sync::Arc;
+use parking_lot::RwLock;
 
 // ── P0-1: Receive→Pipeline batch buffer ───────────────────────────
 // Eliminates Mutex contention between receive_loop (producer) and
@@ -43,6 +47,10 @@ struct BatchEntry {
 lazy_static! {
     /// Pre-allocated batch buffer (producer appends, consumer drains)
     static ref PENDING_BATCHES: Mutex<Vec<BatchEntry>> = Mutex::new(Vec::with_capacity(256));
+
+    /// Per-channel AnalogSegment instances (10-level envelope pyramid, f32)
+    /// Parallel path alongside FFI_CH_PYRAMIDS for progressive migration.
+    pub static ref FFI_CH_ANALOG: RwLock<HashMap<u32, Arc<AnalogSegment>>> = RwLock::new(HashMap::new());
 }
 
 /// Drain all pending batches (called from pipeline_loop only).
@@ -284,17 +292,26 @@ fn pipeline_loop() {
         let batches = drain_pending_batches();
         if !batches.is_empty() {
             let mut pyramids = FFI_CH_PYRAMIDS.lock();
+            let analog_map = FFI_CH_ANALOG.read();
             for entry in batches {
                 if let Some(ch_id) = entry.channel_id {
                     // Single-channel push with explicit channel_id
                     let pyramid = pyramids.entry(ch_id).or_default();
                     pyramid.push(entry.x, entry.values[0]);
+                    // Also push to AnalogSegment (f32 precision)
+                    if let Some(analog) = analog_map.get(&ch_id) {
+                        analog.push_sample(entry.values[0] as f32);
+                    }
                 } else {
                     // Multi-channel push: channel_id = array index
                     for (ci, value) in entry.values.iter().enumerate() {
                         let channel_id = ci as u32;
                         let pyramid = pyramids.entry(channel_id).or_default();
                         pyramid.push(entry.x, *value);
+                        // Also push to AnalogSegment (f32 precision)
+                        if let Some(analog) = analog_map.get(&channel_id) {
+                            analog.push_sample(*value as f32);
+                        }
                     }
                 }
             }
@@ -319,6 +336,13 @@ pub fn reset_pipeline() {
     // Discard any in-flight batches
     PENDING_BATCHES.lock().clear();
     FFI_CH_PYRAMIDS.lock().clear();
+    // Reset all AnalogSegments and clear map
+    let analog_map = FFI_CH_ANALOG.read();
+    for seg in analog_map.values() {
+        seg.reset();
+    }
+    drop(analog_map);
+    FFI_CH_ANALOG.write().clear();
     let mut envelope = RENDER_ENVELOPE.lock();
     envelope.num_channels = 0;
     envelope.generation = 0;

@@ -1,4 +1,4 @@
-// FFI Bridge — C-ABI zero-copy bridge for Dart ↔ Rust
+﻿// FFI Bridge — C-ABI zero-copy bridge for Dart ↔ Rust
 //
 // Architecture:
 //   Per-channel TimeBucketPyramid → query → CDataPoint buffer → CustomPainter
@@ -14,6 +14,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::collections::HashMap;
 
 use crate::core::plot::pipeline::{self, RENDER_ENVELOPE};
+use crate::core::plot::analog_segment::AnalogSegment;
+use crate::core::plot::envelope::EnvelopeSample;
 use crate::core::plot::time_bucket::TimeBucketPyramid;
 
 // ── Global state ────────────────────────────────────────────────────
@@ -277,6 +279,109 @@ pub extern "C" fn vcr_envelope_get_generation() -> u64 {
 pub extern "C" fn vcr_envelope_get_num_channels() -> u32 {
     let env = RENDER_ENVELOPE.lock();
     env.num_channels
+}
+
+// ── AnalogSegment API ───────────────────────────────────────────────
+
+/// Ensure an AnalogSegment exists for a given channel_id.
+/// Creates one on first call (with default samplerate 1000 Hz).
+/// Returns true if segment was newly created.
+#[no_mangle]
+pub extern "C" fn vcr_analog_ensure(channel_id: u32) -> bool {
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let mut map = FFI_CH_ANALOG.write();
+    if map.contains_key(&channel_id) {
+        return false;
+    }
+    map.insert(channel_id, AnalogSegment::new(1000.0));
+    true
+}
+
+/// Push a single sample into a channel's AnalogSegment.
+#[no_mangle]
+pub extern "C" fn vcr_analog_push_sample(channel_id: u32, value: f32) {
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    if let Some(analog) = map.get(&channel_id) {
+        analog.push_sample(value);
+    }
+}
+
+/// Get the total sample count for a channel's AnalogSegment.
+#[no_mangle]
+pub extern "C" fn vcr_analog_sample_count(channel_id: u32) -> u64 {
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    map.get(&channel_id).map(|a| a.sample_count()).unwrap_or(0)
+}
+
+/// Get global min/max for a channel's AnalogSegment.
+/// Writes min_value, max_value into the first 2 elements of `out` (f32).
+#[no_mangle]
+pub extern "C" fn vcr_analog_get_min_max(channel_id: u32, out: *mut f32) {
+    if out.is_null() {
+        return;
+    }
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, 2) };
+    if let Some(analog) = map.get(&channel_id) {
+        dest[0] = analog.global_min();
+        dest[1] = analog.global_max();
+    } else {
+        dest[0] = 0.0;
+        dest[1] = 0.0;
+    }
+}
+
+/// Copy envelope section samples (f32 min/max pairs) into output buffer.
+/// Returns number of EnvelopeSample entries written (each = 2 f32 values: min, max).
+/// Output format: [min0, max0, min1, max1, ...]
+#[no_mangle]
+pub extern "C" fn vcr_analog_get_envelope(
+    channel_id: u32,
+    start_sample: u64,
+    end_sample: u64,
+    samples_per_pixel: f32,
+    out: *mut EnvelopeSample,
+    max_samples: u32,
+) -> u32 {
+    if out.is_null() || max_samples == 0 {
+        return 0;
+    }
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    let analog = match map.get(&channel_id) {
+        Some(a) => a,
+        None => return 0,
+    };
+    let section = analog.get_envelope_section(start_sample, end_sample, samples_per_pixel);
+    let count = section.samples.len().min(max_samples as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
+    dest.copy_from_slice(&section.samples[..count]);
+    count as u32
+}
+
+/// Reset a channel's AnalogSegment.
+#[no_mangle]
+pub extern "C" fn vcr_analog_reset(channel_id: u32) {
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    if let Some(analog) = map.get(&channel_id) {
+        analog.reset();
+    }
+}
+
+/// Reset all AnalogSegments and clear the map.
+#[no_mangle]
+pub extern "C" fn vcr_analog_reset_all() {
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    for seg in map.values() {
+        seg.reset();
+    }
+    drop(map);
+    FFI_CH_ANALOG.write().clear();
 }
 
 // ── Shutdown ────────────────────────────────────────────────────────

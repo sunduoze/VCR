@@ -1,4 +1,4 @@
-// FFI Bridge — dart:ffi zero-copy bindings to Rust C-ABI
+﻿// FFI Bridge — dart:ffi zero-copy bindings to Rust C-ABI
 // 
 // Active data path:
 //   Serial → Rust pipeline::push_sample_batch_with_x → FFI_CH_PYRAMIDS → Ticker query → paint
@@ -45,6 +45,15 @@ final class CBucketStats extends Struct {
   external int pad;
 }
 
+/// Matches Rust: EnvelopeSample { min: f32, max: f32 }
+final class CEnvelopeSample extends Struct {
+  @Float()
+  external double min;
+
+  @Float()
+  external double max;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Native Function Type Definitions
 // ══════════════════════════════════════════════════════════════════════
@@ -70,6 +79,22 @@ typedef _PyramidChClearNative = Void Function(Uint32 channelId);
 typedef _PyramidChClearDart = void Function(int channelId);
 typedef _PyramidChClearAllNative = Void Function();
 typedef _PyramidChClearAllDart = void Function();
+
+// AnalogSegment API
+typedef _AnalogEnsureNative = Bool Function(Uint32 channelId);
+typedef _AnalogEnsureDart = bool Function(int channelId);
+typedef _AnalogPushSampleNative = Void Function(Uint32 channelId, Float value);
+typedef _AnalogPushSampleDart = void Function(int channelId, double value);
+typedef _AnalogSampleCountNative = Uint64 Function(Uint32 channelId);
+typedef _AnalogSampleCountDart = int Function(int channelId);
+typedef _AnalogGetMinMaxNative = Void Function(Uint32 channelId, Pointer<Float> out);
+typedef _AnalogGetMinMaxDart = void Function(int channelId, Pointer<Float> out);
+typedef _AnalogGetEnvelopeNative = Uint32 Function(Uint32 channelId, Uint64 startSample, Uint64 endSample, Float samplesPerPixel, Pointer<CEnvelopeSample> out, Uint32 maxSamples);
+typedef _AnalogGetEnvelopeDart = int Function(int channelId, int startSample, int endSample, double samplesPerPixel, Pointer<CEnvelopeSample> out, int maxSamples);
+typedef _AnalogResetNative = Void Function(Uint32 channelId);
+typedef _AnalogResetDart = void Function(int channelId);
+typedef _AnalogResetAllNative = Void Function();
+typedef _AnalogResetAllDart = void Function();
 
 // Pipeline control
 typedef _PipelineStartNative = Bool Function();
@@ -111,6 +136,15 @@ class FfiBridge {
   late final _PyramidChQueryPointsDart pyramidChQueryPoints;
   late final _PyramidChClearDart pyramidChClear;
   late final _PyramidChClearAllDart pyramidChClearAll;
+
+  // AnalogSegment API
+  late final _AnalogEnsureDart analogEnsure;
+  late final _AnalogPushSampleDart analogPushSample;
+  late final _AnalogSampleCountDart analogSampleCount;
+  late final _AnalogGetMinMaxDart analogGetMinMax;
+  late final _AnalogGetEnvelopeDart analogGetEnvelope;
+  late final _AnalogResetDart analogReset;
+  late final _AnalogResetAllDart analogResetAll;
 
   // Pipeline control
   late final _PipelineStartDart pipelineStart;
@@ -168,6 +202,19 @@ class FfiBridge {
     pyramidChQueryPoints = _lib.lookupFunction<_PyramidChQueryPointsNative, _PyramidChQueryPointsDart>('vcr_pyramid_ch_query_points');
     pyramidChClear = _lib.lookupFunction<_PyramidChClearNative, _PyramidChClearDart>('vcr_pyramid_ch_clear');
     pyramidChClearAll = _lib.lookupFunction<_PyramidChClearAllNative, _PyramidChClearAllDart>('vcr_pyramid_ch_clear_all');
+
+    // AnalogSegment API — best-effort bind (graceful degrade if DLL lacks exports)
+    try {
+      analogEnsure = _lib.lookupFunction<_AnalogEnsureNative, _AnalogEnsureDart>('vcr_analog_ensure');
+      analogPushSample = _lib.lookupFunction<_AnalogPushSampleNative, _AnalogPushSampleDart>('vcr_analog_push_sample');
+      analogSampleCount = _lib.lookupFunction<_AnalogSampleCountNative, _AnalogSampleCountDart>('vcr_analog_sample_count');
+      analogGetMinMax = _lib.lookupFunction<_AnalogGetMinMaxNative, _AnalogGetMinMaxDart>('vcr_analog_get_min_max');
+      analogGetEnvelope = _lib.lookupFunction<_AnalogGetEnvelopeNative, _AnalogGetEnvelopeDart>('vcr_analog_get_envelope');
+      analogReset = _lib.lookupFunction<_AnalogResetNative, _AnalogResetDart>('vcr_analog_reset');
+      analogResetAll = _lib.lookupFunction<_AnalogResetAllNative, _AnalogResetAllDart>('vcr_analog_reset_all');
+    } catch (e) {
+      print('[FfiBridge] AnalogSegment bindings unavailable (DLL may be outdated), degrade gracefully: $e');
+    }
 
     // Pipeline control
     pipelineStart = _lib.lookupFunction<_PipelineStartNative, _PipelineStartDart>('vcr_pipeline_start');

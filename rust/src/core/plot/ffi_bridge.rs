@@ -384,6 +384,24 @@ pub extern "C" fn vcr_analog_reset_all() {
     FFI_CH_ANALOG.write().clear();
 }
 
+// ── AnalogSegment toggle (enable/disable for envelope rendering) ───
+
+/// Set whether update_render_envelope() reads from AnalogSegment.
+/// When true, envelope data comes from the 10-level f32 pyramid;
+/// when false (default), from the TimeBucketPyramid (f64).
+#[no_mangle]
+pub extern "C" fn vcr_analog_set_envelope_enabled(enabled: bool) {
+    use crate::core::plot::pipeline::USE_ANALOG_FOR_ENVELOPE;
+    *USE_ANALOG_FOR_ENVELOPE.write() = enabled;
+}
+
+/// Check whether AnalogSegment envelope is enabled.
+#[no_mangle]
+pub extern "C" fn vcr_analog_is_envelope_enabled() -> bool {
+    use crate::core::plot::pipeline::USE_ANALOG_FOR_ENVELOPE;
+    *USE_ANALOG_FOR_ENVELOPE.read()
+}
+
 // ── Shutdown ────────────────────────────────────────────────────────
 
 /// Shutdown the FFI bridge (free resources)

@@ -51,6 +51,10 @@ lazy_static! {
     /// Per-channel AnalogSegment instances (10-level envelope pyramid, f32)
     /// Parallel path alongside FFI_CH_PYRAMIDS for progressive migration.
     pub static ref FFI_CH_ANALOG: RwLock<HashMap<u32, Arc<AnalogSegment>>> = RwLock::new(HashMap::new());
+
+    /// Toggle: when true, update_render_envelope reads from AnalogSegment
+    /// instead of TimeBucketPyramid. Set via C-ABI from Dart.
+    pub static ref USE_ANALOG_FOR_ENVELOPE: RwLock<bool> = RwLock::new(false);
 }
 
 /// Drain all pending batches (called from pipeline_loop only).
@@ -222,6 +226,15 @@ pub fn get_sample_index() -> f64 {
 /// Update the render envelope for the given viewport range.
 /// Called from pipeline thread periodically.
 pub fn update_render_envelope(t_min: f64, t_max: f64, target_points: u32) {
+    if *USE_ANALOG_FOR_ENVELOPE.read() {
+        update_render_envelope_from_analog(t_min, t_max, target_points);
+    } else {
+        update_render_envelope_from_pyramids(t_min, t_max, target_points);
+    }
+}
+
+/// Envelope from TimeBucketPyramid (existing path).
+fn update_render_envelope_from_pyramids(t_min: f64, t_max: f64, target_points: u32) {
     let pyramids = FFI_CH_PYRAMIDS.lock();
     let num_channels = pyramids.len().min(MAX_CHANNELS);
     if num_channels == 0 {
@@ -267,6 +280,93 @@ pub fn update_render_envelope(t_min: f64, t_max: f64, target_points: u32) {
 
             envelope.channel_counts[i] = pt_count;
             byte_offset += pt_count * 2; // Each point = 2 f64s
+        } else {
+            envelope.channel_counts[i] = 0;
+        }
+    }
+
+    envelope.num_channels = num_channels as u32;
+    envelope.viewport_x_min = t_min;
+    envelope.viewport_x_max = t_max;
+    // Bump generation to even (signals "update complete" to readers)
+    envelope.generation = envelope.generation.wrapping_add(1);
+}
+
+/// Envelope from AnalogSegment (10-level 16^n pyramid, f32).
+/// Sample indices are used as pseudo-timestamps (aligned with Demo mode's
+/// global counter, where x ≈ sample_index).
+fn update_render_envelope_from_analog(t_min: f64, t_max: f64, target_points: u32) {
+    let analog_map = FFI_CH_ANALOG.read();
+    let num_channels = analog_map.len().min(MAX_CHANNELS);
+    if num_channels == 0 {
+        return;
+    }
+
+    let mut envelope = RENDER_ENVELOPE.lock();
+
+    // Bump generation to odd (signals "update in progress" to readers)
+    envelope.generation = envelope.generation.wrapping_add(1);
+
+    // Sort channel IDs for consistent ordering
+    let mut channel_ids: Vec<u32> = analog_map.keys().copied().collect();
+    channel_ids.sort_unstable();
+    channel_ids.truncate(MAX_CHANNELS);
+
+    let time_range = t_max - t_min;
+    if time_range <= 0.0 {
+        return;
+    }
+
+    let mut byte_offset: u32 = 0;
+
+    for (i, &ch_id) in channel_ids.iter().enumerate() {
+        envelope.channel_offsets[i] = byte_offset;
+
+        if let Some(analog) = analog_map.get(&ch_id) {
+            let sample_count = analog.sample_count();
+            if sample_count == 0 {
+                envelope.channel_counts[i] = 0;
+                continue;
+            }
+
+            // Map viewport time range to sample range.
+            // In Demo mode, x ≈ sample_index (global counter increments per tick),
+            // so the mapping is nearly 1:1.
+            let start_sample = (t_min.max(0.0) as u64).min(sample_count);
+            let end_sample = (t_max as u64).min(sample_count);
+
+            if start_sample >= end_sample {
+                envelope.channel_counts[i] = 0;
+                continue;
+            }
+
+            // Samples per pixel = how many source samples per screen pixel
+            let spp = (end_sample - start_sample) as f32 / target_points as f32;
+
+            let section = analog.get_envelope_section(start_sample, end_sample, spp);
+            let n = section.length as usize;
+            let max_pts = n.min(MAX_ENVELOPE_PTS_PER_CHANNEL / 2);
+            let mut pt_count: u32 = 0;
+
+            for (j, sample) in section.samples.iter().take(max_pts).enumerate() {
+                // Map envelope sample position to x in [t_min, t_max)
+                let frac = (j as f64) / (max_pts.max(1) as f64);
+                let x = t_min + frac * time_range;
+
+                let idx = (byte_offset as usize) + (pt_count as usize) * 2;
+                if idx + 3 < envelope.data.len() {
+                    // Write min point (f32 → f64)
+                    envelope.data[idx] = x;
+                    envelope.data[idx + 1] = sample.min as f64;
+                    // Write max point (slight x offset for visual pair)
+                    envelope.data[idx + 2] = x + 0.001;
+                    envelope.data[idx + 3] = sample.max as f64;
+                    pt_count += 2;
+                }
+            }
+
+            envelope.channel_counts[i] = pt_count;
+            byte_offset += pt_count * 2;
         } else {
             envelope.channel_counts[i] = 0;
         }

@@ -102,7 +102,7 @@ const double ENVELOPE_THRESHOLD = 2.0;
 
 /// Feature flag: enable AnalogSegment envelope reads (parallel to TimeBucketPyramid).
 /// When true, reads envelope from AnalogSegment; when false, uses existing RENDER_ENVELOPE.
-const bool USE_ANALOG_ENVELOPE = false;
+const bool USE_ANALOG_ENVELOPE = true;
 
 class PlotChannel {
   final String deviceId;
@@ -397,6 +397,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initDemoChannels();
+    // ── AnalogSegment: create per-channel segments + enable envelope toggle ──
+    if (USE_ANALOG_ENVELOPE) {
+      _ensureAnalogSegments();
+    }
     _startDemoData();
     _loadConfig();
     // Apply buffer size to Rust immediately when page loads
@@ -426,6 +430,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     // Load Flutter log settings asynchronously (don't block initState)
     _loadFlutterLogSettings();
+  }
+
+  /// Ensure AnalogSegment instances exist for every visible channel
+  /// and set the pipeline's envelope source to AnalogSegment.
+  void _ensureAnalogSegments() {
+    final bridge = FfiBridge.instance;
+    bridge.analogSetEnvelopeEnabled(true);
+    for (int i = 0; i < _channels.length; i++) {
+      bridge.analogEnsure(i);
+    }
   }
 
   void _initDemoChannels() {
@@ -724,11 +738,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
     // 🚀 P0-4: Try zero-copy envelope read first (pre-computed by Rust pipeline thread)
-    if (USE_ANALOG_ENVELOPE) {
-      if (_refreshViewportFromAnalog()) return;
-    } else {
-      if (_refreshViewportDataFromEnvelope()) return;
-    }
+    // When USE_ANALOG_ENVELOPE, pipeline routes AnalogSegment data into RENDER_ENVELOPE
+    // → _refreshViewportDataFromEnvelope() reads it through the same zero-copy C-ABI
+    if (_refreshViewportDataFromEnvelope()) return;
+
+    // Fallback: try per-channel AnalogSegment direct query (legacy, kept for debugging)
+    if (USE_ANALOG_ENVELOPE && _refreshViewportFromAnalog()) return;
 
     // Fallback: per-channel pyramid query
     final maxPts = _screenWidth.round().clamp(500, 4000);
@@ -926,6 +941,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               showYAxis: false,
               plotGroupId: 'default',
             ));
+            if (USE_ANALOG_ENVELOPE) {
+              FfiBridge.instance.analogEnsure(_channels.length - 1);
+            }
           }
           
           // 获取该通道全量数据（首次）
@@ -1658,6 +1676,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _fitXAxis();
         _fitYAxis();
       });
+      if (USE_ANALOG_ENVELOPE) {
+        final bridge = FfiBridge.instance;
+        for (int ci = 0; ci < _channels.length; ci++) {
+          bridge.analogEnsure(ci);
+        }
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1680,6 +1704,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         plotGroupId: _plotGroups.isNotEmpty ? _plotGroups.first.id : 'default',
       ));
     });
+    if (USE_ANALOG_ENVELOPE) {
+      FfiBridge.instance.analogEnsure(idx);
+    }
     _saveConfig();
   }
 
@@ -4006,19 +4033,17 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     _linePaint.color = ch.color;
     _linePaint.strokeWidth = ch.lineWidth;
 
-    final n = data.length;
-    final reqLen = n * 2;
-    if (_lineBuf == null || _lineBuf!.length < reqLen) {
-      _lineBuf = Float32List(reqLen);
+    // Use Path (non-closing polyline) instead of PointMode.polygon.
+    // PointMode.polygon auto-closes the last→first point, creating
+    // visible diagonal artifacts (same root cause as the 3-dark-lines bug).
+    final path = Path();
+    final sx = _xToScreen(data.x(0), w) + ox;
+    final sy = yTransform(data.y(0)) + oy;
+    path.moveTo(sx, sy);
+    for (int i = 1; i < data.length; i++) {
+      path.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
     }
-    final buf = _lineBuf!;
-    int pi = 0;
-    for (int i = 0; i < n; i++) {
-      buf[pi++] = _xToScreen(data.x(i), w) + ox;
-      buf[pi++] = yTransform(data.y(i)) + oy;
-    }
-    final view = buf.length > pi ? Float32List.sublistView(buf, 0, pi) : buf;
-    canvas.drawRawPoints(ui.PointMode.polygon, view, _linePaint);
+    canvas.drawPath(path, _linePaint);
   }
 
   void _drawFilled(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale, double chYMin, double chYMax) {

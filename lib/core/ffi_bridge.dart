@@ -95,6 +95,10 @@ typedef _AnalogResetNative = Void Function(Uint32 channelId);
 typedef _AnalogResetDart = void Function(int channelId);
 typedef _AnalogResetAllNative = Void Function();
 typedef _AnalogResetAllDart = void Function();
+typedef _AnalogSetEnvelopeEnabledNative = Void Function(Bool enabled);
+typedef _AnalogSetEnvelopeEnabledDart = void Function(bool enabled);
+typedef _AnalogIsEnvelopeEnabledNative = Bool Function();
+typedef _AnalogIsEnvelopeEnabledDart = bool Function();
 
 // Pipeline control
 typedef _PipelineStartNative = Bool Function();
@@ -145,6 +149,8 @@ class FfiBridge {
   late final _AnalogGetEnvelopeDart analogGetEnvelope;
   late final _AnalogResetDart analogReset;
   late final _AnalogResetAllDart analogResetAll;
+  late final _AnalogSetEnvelopeEnabledDart analogSetEnvelopeEnabled;
+  late final _AnalogIsEnvelopeEnabledDart analogIsEnvelopeEnabled;
 
   // Pipeline control
   late final _PipelineStartDart pipelineStart;
@@ -212,6 +218,8 @@ class FfiBridge {
       analogGetEnvelope = _lib.lookupFunction<_AnalogGetEnvelopeNative, _AnalogGetEnvelopeDart>('vcr_analog_get_envelope');
       analogReset = _lib.lookupFunction<_AnalogResetNative, _AnalogResetDart>('vcr_analog_reset');
       analogResetAll = _lib.lookupFunction<_AnalogResetAllNative, _AnalogResetAllDart>('vcr_analog_reset_all');
+      analogSetEnvelopeEnabled = _lib.lookupFunction<_AnalogSetEnvelopeEnabledNative, _AnalogSetEnvelopeEnabledDart>('vcr_analog_set_envelope_enabled');
+      analogIsEnvelopeEnabled = _lib.lookupFunction<_AnalogIsEnvelopeEnabledNative, _AnalogIsEnvelopeEnabledDart>('vcr_analog_is_envelope_enabled');
     } catch (e) {
       print('[FfiBridge] AnalogSegment bindings unavailable (DLL may be outdated), degrade gracefully: $e');
     }

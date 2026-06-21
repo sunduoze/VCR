@@ -723,8 +723,10 @@ fn trigger_callback_inner(channel: &str, data: &[u8]) {
         let globals = e.lua.globals();
         if let Ok(tigger_fn) = globals.get::<Function>("tiggerCB") {
             // tiggerCB(id, type, data): id=-1 表示通道回调
-            let data_str = match String::from_utf8(data.to_vec()) {
-                Ok(s) => s,
+            // P2: Avoid data.to_vec() copy — from_utf8 borrows &[u8] directly;
+            // only allocate hex string in the non-UTF-8 fallback path.
+            let data_str = match std::str::from_utf8(data) {
+                Ok(s) => s.to_string(),
                 Err(_) => data
                     .iter()
                     .map(|b| format!("{:02X}", b))

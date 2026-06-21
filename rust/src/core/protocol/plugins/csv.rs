@@ -121,43 +121,58 @@ impl CsvParser {
     }
 
     /// 处理字节流，返回所有完整行的解析结果
+    ///
+    /// 热路径优化：使用 &str 字节级索引代替 Vec<char> 全集收集，
+    /// 消除 O(n) char 分配和 per-line String 分配。
+    /// \n/\r 为单字节 ASCII，在 UTF-8 中不会出现在多字节字符尾部，
+    /// 因此字节级索引始终落在字符边界上。
     pub fn parse_bytes_stream(&mut self, data: &[u8]) -> Vec<ParseResult> {
-        // 转换为字符串（假设 UTF-8）
+        // ── Step 1: Append new data to buffer ──
         let text = String::from_utf8_lossy(data);
         self.buffer.push_str(&text);
 
-        let mut results = Vec::new();
-        let mut start = 0;
-        let chars: Vec<char> = self.buffer.chars().collect();
+        // Typical: 1-8 lines per batch in 100ms receive window
+        let mut results = Vec::with_capacity(8);
+        let buf = self.buffer.as_str();
+        let buf_bytes = buf.as_bytes();
+        let mut pos = 0;
+        let max = buf_bytes.len();
 
-        let mut i = 0;
-        while i < chars.len() {
-            if chars[i] == '\n' || chars[i] == '\r' {
-                // 提取行内容
-                let line: String = chars[start..i].iter().collect();
-                let parsed = self.parse_line(&line);
-                if parsed.success || parsed.error.is_some() {
-                    results.push(parsed);
-                }
+        while pos < max {
+            // ── Scan rest for line ending (byte-level, safe because \n/\r are ASCII) ──
+            let rest = &buf_bytes[pos..];
+            let line_end = rest.iter().position(|&b| b == b'\n' || b == b'\r');
 
-                // 跳过行结束符
-                i += 1;
-                if i < chars.len() {
-                    // 处理 \r\n 或 \n\r
-                    if (chars[i - 1] == '\r' && chars[i] == '\n')
-                        || (chars[i - 1] == '\n' && chars[i] == '\r')
-                    {
-                        i += 1;
+            match line_end {
+                Some(offset) => {
+                    let end = pos + offset;
+                    // Safety: pos and end are both on ASCII byte boundaries,
+                    // which are always valid char boundaries in UTF-8.
+                    let line = &buf[pos..end];
+                    let parsed = self.parse_line(line);
+                    if parsed.success || parsed.error.is_some() {
+                        results.push(parsed);
+                    }
+
+                    // ── Skip line terminator(s) ──
+                    pos = end + 1;
+                    // Handle \r\n or \n\r
+                    if pos < max {
+                        let prev = buf_bytes[pos - 1];
+                        let next = buf_bytes[pos];
+                        if (prev == b'\r' && next == b'\n')
+                            || (prev == b'\n' && next == b'\r')
+                        {
+                            pos += 1;
+                        }
                     }
                 }
-                start = i;
-            } else {
-                i += 1;
+                None => break,
             }
         }
 
-        // 保留不完整的行在缓冲区
-        self.buffer = chars[start..].iter().collect();
+        // ── Drain processed portion, keep incomplete tail ──
+        self.buffer.drain(..pos);
 
         results
     }

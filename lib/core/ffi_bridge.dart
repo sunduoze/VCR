@@ -88,6 +88,8 @@ typedef _EnvelopeGetChannelCountNative = Uint32 Function(Uint32 channelId);
 typedef _EnvelopeGetChannelCountDart = int Function(int channelId);
 typedef _EnvelopeGetDataPtrNative = Pointer<Double> Function();
 typedef _EnvelopeGetDataPtrDart = Pointer<Double> Function();
+typedef _EnvelopeGetTotalSizeNative = Uint32 Function();
+typedef _EnvelopeGetTotalSizeDart = int Function();
 typedef _EnvelopeGetGenerationNative = Uint64 Function();
 typedef _EnvelopeGetGenerationDart = int Function();
 typedef _EnvelopeGetNumChannelsNative = Uint32 Function();
@@ -120,6 +122,7 @@ class FfiBridge {
   late final _EnvelopeGetChannelOffsetDart envelopeGetChannelOffset;
   late final _EnvelopeGetChannelCountDart envelopeGetChannelCount;
   late final _EnvelopeGetDataPtrDart envelopeGetDataPtr;
+  late final _EnvelopeGetTotalSizeDart envelopeGetTotalSize;
   late final _EnvelopeGetGenerationDart envelopeGetGeneration;
   late final _EnvelopeGetNumChannelsDart envelopeGetNumChannels;
 
@@ -177,6 +180,7 @@ class FfiBridge {
       envelopeGetChannelOffset = _lib.lookupFunction<_EnvelopeGetChannelOffsetNative, _EnvelopeGetChannelOffsetDart>('vcr_envelope_get_channel_offset');
       envelopeGetChannelCount = _lib.lookupFunction<_EnvelopeGetChannelCountNative, _EnvelopeGetChannelCountDart>('vcr_envelope_get_channel_count');
       envelopeGetDataPtr = _lib.lookupFunction<_EnvelopeGetDataPtrNative, _EnvelopeGetDataPtrDart>('vcr_envelope_get_data_ptr');
+      envelopeGetTotalSize = _lib.lookupFunction<_EnvelopeGetTotalSizeNative, _EnvelopeGetTotalSizeDart>('vcr_envelope_get_total_size');
       envelopeGetGeneration = _lib.lookupFunction<_EnvelopeGetGenerationNative, _EnvelopeGetGenerationDart>('vcr_envelope_get_generation');
       envelopeGetNumChannels = _lib.lookupFunction<_EnvelopeGetNumChannelsNative, _EnvelopeGetNumChannelsDart>('vcr_envelope_get_num_channels');
     } catch (e) {

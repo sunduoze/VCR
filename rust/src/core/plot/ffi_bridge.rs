@@ -257,6 +257,14 @@ pub extern "C" fn vcr_envelope_get_data_ptr() -> *const f64 {
     env.data.as_ptr()
 }
 
+/// Get the total number of f64 elements in the pre-allocated envelope data buffer.
+/// Dart uses this for Pointer.asTypedList(totalSize) to create a zero-copy view.
+#[no_mangle]
+pub extern "C" fn vcr_envelope_get_total_size() -> u32 {
+    let env = RENDER_ENVELOPE.lock();
+    env.data.len() as u32
+}
+
 /// Get the envelope generation counter.
 #[no_mangle]
 pub extern "C" fn vcr_envelope_get_generation() -> u64 {

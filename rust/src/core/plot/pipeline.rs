@@ -1,13 +1,16 @@
 // Data Pipeline — Phase A: Background processing thread for lock-free data flow
 //
 // Architecture (reference framework aligned):
-//   Serial receive → LockFreeRingBuffer → Pipeline thread → Per-channel pyramids
-//                                                            ↓
-//                                              RenderEnvelope (pre-computed)
-//                                                            ↓
-//                                          Dart Ticker → zero-copy read → CustomPainter
+//   Serial receive → PENDING_BATCHES (batch buffer) → Pipeline thread → Per-channel pyramids
+//                                                                          ↓
+//                                                            RenderEnvelope (pre-computed)
+//                                                                          ↓
+//                                                        Dart Ticker → zero-copy read → CustomPainter
 //
-// Eliminates: Dart frb round-trip, per-frame pyramid Mutex, 50ms Timer jitter
+// Key improvement (P0-1): receive_loop writes to lightweight batch buffer;
+// only the pipeline thread touches FFI_CH_PYRAMIDS → zero Mutex contention.
+//
+// Eliminates: Dart frb round-trip, per-frame pyramid Mutex contention, 50ms Timer jitter
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
@@ -17,6 +20,40 @@ use parking_lot::Mutex;
 use lazy_static::lazy_static;
 
 use crate::core::plot::ffi_bridge::FFI_CH_PYRAMIDS;
+
+// ── P0-1: Receive→Pipeline batch buffer ───────────────────────────
+// Eliminates Mutex contention between receive_loop (producer) and
+// pipeline_loop (consumer) on FFI_CH_PYRAMIDS.
+//
+// Producer: receive_loop appends (x, values) — lock time = Vec::push (~50ns)
+// Consumer: pipeline_loop drains via std::mem::take — lock time = pointer swap (~20ns)
+// Prev: both contended on FFI_CH_PYRAMIDS Mutex during pyramid insert (many µs per batch)
+
+/// One CSV line worth of multi-channel data
+struct BatchEntry {
+    x: f64,
+    /// values[i] = sample value for channel i (single-channel push uses vec![value])
+    values: Vec<f64>,
+    /// If Some(id), override channel index (0-based) with explicit channel_id
+    /// Used by push_sample() which carries an explicit channel_id.
+    /// If None, values are indexed by their position (push_sample_batch / push_sample_batch_with_x).
+    channel_id: Option<u32>,
+}
+
+lazy_static! {
+    /// Pre-allocated batch buffer (producer appends, consumer drains)
+    static ref PENDING_BATCHES: Mutex<Vec<BatchEntry>> = Mutex::new(Vec::with_capacity(256));
+}
+
+/// Drain all pending batches (called from pipeline_loop only).
+/// Returns ownership of all buffered entries; lock held only for pointer swap.
+fn drain_pending_batches() -> Vec<BatchEntry> {
+    let mut pending = PENDING_BATCHES.lock();
+    if pending.is_empty() {
+        return Vec::new();
+    }
+    std::mem::take(&mut *pending)
+}
 
 // ── Viewport range storage (Dart → pipeline communication) ──────────
 
@@ -146,37 +183,25 @@ pub fn stop_pipeline() {
 
 // ── Data ingestion (called from receive loop) ──────────────────────
 
-/// Push a batch of data directly into the pipeline.
-/// Called from serial receive loop — eliminates Dart round-trip.
-///
-/// `channels`: slice of (channel_id, value) pairs for one sample instant.
+/// Push a single sample into the batch buffer (producer-side).
+/// Stores explicit channel_id so pipeline_loop can route correctly.
 pub fn push_sample(channel_id: u32, value: f64) {
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
-    let mut pyramids = FFI_CH_PYRAMIDS.lock();
-    let pyramid = pyramids.entry(channel_id).or_default();
-    pyramid.push(x, value);
+    PENDING_BATCHES.lock().push(BatchEntry { x, values: vec![value], channel_id: Some(channel_id) });
 }
 
 /// Push a multi-channel sample (one CSV line → multiple channels).
+/// Channel index = position in values array.
 pub fn push_sample_batch(values: &[f64]) {
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
-    let mut pyramids = FFI_CH_PYRAMIDS.lock();
-    for (ci, &value) in values.iter().enumerate() {
-        let channel_id = ci as u32;
-        let pyramid = pyramids.entry(channel_id).or_default();
-        pyramid.push(x, value);
-    }
+    PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
 }
 
 /// Push a multi-channel sample with explicit X value (syncs with PLOT_DATA counter).
 /// Used from receive loop where PLOT_DATA.next_counter() is the canonical X.
+/// P0-1: Now writes to lightweight batch buffer; pipeline_loop drains & inserts into pyramids.
 pub fn push_sample_batch_with_x(x: f64, values: &[f64]) {
-    let mut pyramids = FFI_CH_PYRAMIDS.lock();
-    for (ci, &value) in values.iter().enumerate() {
-        let channel_id = ci as u32;
-        let pyramid = pyramids.entry(channel_id).or_default();
-        pyramid.push(x, value);
-    }
+    PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
 }
 
 /// Get the current global sample index (for Dart to sync X values).
@@ -252,23 +277,32 @@ fn pipeline_loop() {
     log::info!("[Pipeline] Loop started");
 
     let sleep_duration = Duration::from_millis(16); // ~60Hz wake-up
-    let mut last_sample_idx: u64 = 0;
-    let mut last_vp_gen: u64 = 0;
 
     while PIPELINE_RUNNING.load(Ordering::Acquire) {
-        let current_idx = GLOBAL_SAMPLE_IDX.load(Ordering::Relaxed);
-        let current_vp_gen = VP_GEN.load(Ordering::Acquire);
-
-        let new_data = current_idx != last_sample_idx;
-        let vp_changed = current_vp_gen != last_vp_gen;
-
-        if new_data || vp_changed {
-            last_sample_idx = current_idx;
-            last_vp_gen = current_vp_gen;
-
-            if let Some((t_min, t_max, max_pts)) = read_viewport_range() {
-                update_render_envelope(t_min, t_max, max_pts);
+        // ── Step 1: Drain pending batches into pyramids ──
+        // Only the pipeline thread touches FFI_CH_PYRAMIDS (producer writes to PENDING_BATCHES)
+        let batches = drain_pending_batches();
+        if !batches.is_empty() {
+            let mut pyramids = FFI_CH_PYRAMIDS.lock();
+            for entry in batches {
+                if let Some(ch_id) = entry.channel_id {
+                    // Single-channel push with explicit channel_id
+                    let pyramid = pyramids.entry(ch_id).or_default();
+                    pyramid.push(entry.x, entry.values[0]);
+                } else {
+                    // Multi-channel push: channel_id = array index
+                    for (ci, value) in entry.values.iter().enumerate() {
+                        let channel_id = ci as u32;
+                        let pyramid = pyramids.entry(channel_id).or_default();
+                        pyramid.push(entry.x, *value);
+                    }
+                }
             }
+        }
+
+        // ── Step 2: Update render envelope if viewport changed ──
+        if let Some((t_min, t_max, max_pts)) = read_viewport_range() {
+            update_render_envelope(t_min, t_max, max_pts);
         }
 
         thread::sleep(sleep_duration);
@@ -279,9 +313,11 @@ fn pipeline_loop() {
 
 // ── Reset ──────────────────────────────────────────────────────────
 
-/// Reset pipeline state (clear all pyramids and counters).
+/// Reset pipeline state (clear all pyramids, batches, counters, and envelope).
 pub fn reset_pipeline() {
     GLOBAL_SAMPLE_IDX.store(0, Ordering::Release);
+    // Discard any in-flight batches
+    PENDING_BATCHES.lock().clear();
     FFI_CH_PYRAMIDS.lock().clear();
     let mut envelope = RENDER_ENVELOPE.lock();
     envelope.num_channels = 0;

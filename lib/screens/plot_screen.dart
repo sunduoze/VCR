@@ -105,9 +105,9 @@ class PlotChannel {
   bool showYAxis;
   LineStyle lineStyle;
   double lineWidth;
-  List<_DataPoint> data; // Full data (for scale/cursor)
-  List<_DataPoint> viewportData; // Decimated ChartViewport avg line (for painting)
-  List<_DataPoint> envelopeData; // 🚀 Phase B: envelope (min+max pairs per bucket) for fill
+  List<_DataPoint> data; // Full data (for scale/cursor) — keeps _DataPoint (not on hot path)
+  _DataBuf viewportData; // P0-2: GC-free Float64List for avg line painting
+  _DataBuf envelopeData; // P0-2: GC-free Float64List for min-max fill
   double currentValue;
   double yMin; // Per-channel Y range
   double yMax;
@@ -129,8 +129,6 @@ class PlotChannel {
     this.lineStyle = LineStyle.line,
     this.lineWidth = 1.5,
     List<_DataPoint>? data,
-    List<_DataPoint>? viewportData,
-    List<_DataPoint>? envelopeData,
     this.currentValue = 0.0,
     this.yMin = 0,
     this.yMax = 1,
@@ -139,8 +137,8 @@ class PlotChannel {
     this.autoScaleY = true,
     this.plotGroupId = 'default',
   }) : data = data ?? [],
-       viewportData = viewportData ?? [],
-       envelopeData = envelopeData ?? [];
+       viewportData = _DataBuf(),
+       envelopeData = _DataBuf();
 
   Map<String, dynamic> toJson() => {
     'deviceId': deviceId,
@@ -181,6 +179,47 @@ class _DataPoint {
   final double x;
   final double y;
   _DataPoint(this.x, this.y);
+}
+
+/// P0-2: GC-free data buffer for viewport/envelope rendering.
+/// Stores interleaved (x,y) f64 pairs in a pre-allocated Float64List.
+/// Zero heap allocation after initial alloc — eliminates per-frame _DataPoint churn.
+class _DataBuf {
+  Float64List _buf;
+  int _len = 0;
+
+  _DataBuf([int initialCapacity = 4096])
+      : _buf = Float64List(initialCapacity * 2);
+
+  int get length => _len;
+  bool get isNotEmpty => _len > 0;
+  bool get isEmpty => _len == 0;
+
+  double x(int i) => _buf[i * 2];
+  double y(int i) => _buf[i * 2 + 1];
+
+  double get firstX => _len > 0 ? _buf[0] : 0;
+  double get firstY => _len > 0 ? _buf[1] : 0;
+  double get midX => _len > 0 ? _buf[(_len ~/ 2) * 2] : 0;
+  double get midY => _len > 0 ? _buf[(_len ~/ 2) * 2 + 1] : 0;
+  double get lastX => _len > 0 ? _buf[(_len - 1) * 2] : 0;
+  double get lastY => _len > 0 ? _buf[(_len - 1) * 2 + 1] : 0;
+
+  void add(double x, double y) {
+    final idx = _len * 2;
+    if (idx + 1 >= _buf.length) {
+      final newBuf = Float64List(_buf.length * 2);
+      newBuf.setAll(0, _buf);
+      _buf = newBuf;
+    }
+    _buf[idx] = x;
+    _buf[idx + 1] = y;
+    _len++;
+  }
+
+  void clear() => _len = 0;
+
+  Float64List get rawBuf => _buf;
 }
 
 /// Scrollbar drag mode
@@ -502,7 +541,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final noise = 0.05 * (rng.nextDouble() - 0.5);
           final val = _demoEval(i, t, noise);
           // Append at end: data[0]=oldest, data[last]=newest
-          // Store per-channel sample index (continuous); displayed X = pt.x - data.last.x (offset from newest)
+          // Store per-channel sample index (continuous); displayed X = data.x(i) - data.lastX (offset from newest)
           final x = _demoSampleIndices[i].toDouble();
           _channels[i].data.add(_DataPoint(x, val));
           _channels[i].currentValue = val;
@@ -578,8 +617,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// instead of O(n) binary search + sublist + step decimation.
   void _clearViewportCaches() {
     for (final ch in _channels) {
-      ch.viewportData = [];
-      ch.envelopeData = [];
+      ch.viewportData.clear();
+      ch.envelopeData.clear();
     }
   }
 
@@ -600,7 +639,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     } catch (_) {}
   }
 
-  /// Read pre-computed envelope from Rust pipeline (zero-copy via C-ABI pointer).
+  /// Read pre-computed envelope from Rust pipeline (P1: zero-copy via Pointer.asTypedList).
+  /// Instead of O(N) individual dataPtr[index] FFI boundary crosses, we create a single
+  /// Float64List view over the Rust Vec memory, then access it in pure Dart.
   /// Returns true if envelope data was successfully read and populated.
   bool _refreshViewportDataFromEnvelope() {
     final bridge = FfiBridge.instance;
@@ -614,6 +655,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     final numCh = bridge.envelopeGetNumChannels();
     if (numCh == 0) return false;
+
+    // P1: Zero-copy — map entire envelope buffer as a Dart Float64List.
+    // Eliminates ~8000 individual FFI boundary crosses per frame.
+    final totalSize = bridge.envelopeGetTotalSize();
+    final envelopeBuf = dataPtr.asTypedList(totalSize);
 
     for (int ci = 0; ci < numCh && ci < _channels.length; ci++) {
       final ch = _channels[ci];
@@ -635,27 +681,29 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       ch.viewportData.clear();
       ch.envelopeData.clear();
 
-      // Envelope format: [ts, val, ts, val, ...] alternating min/max per bucket
+      // Envelope format: [ts0,lo0, ts0+ϵ,hi0, ts1,lo1, ts1+ϵ,hi1, ...] alternating min/max per bucket
+      // P1: Direct Float64List index — pure Dart, zero FFI boundary cross
       for (int i = 0; i < count; i += 2) {
         if (i + 1 >= count) break;
-        final tsMin = dataPtr[offset + i * 2];
-        final yMin = dataPtr[offset + i * 2 + 1];
-        final yMax = dataPtr[offset + (i + 1) * 2 + 1];
+        final tsMin = envelopeBuf[offset + i * 2];
+        final yMin = envelopeBuf[offset + i * 2 + 1];
+        final yMax = envelopeBuf[offset + (i + 1) * 2 + 1];
         final yAvg = (yMin + yMax) * 0.5;
         final xRel = tsMin - newestAbsX;
 
-        ch.viewportData.add(_DataPoint(xRel, yAvg));
-        ch.envelopeData.add(_DataPoint(xRel, yMin));
-        ch.envelopeData.add(_DataPoint(xRel, yMax));
+        ch.viewportData.add(xRel, yAvg);
+        ch.envelopeData.add(xRel, yMin);
+        ch.envelopeData.add(xRel, yMax);
       }
       if (count % 2 != 0 && count > 0) {
-        final lastX = dataPtr[offset + (count - 1) * 2] - newestAbsX;
-        final lastY = dataPtr[offset + (count - 1) * 2 + 1];
-        ch.viewportData.add(_DataPoint(lastX, lastY));
+        final lastX = envelopeBuf[offset + (count - 1) * 2] - newestAbsX;
+        final lastY = envelopeBuf[offset + (count - 1) * 2 + 1];
+        ch.viewportData.add(lastX, lastY);
       }
     }
 
     // Verify generation didn't change during read (pipeline update mid-read)
+    // Note: asTypedList provides a live view; pipeline writes are atomic (generation check)
     final gen2 = bridge.envelopeGetGeneration();
     if (gen1 != gen2) return false; // Mid-update, discard
 
@@ -697,8 +745,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     for (int ci = 0; ci < _channels.length; ci++) {
       final ch = _channels[ci];
       if (!ch.visible || ch.data.isEmpty) {
-        ch.viewportData = [];
-        ch.envelopeData = [];
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
         continue;
       }
 
@@ -722,14 +770,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         final yMin = fb[i * 2 + 1];
         final yMax = fb[(i + 1) * 2 + 1];
         final yAvg = (yMin + yMax) * 0.5;
-        ch.viewportData.add(_DataPoint(xMin, yAvg));
-        ch.envelopeData.add(_DataPoint(xMin, yMin));
-        ch.envelopeData.add(_DataPoint(xMin, yMax));
+        ch.viewportData.add(xMin, yAvg);
+        ch.envelopeData.add(xMin, yMin);
+        ch.envelopeData.add(xMin, yMax);
       }
       if (count % 2 != 0 && count > 0) {
         final lastX = fb[(count - 1) * 2] - newestAbsX;
         final lastY = fb[(count - 1) * 2 + 1];
-        ch.viewportData.add(_DataPoint(lastX, lastY));
+        ch.viewportData.add(lastX, lastY);
       }
 
     }
@@ -956,17 +1004,27 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   void _fitYAxisForChannel(PlotChannel ch) {
-    // Use viewportData for Y-axis fitting (visible data only)
-    final data = ch.viewportData.isNotEmpty ? ch.viewportData : ch.data;
-    if (!ch.visible || data.isEmpty) return;
-    // 🩺 Diagnostic: check Y-axis oscillation
+    if (!ch.visible) return;
+
     final prevYMin = ch.yMin;
     final prevYMax = ch.yMax;
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
-    for (final pt in data) {
-      if (pt.y < minVal) minVal = pt.y;
-      if (pt.y > maxVal) maxVal = pt.y;
+
+    // P0-2: Prefer GC-free viewportData, fallback to ch.data (List<_DataPoint>)
+    if (ch.viewportData.isNotEmpty) {
+      for (int i = 0; i < ch.viewportData.length; i++) {
+        final y = ch.viewportData.y(i);
+        if (y < minVal) minVal = y;
+        if (y > maxVal) maxVal = y;
+      }
+    } else if (ch.data.isNotEmpty) {
+      for (final pt in ch.data) {
+        if (pt.y < minVal) minVal = pt.y;
+        if (pt.y > maxVal) maxVal = pt.y;
+      }
+    } else {
+      return;
     }
     if (minVal.isInfinite) { minVal = -1; maxVal = 1; }
     final range = maxVal - minVal;
@@ -995,7 +1053,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (oldRange > 0.001 && yRangeDelta / oldRange > 0.05) {
         final smoothDelta = ((ch.yMax - ch.yMin) - (prevYMax - prevYMin)).abs();
         final smoothPct = (smoothDelta / oldRange * 100).toStringAsFixed(1);
-        if (_verbose) print('[DIAG-Y-OSC] ${ch.channelName}: target ${((yRangeDelta/oldRange)*100).toStringAsFixed(1)}% but smoothed only $smoothPct% (prev [${prevYMin.toStringAsFixed(3)}, ${prevYMax.toStringAsFixed(3)}] → target [${targetMin.toStringAsFixed(3)}, ${targetMax.toStringAsFixed(3)}] → rendered [${ch.yMin.toStringAsFixed(3)}, ${ch.yMax.toStringAsFixed(3)}]) dataLen=${data.length}');
+        if (_verbose) print('[DIAG-Y-OSC] ${ch.channelName}: target ${((yRangeDelta/oldRange)*100).toStringAsFixed(1)}% but smoothed only $smoothPct% (prev [${prevYMin.toStringAsFixed(3)}, ${prevYMax.toStringAsFixed(3)}] → target [${targetMin.toStringAsFixed(3)}, ${targetMax.toStringAsFixed(3)}] → rendered [${ch.yMin.toStringAsFixed(3)}, ${ch.yMax.toStringAsFixed(3)}]) dataLen=${ch.viewportData.length}');
       }
     }
     // Update global Y range to encompass this channel's new range
@@ -1322,9 +1380,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     try {
       final points = <double>[];
       for (final ch in _channels.where((c) => c.visible && c.viewportData.isNotEmpty)) {
-        for (final pt in ch.viewportData) {
-          points.add(pt.x);
-          points.add(pt.y);
+        final vd = ch.viewportData;
+        for (int i = 0; i < vd.length; i++) {
+          points.add(vd.x(i));
+          points.add(vd.y(i));
         }
       }
 
@@ -3025,10 +3084,22 @@ class _MinimapPainter extends CustomPainter {
     if (rangeX <= 0) return;
 
     for (final ch in channels) {
-      if (!ch.visible || ch.data.isEmpty) continue;
-      // Use viewportData if available (already decimated, 500-4000 pts)
-      final data = ch.viewportData.isNotEmpty ? ch.viewportData : ch.data;
-      if (data.isEmpty) continue;
+      if (!ch.visible) continue;
+
+      // P0-2: Prefer GC-free viewportData, fallback to ch.data
+      final int ptCount;
+      final double Function(int) getX, getY;
+      if (ch.viewportData.isNotEmpty) {
+        ptCount = ch.viewportData.length;
+        getX = (i) => ch.viewportData.x(i);
+        getY = (i) => ch.viewportData.y(i);
+      } else if (ch.data.isNotEmpty) {
+        ptCount = ch.data.length;
+        getX = (i) => ch.data[i].x;
+        getY = (i) => ch.data[i].y;
+      } else {
+        continue;
+      }
       // Each channel uses its own Y range so all are visible in the minimap
       final chYMin = ch.autoScaleY ? ch.yMin : ch.yMinManual;
       final chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
@@ -3042,10 +3113,9 @@ class _MinimapPainter extends CustomPainter {
 
       final path = Path();
       var started = false;
-      for (int i = 0; i < data.length; i++) {
-        final pt = data[i];
-        final x = ((pt.x - dataXMin) / rangeX) * size.width;
-        final y = size.height - ((pt.y - chYMin) / rangeY) * size.height;
+      for (int i = 0; i < ptCount; i++) {
+        final x = ((getX(i) - dataXMin) / rangeX) * size.width;
+        final y = size.height - ((getY(i) - chYMin) / rangeY) * size.height;
         if (!started) {
           path.moveTo(x, y);
           started = true;
@@ -3071,6 +3141,7 @@ class _PlotPainter extends CustomPainter {
   // ═══ Per-frame reusable Float32List buffers for drawRawPoints ═══
   Float32List? _lineBuf;
   Float32List? _envBuf;
+  Float32List? _minMaxBuf;  // P1-2: vertical min-max line segments
 
   // ═══ Static cached paint objects (zero allocation on paint path) ═══
   static final _gpuImagePaint = Paint()..filterQuality = FilterQuality.high;
@@ -3092,8 +3163,12 @@ class _PlotPainter extends CustomPainter {
   // 🚀 P1: Reusable per-channel Paint + Path objects (zero per-frame allocation)
   static final _linePaint = Paint()..style = PaintingStyle.stroke;
   static final _envelopeFillPaint = Paint()
-    ..style = PaintingStyle.fill
-    ..isAntiAlias = true;
+    ..style = PaintingStyle.fill;
+  // P1-2: Min-max vertical line paint — oscilloscope-style per-bucket density bar
+  static final _minMaxLinePaint = Paint()
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 0.5
+    ..strokeCap = StrokeCap.round;
   // Dot line style: cached paint + path
   static final _dotLinePaint = Paint()..style = PaintingStyle.stroke;
   static final _dotPointPaint = Paint();
@@ -3323,7 +3398,7 @@ class _PlotPainter extends CustomPainter {
             // Sample first/mid/last points (X + Y) to detect real data changes
             final mid = vd.length ~/ 2;
             contentHash = Object.hash(contentHash,
-                vd.first.x, vd.first.y, vd[mid].x, vd[mid].y, vd.last.x, vd.last.y);
+                vd.firstX, vd.firstY, vd.x(mid), vd.y(mid), vd.lastX, vd.lastY);
           }
         }
       }
@@ -3611,40 +3686,8 @@ class _PlotPainter extends CustomPainter {
     infoTp.paint(canvas, Offset(plotLeft + plotW - infoTp.width - 4, plotTop + 4));
   }
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
-    // Use pre-decimated ChartViewport data from Rust if available, otherwise fall back to full data
-    List<_DataPoint> data;
-    if (ch.viewportData.isNotEmpty) {
-      data = ch.viewportData;
-    } else {
-      final allData = ch.data;
-      if (allData.isEmpty) return;
-
-      // ChartViewport clip: only pass data points within visible X range + 1 point margin
-      final xRange = xMax - xMin;
-      final margin = xRange * 0.01;
-      int startIdx = 0;
-      int endIdx = allData.length - 1;
-      int lo = 0, hi = allData.length - 1;
-      while (lo < hi) {
-        final mid = (lo + hi) ~/ 2;
-        if (allData[mid].x < xMin - margin) lo = mid + 1; else hi = mid;
-      }
-      startIdx = lo > 0 ? lo - 1 : 0;
-      lo = startIdx; hi = allData.length - 1;
-      while (lo < hi) {
-        final mid = (lo + hi + 1) ~/ 2;
-        if (allData[mid].x > xMax + margin) hi = mid - 1; else lo = mid;
-      }
-      endIdx = lo < allData.length - 1 ? lo + 1 : allData.length - 1;
-      data = allData.sublist(startIdx, endIdx + 1);
-
-      // No decimation for demo mode — data is bounded and ChartViewport-clipped
-      // Decimation loses high-frequency Fourier harmonics, causing jagged appearance
-      // if (data.length > w * 1) {
-      //   data = _decimateDataSmooth(data, w);
-      // }
-    }
-
+    // P0-2: Use GC-free _DataBuf (viewportData is always populated by envelope read)
+    final data = ch.viewportData;
     if (data.isEmpty) return;
 
     // Use per-channel Y transform
@@ -3657,6 +3700,7 @@ class _PlotPainter extends CustomPainter {
     final envData = ch.envelopeData;
     if (envData.isNotEmpty && envData.length >= 2) {
       _drawEnvelope(canvas, ch, envData, ox, oy, w, h, yTransform);
+      _drawMinMaxLines(canvas, ch, envData, ox, oy, w, h, yTransform);
     }
 
     switch (ch.lineStyle) {
@@ -3677,7 +3721,7 @@ class _PlotPainter extends CustomPainter {
 
   // 数据抽取：将大量数据点减少到适合屏幕显示的密度
   // 🚀 性能优化：每个像素bucket只保留1个最有代表性的点
-void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
+void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     if (data.isEmpty) return;
     
     // 🚀 性能优化：使用Path批量绘制，减少draw call次数
@@ -3690,15 +3734,15 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     // drawRawPoints 需要扁平的 Float32List: [x1,y1, x2,y2, ...]
     final points = Float32List(data.length * 2);
     for (int i = 0; i < data.length; i++) {
-      final pt = data[i];
-      points[i * 2] = _xToScreen(pt.x, w) + ox;
-      points[i * 2 + 1] = yTransform(pt.y) + oy;
+      // pt inlined (P0-2 _DataBuf)
+      points[i * 2] = _xToScreen(data.x(i), w) + ox;
+      points[i * 2 + 1] = yTransform(data.y(i)) + oy;
     }
     canvas.drawRawPoints(ui.PointMode.points, points, paint);
   }
 
   // 🚀 Phase B: Render envelope fill background (semi-transparent min-max band)
-  void _drawEnvelope(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform) {
+  void _drawEnvelope(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
     if (data.length < 4) return; // need ≥2 buckets (4 points: min0,max0,min1,max1)
 
     // Envelope data format: [x0,ymin0], [x0,ymax0], [x1,ymin1], [x1,ymax1], ...
@@ -3712,20 +3756,55 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     int pi = 0;
     // Top edge: yMax values (odd indices: 1, 3, 5, ...)
     for (int i = 1; i < n; i += 2) {
-      buf[pi++] = _xToScreen(data[i].x, w) + ox;
-      buf[pi++] = yTransform(data[i].y) + oy;
+      buf[pi++] = _xToScreen(data.x(i), w) + ox;
+      buf[pi++] = yTransform(data.y(i)) + oy;
     }
     // Bottom edge reverse: yMin values (even indices: ..., 4, 2, 0)
     for (int i = n - 2; i >= 0; i -= 2) {
-      buf[pi++] = _xToScreen(data[i].x, w) + ox;
-      buf[pi++] = yTransform(data[i].y) + oy;
+      buf[pi++] = _xToScreen(data.x(i), w) + ox;
+      buf[pi++] = yTransform(data.y(i)) + oy;
     }
 
     _envelopeFillPaint.color = ch.color.withValues(alpha: 0.25);
     canvas.drawRawPoints(ui.PointMode.polygon, buf, _envelopeFillPaint);
   }
 
-  void _drawDotLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
+  // 🚀 P1-2: Oscilloscope-style min-max vertical lines per bucket.
+  // Draws a thin vertical line from yMin to yMax for each downsampled time bucket.
+  // Combined with envelope fill, this gives the classic oscilloscope density view:
+  //   envelope fill → wide band (25% alpha)
+  //   min-max lines → sharp vertical bars (40% alpha, provides structure)
+  //   avg line     → foreground trace (100% alpha, signal path)
+  void _drawMinMaxLines(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
+    if (data.length < 2) return;
+
+    // PointMode.lines: each 2 points = 1 line segment
+    // data format: [x0,ymin0, x0,ymax0, x1,ymin1, x1,ymax1, ...]
+    // For each bucket (even i = min, odd i+1 = max, same x):
+    //   draw line (x, yMin) → (x, yMax)
+    final nSegs = data.length ~/ 2;  // one segment per bucket
+    final reqLen = nSegs * 4;        // 4 floats per segment (start.xy + end.xy)
+    if (_minMaxBuf == null || _minMaxBuf!.length < reqLen) {
+      _minMaxBuf = Float32List(reqLen);
+    }
+    final buf = _minMaxBuf!;
+    int pi = 0;
+    for (int i = 0; i < data.length; i += 2) {
+      if (i + 1 >= data.length) break;
+      final sx = _xToScreen(data.x(i), w) + ox;  // x same for min and max
+      final syMin = yTransform(data.y(i)) + oy;
+      final syMax = yTransform(data.y(i + 1)) + oy;
+      buf[pi++] = sx;
+      buf[pi++] = syMin;
+      buf[pi++] = sx;
+      buf[pi++] = syMax;
+    }
+
+    _minMaxLinePaint.color = ch.color.withValues(alpha: 0.40);
+    canvas.drawRawPoints(ui.PointMode.lines, buf, _minMaxLinePaint);
+  }
+
+  void _drawDotLine(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     if (data.isEmpty) return;
 
     // Reuse/resize buffer (2 floats per point: x, y)
@@ -3735,8 +3814,8 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     }
     final buf = _lineBuf!;
     for (int i = 0; i < n; i++) {
-      buf[i * 2] = _xToScreen(data[i].x, w) + ox;
-      buf[i * 2 + 1] = yTransform(data[i].y) + oy;
+      buf[i * 2] = _xToScreen(data.x(i), w) + ox;
+      buf[i * 2 + 1] = yTransform(data.y(i)) + oy;
     }
     // Semi-transparent line
     _dotLinePaint.color = ch.color.withValues(alpha: 0.5);
@@ -3750,7 +3829,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     canvas.drawRawPoints(ui.PointMode.points, buf, _dotPointPaint);
   }
 
-  void _drawLine(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
+  void _drawLine(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     if (data.isEmpty) return;
 
     // Reuse static Paint (update mutable fields only)
@@ -3764,13 +3843,13 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     }
     final buf = _lineBuf!;
     for (int i = 0; i < n; i++) {
-      buf[i * 2] = _xToScreen(data[i].x, w) + ox;
-      buf[i * 2 + 1] = yTransform(data[i].y) + oy;
+      buf[i * 2] = _xToScreen(data.x(i), w) + ox;
+      buf[i * 2 + 1] = yTransform(data.y(i)) + oy;
     }
     canvas.drawRawPoints(ui.PointMode.polygon, buf, _linePaint);
   }
 
-  void _drawFilled(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale, double chYMin, double chYMax) {
+  void _drawFilled(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale, double chYMin, double chYMax) {
     if (data.length < 2) return;
 
     // Zero line position for this channel's Y range
@@ -3779,8 +3858,8 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
     // Calculate fill bounds
     double minY = double.infinity;
     double maxY = double.negativeInfinity;
-    for (final pt in data) {
-      final sy = yTransform(pt.y) + oy;
+    for (int i = 0; i < data.length; i++) {
+      final sy = yTransform(data.y(i)) + oy;
       if (sy < minY) minY = sy;
       if (sy > maxY) maxY = sy;
     }
@@ -3806,13 +3885,13 @@ void _drawDots(Canvas canvas, PlotChannel ch, List<_DataPoint> data, double ox, 
 
     // Build fill path: along waveform then back along zero
     final path = Path();
-    path.moveTo(_xToScreen(data[0].x, w) + ox, zeroY);
+    path.moveTo(_xToScreen(data.x(0), w) + ox, zeroY);
     for (int i = 0; i < data.length; i++) {
-      final sx = _xToScreen(data[i].x, w) + ox;
-      final sy = yTransform(data[i].y) + oy;
+      final sx = _xToScreen(data.x(i), w) + ox;
+      final sy = yTransform(data.y(i)) + oy;
       path.lineTo(sx, sy);
     }
-    path.lineTo(_xToScreen(data.last.x, w) + ox, zeroY);
+    path.lineTo(_xToScreen(data.lastX, w) + ox, zeroY);
     path.close();
     canvas.drawPath(path, fillPaint);
 

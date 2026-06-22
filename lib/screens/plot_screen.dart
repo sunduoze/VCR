@@ -872,12 +872,17 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           ? sampleCount * timePerPx / timeRange
           : ENVELOPE_THRESHOLD.toDouble();
 
-      // Compute sample range (approximate: map time range to sample range)
-      final newestAbsX = ch.data.last.x;
-      final sampleOffset = newestAbsX - (_xMax); // approx
-      final startSample = ((sampleOffset - _xMin.abs()) * 1.0).round().clamp(0, sampleCount - 1);
-      final endSampleRaw = startSample + (_screenWidth * samplesPerPixelDouble).round();
-      final clampedEnd = endSampleRaw.clamp(startSample + 1, sampleCount);
+      // Map viewport [xMin, xMax] to sample indices [0, sampleCount)
+      // Uses proportional mapping within ch.data x-range (works for both Demo
+      // x=sample_index and Real x=timestamp)      
+      final chDataFirst = ch.data.isNotEmpty ? ch.data.first.x : 0.0;
+      final chDataLast = ch.data.isNotEmpty ? ch.data.last.x : 1.0;
+      final chXSpan = chDataLast - chDataFirst;
+      final invSpan = chXSpan > 0.0 ? 1.0 / chXSpan : 0.0;
+      final startSample = ((_xMin - chDataFirst) * invSpan * sampleCount)
+          .round().clamp(0, sampleCount - 1);
+      final clampedEnd = ((_xMax - chDataFirst) * invSpan * sampleCount)
+          .round().clamp(startSample + 1, sampleCount);
 
       ch.viewportData.clear();
       ch.envelopeData.clear();
@@ -899,9 +904,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
 
       // ── Envelope mode (samplesPerPixel >= ENVELOPE_THRESHOLD): min/max pairs ──
+      final sectionStartPtr = calloc<Uint64>();
+      final sectionScalePtr = calloc<Uint32>();
       final count = bridge.analogGetEnvelope(
         ci, startSample, clampedEnd, samplesPerPixelDouble, sampleBuf, maxSamples,
+        sectionStartPtr, sectionScalePtr,
       );
+      final sectionStart = sectionStartPtr.value;
+      final sectionScale = sectionScalePtr.value;
+      calloc.free(sectionStartPtr);
+      calloc.free(sectionScalePtr);
 
       if (count > 0) {
         for (int i = 0; i < count; i++) {
@@ -909,7 +921,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final yMin = sample.min.toDouble();
           final yMax = sample.max.toDouble();
           final yAvg = (yMin + yMax) * 0.5;
-          final xRel = (sampleOffset + startSample + i).toDouble(); // approximate relX
+          // Section-aware x: section.start + i * section.scale is the actual sample position
+          final xRel = (sectionStart + (i * sectionScale)).toDouble();
 
           ch.viewportData.add(xRel, yAvg);
           ch.envelopeData.add(xRel, yMin);

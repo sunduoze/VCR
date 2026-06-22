@@ -89,8 +89,8 @@ typedef _AnalogSampleCountNative = Uint64 Function(Uint32 channelId);
 typedef _AnalogSampleCountDart = int Function(int channelId);
 typedef _AnalogGetMinMaxNative = Void Function(Uint32 channelId, Pointer<Float> out);
 typedef _AnalogGetMinMaxDart = void Function(int channelId, Pointer<Float> out);
-typedef _AnalogGetEnvelopeNative = Uint32 Function(Uint32 channelId, Uint64 startSample, Uint64 endSample, Float samplesPerPixel, Pointer<CEnvelopeSample> out, Uint32 maxSamples);
-typedef _AnalogGetEnvelopeDart = int Function(int channelId, int startSample, int endSample, double samplesPerPixel, Pointer<CEnvelopeSample> out, int maxSamples);
+typedef _AnalogGetEnvelopeNative = Uint32 Function(Uint32 channelId, Uint64 startSample, Uint64 endSample, Float samplesPerPixel, Pointer<CEnvelopeSample> out, Uint32 maxSamples, Pointer<Uint64> outSectionStart, Pointer<Uint32> outSectionScale);
+typedef _AnalogGetEnvelopeDart = int Function(int channelId, int startSample, int endSample, double samplesPerPixel, Pointer<CEnvelopeSample> out, int maxSamples, Pointer<Uint64> outSectionStart, Pointer<Uint32> outSectionScale);
 // AnalogSegment trace query
 typedef _AnalogGetTraceNative = Uint32 Function(Uint32 channelId, Uint64 start, Uint64 end, Pointer<Float> out, Uint32 maxSamples);
 typedef _AnalogGetTraceDart = int Function(int channelId, int start, int end, Pointer<Float> out, int maxSamples);

@@ -347,6 +347,8 @@ pub extern "C" fn vcr_analog_get_envelope(
     samples_per_pixel: f32,
     out: *mut EnvelopeSample,
     max_samples: u32,
+    out_section_start: *mut u64,
+    out_section_scale: *mut u32,
 ) -> u32 {
     if out.is_null() || max_samples == 0 {
         return 0;
@@ -361,6 +363,13 @@ pub extern "C" fn vcr_analog_get_envelope(
     let count = section.samples.len().min(max_samples as usize);
     let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
     dest.copy_from_slice(&section.samples[..count]);
+    // Output section metadata for Dart-side x-coordinate calculation
+    if !out_section_start.is_null() {
+        unsafe { *out_section_start = section.start; }
+    }
+    if !out_section_scale.is_null() {
+        unsafe { *out_section_scale = section.scale; }
+    }
     count as u32
 }
 

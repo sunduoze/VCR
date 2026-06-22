@@ -8,6 +8,12 @@ pub const LN_ENVELOPE_SCALE_FACTOR: f64 = 2.772588722239781;
 pub const ENVELOPE_DATA_UNIT: usize = 64 * 1024;
 /// Number of envelope levels
 pub const SCALE_STEP_COUNT: usize = 10;
+/// Default pyramid level count (configurable at runtime, 3-10)
+pub const DEFAULT_LEVEL_COUNT: usize = 10;
+/// Minimum allowed level count
+pub const MIN_LEVEL_COUNT: usize = 3;
+/// Maximum allowed level count
+pub const MAX_LEVEL_COUNT: usize = 10;
 /// Bytes per sample (f32)
 pub const UNIT_SIZE: usize = std::mem::size_of::<f32>(); // 4
 /// Raw data chunk storage size (1MB)

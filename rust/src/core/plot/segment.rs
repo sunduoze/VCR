@@ -58,11 +58,60 @@ impl SegmentStorage {
         sample_start
     }
 
-    /// Get min/max for a range of samples [start, end) for a specific channel
-    /// Returns (min, max) or (0.0, 0.0) if range is invalid
-    pub fn range_min_max(&self, _start: u64, _end: u64, _channel: usize, _total_channels: usize) -> (f32, f32) {
-        // TODO: implement indexed range lookup from chunks
-        // For now, placeholder
-        (0.0, 0.0)
+    /// Get min/max for a range of samples [start, end) for a specific channel.
+    /// Parses byte chunks to extract f32 values.
+    pub fn range_min_max(&self, start: u64, end: u64, _channel: usize, _total_channels: usize) -> (f32, f32) {
+        let end = end.min(self.sample_count());
+        if start >= end {
+            return (0.0, 0.0);
+        }
+        let chunks = self.data_chunks.read();
+        let byte_start = start as usize * self.unit_size as usize;
+        let byte_end = end as usize * self.unit_size as usize;
+
+        let mut min_val = f32::MAX;
+        let mut max_val = f32::MIN;
+        let mut bytes_read = 0usize;
+
+        for chunk in chunks.iter() {
+            let chunk_len = chunk.len();
+            if bytes_read + chunk_len <= byte_start {
+                bytes_read += chunk_len;
+                continue;
+            }
+            let rel_start = byte_start.saturating_sub(bytes_read);
+            let rel_end = (byte_end - bytes_read).min(chunk_len);
+            if rel_start >= rel_end {
+                bytes_read += chunk_len;
+                continue;
+            }
+            let data = &chunk[rel_start..rel_end];
+            let float_count = data.len() / std::mem::size_of::<f32>();
+            if float_count == 0 {
+                bytes_read += chunk_len;
+                continue;
+            }
+            let floats: &[f32] = unsafe {
+                std::slice::from_raw_parts(data.as_ptr() as *const f32, float_count)
+            };
+            for &v in floats {
+                if v < min_val {
+                    min_val = v;
+                }
+                if v > max_val {
+                    max_val = v;
+                }
+            }
+            bytes_read += chunk_len;
+            if bytes_read >= byte_end {
+                break;
+            }
+        }
+
+        if min_val == f32::MAX {
+            (0.0, 0.0)
+        } else {
+            (min_val, max_val)
+        }
     }
 }

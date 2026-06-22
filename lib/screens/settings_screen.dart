@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../app/theme.dart';
+import '../core/ffi_bridge.dart';
 import '../src/rust/frb_generated.dart';
 
 /// App-wide configuration helper
@@ -69,6 +70,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   int _bufferSize = 4096;
   String _language = 'zh_CN';
   int _plotAALevel = 0; // 0=off, 1=2x, 2=4x, 3=8x, 4=16x
+  int _pyramidLevels = 10; // 3-10, AnalogSegment envelope pyramid depth
   String _logLevel = 'info'; // trace, debug, info, warn, error, off
   String _logPath = ''; // empty = default (next to executable)
   bool _fileLoggingEnabled = true; // enable/disable file logging
@@ -85,6 +87,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       setState(() {
         _autoReconnect = config['autoReconnect'] as bool? ?? false;
         _plotAALevel = config['plotAALevel'] as int? ?? 0;
+        _pyramidLevels = config['pyramidLevels'] as int? ?? 10;
+        try {
+          _pyramidLevels = FfiBridge.instance.analogLevelCount;
+        } catch (_) {
+          // fallback to config value
+        }
         _logLevel = config['logLevel'] as String? ?? 'info';
         _logPath = config['logPath'] as String? ?? '';
         _fileLoggingEnabled = config['fileLoggingEnabled'] as bool? ?? true;
@@ -272,6 +280,46 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       fontSize: 12,
                       color: AppTheme.textSecondary,
                     ),
+                  ),
+                  leading: Icon(
+                    Icons.info_outline,
+                    size: 16,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+                const Divider(height: 1),
+                ListTile(
+                  title: const Text('Pyramid Levels'),
+                  subtitle: Text('$_pyramidLevels'),
+                  trailing: SizedBox(
+                    width: 200,
+                    child: Slider(
+                      value: _pyramidLevels.toDouble(),
+                      min: 3,
+                      max: 10,
+                      divisions: 7,
+                      label: '$_pyramidLevels',
+                      onChanged: (v) async {
+                        final newVal = v.round();
+                        setState(() => _pyramidLevels = newVal);
+                        try {
+                          FfiBridge.instance.analogLevelCount = newVal;
+                        } catch (_) {}
+                        final config = await AppConfig.load();
+                        config['pyramidLevels'] = newVal;
+                        await AppConfig.save(config);
+                      },
+                      activeColor: AppTheme.primary,
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                const ListTile(
+                  title: Text('Note'),
+                  subtitle: Text(
+                    'AnalogSegment envelope pyramid depth. Changes apply after '
+                    'Clear Data + reconnect.\n3=fastest, 10=finest zoom (default)',
+                    style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
                   ),
                   leading: Icon(
                     Icons.info_outline,

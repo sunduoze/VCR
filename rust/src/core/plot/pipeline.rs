@@ -79,6 +79,10 @@ static VP_DIRTY: AtomicBool = AtomicBool::new(false);
 /// Counter incremented when viewport changes — pipeline compares to detect change.
 static VP_GEN: AtomicU64 = AtomicU64::new(0);
 
+/// Set to true by push_sample* functions when new data arrives.
+/// Cleared by Dart Ticker after reading (via C-ABI).
+pub static DATA_READY: AtomicBool = AtomicBool::new(false);
+
 /// Set the viewport range from Dart.
 /// Called each frame (or when viewport changes) from Ticker callback.
 pub fn set_viewport_range(t_min: f64, t_max: f64, max_points: u32) {
@@ -113,6 +117,10 @@ lazy_static! {
 
     /// Pipeline running flag
     static ref PIPELINE_RUNNING: AtomicBool = AtomicBool::new(false);
+
+    /// Current pyramid level count for newly created AnalogSegments (3-10).
+    /// Must be set BEFORE creating channels. Changing requires data clear + recreate.
+    pub static ref ANALOG_LEVEL_COUNT: RwLock<usize> = RwLock::new(10);
 }
 
 // ── Render envelope (pre-computed, ready for Dart paint) ───────────
@@ -200,6 +208,7 @@ pub fn stop_pipeline() {
 pub fn push_sample(channel_id: u32, value: f64) {
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
     PENDING_BATCHES.lock().push(BatchEntry { x, values: vec![value], channel_id: Some(channel_id) });
+    DATA_READY.store(true, Ordering::Release);
 }
 
 /// Push a multi-channel sample (one CSV line → multiple channels).
@@ -207,6 +216,7 @@ pub fn push_sample(channel_id: u32, value: f64) {
 pub fn push_sample_batch(values: &[f64]) {
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
     PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
+    DATA_READY.store(true, Ordering::Release);
 }
 
 /// Push a multi-channel sample with explicit X value (syncs with PLOT_DATA counter).
@@ -214,6 +224,7 @@ pub fn push_sample_batch(values: &[f64]) {
 /// P0-1: Now writes to lightweight batch buffer; pipeline_loop drains & inserts into pyramids.
 pub fn push_sample_batch_with_x(x: f64, values: &[f64]) {
     PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
+    DATA_READY.store(true, Ordering::Release);
 }
 
 /// Get the current global sample index (for Dart to sync X values).

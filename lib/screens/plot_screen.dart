@@ -228,6 +228,16 @@ class _DataBuf {
 
   void clear() => _len = 0;
 
+  /// Create from raw f32 trace values (each value = one sample, y only).
+  /// x values are sequential starting from startSample.
+  factory _DataBuf.fromTrace(List<double> values, int startSample) {
+    final buf = _DataBuf(values.length);
+    for (int i = 0; i < values.length; i++) {
+      buf.add(startSample + i.toDouble(), values[i]);
+    }
+    return buf;
+  }
+
   Float64List get rawBuf => _buf;
 }
 
@@ -244,6 +254,9 @@ class PlotScreen extends StatefulWidget {
   @override
   State<PlotScreen> createState() => _PlotScreenState();
 }
+
+// Render mode: auto (threshold-based), trace (always raw polyline), envelope (always min-max band)
+enum _RenderMode { auto, trace, envelope }
 
 class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateMixin {
   // ── Data source ──
@@ -293,6 +306,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Display state ──
   bool _isPlaying = true;
+
+  // Render mode: auto (threshold-based), trace (always raw polyline), envelope (always min-max band)
+  _RenderMode _renderMode = _RenderMode.auto;
+  String _pyramidDebugText = '';
   int _fps = 0;
   int _totalPoints = 0;
   DateTime _lastFpsTime = DateTime.now();
@@ -351,6 +368,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── Animation ──
   late Ticker _ticker;
   bool _tickBusy = false; // P0-2: frame budget guard — skip tick if previous frame still rendering
+  int _lastVpGen = -1; // Idle skip: track last viewport generation to skip expensive refresh when idle
 
   // ── Demo ──
   double _demoPhase = 0;  // Demo phase for waveform generation (time in seconds)
@@ -429,11 +447,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Ensure AnalogSegment instances exist for every visible channel
   /// and set the pipeline's envelope source to AnalogSegment.
+  /// Also sets samplerate based on _deltaTime (time-per-sample in ms).
   void _ensureAnalogSegments() {
     final bridge = FfiBridge.instance;
     bridge.analogSetEnvelopeEnabled(true);
+    final samplerateHz = 1000.0 / _deltaTime; // deltaTime=1ms → 1000Hz
     for (int i = 0; i < _channels.length; i++) {
       bridge.analogEnsure(i);
+      bridge.analogSetSamplerate(i, samplerateHz);
     }
   }
 
@@ -810,6 +831,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── AnalogSegment envelope read (alternative to RENDER_ENVELOPE) ──
   // Called when USE_ANALOG_ENVELOPE is true.
   // Reads per-channel envelope from AnalogSegment via C-ABI (f32 min/max pairs).
+  // When samplesPerPixel < ENVELOPE_THRESHOLD, uses trace mode (raw f32 values).
   bool _refreshViewportFromAnalog() {
     final bridge = FfiBridge.instance;
 
@@ -823,6 +845,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // per-sample CEnvelopeSample output buffer (f32 min/max), max 8000 samples
     final maxSamples = _screenWidth.round().clamp(500, 8000);
     final sampleBuf = calloc<CEnvelopeSample>(maxSamples);
+    // Trace mode buffer: raw f32 values (one per pixel)
+    Pointer<Float>? traceBuf;
 
     // Compute samplesPerPixel from viewport and total sample count
     bool anyData = false;
@@ -844,21 +868,40 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // Calculate samplesPerPixel: total samples / num pixels in viewport
       final timeRange = _xMax - _xMin;
       final timePerPx = timeRange > 0 ? timeRange / _screenWidth : 0.0;
-      final samplesPerPixel = timePerPx > 0 ? sampleCount * timePerPx / timeRange : ENVELOPE_THRESHOLD;
+      final samplesPerPixelDouble = timePerPx > 0
+          ? sampleCount * timePerPx / timeRange
+          : ENVELOPE_THRESHOLD.toDouble();
 
       // Compute sample range (approximate: map time range to sample range)
       final newestAbsX = ch.data.last.x;
       final sampleOffset = newestAbsX - (_xMax); // approx
       final startSample = ((sampleOffset - _xMin.abs()) * 1.0).round().clamp(0, sampleCount - 1);
-      final endSample = startSample + (_screenWidth * samplesPerPixel).round();
-      final clampedEnd = endSample.clamp(startSample + 1, sampleCount);
-
-      final count = bridge.analogGetEnvelope(
-        ci, startSample, clampedEnd, samplesPerPixel.toDouble(), sampleBuf, maxSamples,
-      );
+      final endSampleRaw = startSample + (_screenWidth * samplesPerPixelDouble).round();
+      final clampedEnd = endSampleRaw.clamp(startSample + 1, sampleCount);
 
       ch.viewportData.clear();
       ch.envelopeData.clear();
+
+      final useTrace = _renderMode == _RenderMode.trace ||
+          (_renderMode == _RenderMode.auto && samplesPerPixelDouble < ENVELOPE_THRESHOLD);
+      // ── Trace mode: raw f32 values ──
+      if (useTrace) {
+        traceBuf ??= calloc<Float>(maxSamples);
+        final traceCount = bridge.analogGetTrace(
+          ci, startSample, clampedEnd, traceBuf, maxSamples,
+        );
+        if (traceCount > 0) {
+          final values = List<double>.generate(traceCount, (i) => traceBuf![i].toDouble());
+          ch.viewportData = _DataBuf.fromTrace(values, startSample);
+          anyData = true;
+        }
+        continue;
+      }
+
+      // ── Envelope mode (samplesPerPixel >= ENVELOPE_THRESHOLD): min/max pairs ──
+      final count = bridge.analogGetEnvelope(
+        ci, startSample, clampedEnd, samplesPerPixelDouble, sampleBuf, maxSamples,
+      );
 
       if (count > 0) {
         for (int i = 0; i < count; i++) {
@@ -877,6 +920,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
 
     calloc.free(sampleBuf);
+    if (traceBuf != null) calloc.free(traceBuf);
 
     final gen2 = bridge.envelopeGetGeneration();
     if (gen1 != gen2) return false;
@@ -937,7 +981,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               plotGroupId: 'default',
             ));
             if (USE_ANALOG_ENVELOPE) {
-              FfiBridge.instance.analogEnsure(_channels.length - 1);
+              final newChId = _channels.length - 1;
+              FfiBridge.instance.analogEnsure(newChId);
+              FfiBridge.instance.analogSetSamplerate(newChId, 1000.0 / _deltaTime);
             }
           }
           
@@ -1238,6 +1284,32 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (!mounted || !_isPlaying) return;
     _tickBusy = true;
     try {
+      // Skip expensive refresh if viewport unchanged AND no new data arrived
+      bool idleSkip = false;
+      try {
+        final vpGen = FfiBridge.instance.envelopeGetGeneration();
+        final hasNewData = FfiBridge.instance.checkDataReady();
+        if (!hasNewData && vpGen == _lastVpGen && _lastVpGen >= 0) {
+          _lastVpGen = vpGen;
+          idleSkip = true;
+        } else {
+          _lastVpGen = vpGen;
+        }
+      } catch (_) {
+        // checkDataReady or envelopeGetGeneration not available — fall through to normal refresh
+      }
+      if (idleSkip) {
+        // Only tick FPS counter, skip data refresh
+        _fpsFrameCount++;
+        final now = DateTime.now();
+        if (now.difference(_lastFpsTime).inMilliseconds >= 1000) {
+          _fps = _fpsFrameCount;
+          _fpsFrameCount = 0;
+          _lastFpsTime = now;
+        }
+        setState(() {}); // Still need FPS display update
+        return;
+      }
       _fpsFrameCount++;
       final now = DateTime.now();
       if (now.difference(_lastFpsTime).inMilliseconds >= 1000) {
@@ -1860,6 +1932,62 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     );
   }
 
+  void _showPyramidDebug() {
+    if (USE_ANALOG_ENVELOPE) {
+      final buf = StringBuffer();
+      for (var i = 0; i < _channels.length; i++) {
+        final info = FfiBridge.instance.analogDumpDebug(i);
+        buf.writeln('═══ Channel $i ═══');
+        buf.writeln(info);
+        buf.writeln();
+      }
+      _pyramidDebugText = buf.toString();
+    } else {
+      _pyramidDebugText = 'AnalogSegment envelope is DISABLED.\nSet USE_ANALOG_ENVELOPE = true to view pyramid state.';
+    }
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Row(
+          children: [
+            const Icon(Icons.bug_report, size: 20),
+            const SizedBox(width: 8),
+            const Text('Pyramid Debug', style: TextStyle(fontSize: 16)),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 18),
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                _showPyramidDebug(); // Refresh
+              },
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 600,
+          height: 500,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              _pyramidDebugText,
+              style: const TextStyle(
+                fontFamily: 'Consolas',
+                fontSize: 12,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
   // ── Build UI ──
 
   @override
@@ -1959,6 +2087,44 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               _saveConfig();
             },
             tooltip: _shareYAxis ? 'Share Y Axis (ON)' : 'Share Y Axis (OFF)',
+          ),
+          // Render mode toggle (Auto → Trace → Envelope)
+          IconButton(
+            icon: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: _renderMode != _RenderMode.auto
+                    ? (_renderMode == _RenderMode.trace
+                        ? Colors.blue.withValues(alpha: 0.2)
+                        : Colors.purple.withValues(alpha: 0.2))
+                    : Colors.transparent,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Icon(
+                _renderMode == _RenderMode.trace
+                    ? Icons.show_chart
+                    : _renderMode == _RenderMode.envelope
+                        ? Icons.area_chart
+                        : Icons.auto_graph,
+                color: _renderMode != _RenderMode.auto
+                    ? (_renderMode == _RenderMode.trace ? Colors.blue : Colors.purple)
+                    : AppTheme.textSecondary,
+                size: 20,
+              ),
+            ),
+            onPressed: () {
+              setState(() {
+                _renderMode = _RenderMode.values[
+                    (_renderMode.index + 1) % _RenderMode.values.length];
+              });
+            },
+            tooltip: 'Render Mode: ${_renderMode.name.toUpperCase()}',
+          ),
+          // Pyramid Debug
+          IconButton(
+            icon: Icon(Icons.bug_report, size: 20, color: AppTheme.textSecondary),
+            onPressed: _showPyramidDebug,
+            tooltip: 'Pyramid Debug',
           ),
           // Data source toggle
           IconButton(
@@ -2408,6 +2574,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     gpuWaveformImage: _gpuWaveformImage,
                     deltaTime: _deltaTime,
                     viewportRefreshCount: _viewportRefreshCount,
+                    renderMode: _renderMode,
                   ),
                   size: Size.infinite,
                 ),
@@ -3395,6 +3562,7 @@ class _PlotPainter extends CustomPainter {
   final double deltaTime;
   final int viewportRefreshCount;
   final bool isDarkTheme;
+  final _RenderMode renderMode;
 
   // P2-2: Static layer cache (background/grid/axes — rebuild only on layout/theme change)
   static ui.Picture? _staticPicture;
@@ -3417,6 +3585,7 @@ class _PlotPainter extends CustomPainter {
     this.gpuWaveformImage,
     this.deltaTime = 1.0,
     required this.viewportRefreshCount,
+    this.renderMode = _RenderMode.auto,
   });
 
   double _xToScreen(double x, double w) {
@@ -3832,11 +4001,13 @@ class _PlotPainter extends CustomPainter {
       return h - (y - chYMin) / (chYMax - chYMin) * h;
     }
 
-    // ── Trace mode: samplesPerPixel < ENVELOPE_THRESHOLD → raw polyline, no envelope ──
+    // ── Trace mode: raw polyline, no envelope ──
     // When zoomed in deeply (few samples covering many pixels), envelope bands
     // produce ugly wide vertical bars. A simple polyline is cleaner.
     final samplesPerPixel = data.length / w;
-    if (samplesPerPixel < ENVELOPE_THRESHOLD) {
+    final useTrace = renderMode == _RenderMode.trace ||
+        (renderMode == _RenderMode.auto && samplesPerPixel < ENVELOPE_THRESHOLD);
+    if (useTrace) {
       _drawTrace(canvas, ch, data, ox, oy, w, h, yTransform);
       return;
     }
@@ -4173,6 +4344,9 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     // 🚀 Mouse/cursor moved? Always repaint (instant crosshair feedback)
     if (mousePosition != oldDelegate.mousePosition) return true;
 
+    // 🚀 Render mode changed? Repaint needed
+    if (renderMode != oldDelegate.renderMode) return true;
+
     // 🚀 Channel config changed (decimals, showYAxis, etc)? Repaint needed
     if (channels.length != oldDelegate.channels.length) return true;
     for (int i = 0; i < channels.length; i++) {
@@ -4260,6 +4434,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     tp.paint(canvas, Offset(tx, ty));
   }
 }
+
 
 
 

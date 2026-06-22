@@ -91,6 +91,18 @@ typedef _AnalogGetMinMaxNative = Void Function(Uint32 channelId, Pointer<Float> 
 typedef _AnalogGetMinMaxDart = void Function(int channelId, Pointer<Float> out);
 typedef _AnalogGetEnvelopeNative = Uint32 Function(Uint32 channelId, Uint64 startSample, Uint64 endSample, Float samplesPerPixel, Pointer<CEnvelopeSample> out, Uint32 maxSamples);
 typedef _AnalogGetEnvelopeDart = int Function(int channelId, int startSample, int endSample, double samplesPerPixel, Pointer<CEnvelopeSample> out, int maxSamples);
+// AnalogSegment trace query
+typedef _AnalogGetTraceNative = Uint32 Function(Uint32 channelId, Uint64 start, Uint64 end, Pointer<Float> out, Uint32 maxSamples);
+typedef _AnalogGetTraceDart = int Function(int channelId, int start, int end, Pointer<Float> out, int maxSamples);
+// AnalogSegment samplerate
+typedef _AnalogSetSamplerateNative = Void Function(Uint32 channelId, Double rate);
+typedef _AnalogSetSamplerateDart = void Function(int channelId, double rate);
+typedef _AnalogGetSamplerateNative = Double Function(Uint32 channelId);
+typedef _AnalogGetSamplerateDart = double Function(int channelId);
+typedef _AnalogSetLevelCountNative = Void Function(Uint32 levelCount);
+typedef _AnalogSetLevelCountDart = void Function(int levelCount);
+typedef _AnalogGetLevelCountNative = Uint32 Function();
+typedef _AnalogGetLevelCountDart = int Function();
 typedef _AnalogResetNative = Void Function(Uint32 channelId);
 typedef _AnalogResetDart = void Function(int channelId);
 typedef _AnalogResetAllNative = Void Function();
@@ -99,6 +111,8 @@ typedef _AnalogSetEnvelopeEnabledNative = Void Function(Bool enabled);
 typedef _AnalogSetEnvelopeEnabledDart = void Function(bool enabled);
 typedef _AnalogIsEnvelopeEnabledNative = Bool Function();
 typedef _AnalogIsEnvelopeEnabledDart = bool Function();
+typedef _AnalogDumpDebugNative = Uint32 Function(Uint32 channelId, Pointer<Uint8> buf, Uint32 bufLen);
+typedef _AnalogDumpDebugDart = int Function(int channelId, Pointer<Uint8> buf, int bufLen);
 
 // Pipeline control
 typedef _PipelineStartNative = Bool Function();
@@ -107,6 +121,8 @@ typedef _PipelineStopNative = Bool Function();
 typedef _PipelineStopDart = bool Function();
 typedef _PipelineResetNative = Void Function();
 typedef _PipelineResetDart = void Function();
+typedef _PipelineCheckDataReadyNative = Bool Function();
+typedef _PipelineCheckDataReadyDart = bool Function();
 
 // Render envelope (pipeline pre-computation)
 typedef _EnvelopeSetViewportNative = Void Function(Double tMin, Double tMax, Uint32 maxPoints);
@@ -147,15 +163,22 @@ class FfiBridge {
   late final _AnalogSampleCountDart analogSampleCount;
   late final _AnalogGetMinMaxDart analogGetMinMax;
   late final _AnalogGetEnvelopeDart analogGetEnvelope;
+  late final _AnalogGetTraceDart analogGetTrace;
+  late final _AnalogSetSamplerateDart analogSetSamplerate;
+  late final _AnalogGetSamplerateDart analogGetSamplerate;
+  late final _AnalogSetLevelCountDart analogSetLevelCountRaw;
+  late final _AnalogGetLevelCountDart analogGetLevelCountRaw;
   late final _AnalogResetDart analogReset;
   late final _AnalogResetAllDart analogResetAll;
   late final _AnalogSetEnvelopeEnabledDart analogSetEnvelopeEnabled;
   late final _AnalogIsEnvelopeEnabledDart analogIsEnvelopeEnabled;
+  late final _AnalogDumpDebugDart analogDumpDebugRaw;
 
   // Pipeline control
   late final _PipelineStartDart pipelineStart;
   late final _PipelineStopDart pipelineStop;
   late final _PipelineResetDart pipelineReset;
+  late final _PipelineCheckDataReadyDart checkDataReady;
 
   // Render envelope (pipeline pre-computation)
   late final _EnvelopeSetViewportDart envelopeSetViewport;
@@ -216,10 +239,16 @@ class FfiBridge {
       analogSampleCount = _lib.lookupFunction<_AnalogSampleCountNative, _AnalogSampleCountDart>('vcr_analog_sample_count');
       analogGetMinMax = _lib.lookupFunction<_AnalogGetMinMaxNative, _AnalogGetMinMaxDart>('vcr_analog_get_min_max');
       analogGetEnvelope = _lib.lookupFunction<_AnalogGetEnvelopeNative, _AnalogGetEnvelopeDart>('vcr_analog_get_envelope');
+      analogGetTrace = _lib.lookupFunction<_AnalogGetTraceNative, _AnalogGetTraceDart>('vcr_analog_get_trace');
+      analogSetSamplerate = _lib.lookupFunction<_AnalogSetSamplerateNative, _AnalogSetSamplerateDart>('vcr_analog_set_samplerate');
+      analogGetSamplerate = _lib.lookupFunction<_AnalogGetSamplerateNative, _AnalogGetSamplerateDart>('vcr_analog_get_samplerate');
+      analogSetLevelCountRaw = _lib.lookupFunction<_AnalogSetLevelCountNative, _AnalogSetLevelCountDart>('vcr_analog_set_level_count');
+      analogGetLevelCountRaw = _lib.lookupFunction<_AnalogGetLevelCountNative, _AnalogGetLevelCountDart>('vcr_analog_get_level_count');
       analogReset = _lib.lookupFunction<_AnalogResetNative, _AnalogResetDart>('vcr_analog_reset');
       analogResetAll = _lib.lookupFunction<_AnalogResetAllNative, _AnalogResetAllDart>('vcr_analog_reset_all');
       analogSetEnvelopeEnabled = _lib.lookupFunction<_AnalogSetEnvelopeEnabledNative, _AnalogSetEnvelopeEnabledDart>('vcr_analog_set_envelope_enabled');
       analogIsEnvelopeEnabled = _lib.lookupFunction<_AnalogIsEnvelopeEnabledNative, _AnalogIsEnvelopeEnabledDart>('vcr_analog_is_envelope_enabled');
+      analogDumpDebugRaw = _lib.lookupFunction<_AnalogDumpDebugNative, _AnalogDumpDebugDart>('vcr_analog_dump_debug');
     } catch (e) {
       print('[FfiBridge] AnalogSegment bindings unavailable (DLL may be outdated), degrade gracefully: $e');
     }
@@ -228,6 +257,11 @@ class FfiBridge {
     pipelineStart = _lib.lookupFunction<_PipelineStartNative, _PipelineStartDart>('vcr_pipeline_start');
     pipelineStop = _lib.lookupFunction<_PipelineStopNative, _PipelineStopDart>('vcr_pipeline_stop');
     pipelineReset = _lib.lookupFunction<_PipelineResetNative, _PipelineResetDart>('vcr_pipeline_reset');
+    try {
+      checkDataReady = _lib.lookupFunction<_PipelineCheckDataReadyNative, _PipelineCheckDataReadyDart>('vcr_pipeline_check_data_ready');
+    } catch (e) {
+      print('[FfiBridge] checkDataReady binding unavailable, degrade gracefully');
+    }
 
     // Render envelope (pipeline pre-computation) — best-effort bind (graceful degrade if DLL lacks exports)
     try {
@@ -320,4 +354,25 @@ class FfiBridge {
 
   /// Reset pipeline state (clear all pyramids and counters).
   void resetPipeline() => pipelineReset();
+
+  /// Dump AnalogSegment debug info for a channel as a String.
+  String analogDumpDebug(int channelId) {
+    final buf = calloc<Uint8>(8192);
+    try {
+      final len = analogDumpDebugRaw(channelId, buf, 8192);
+      if (len == 0) return 'Channel $channelId: no data';
+      return String.fromCharCodes(buf.asTypedList(len));
+    } finally {
+      calloc.free(buf);
+    }
+  }
+
+  // ── Configurable AnalogSegment Pyramid Levels ───────────────────
+
+  /// Get the current default pyramid level count (3-10).
+  int get analogLevelCount => analogGetLevelCountRaw();
+
+  /// Set the default pyramid level count for newly created AnalogSegments.
+  /// Valid range: 3-10. Existing segments must be cleared and recreated.
+  set analogLevelCount(int v) => analogSetLevelCountRaw(v);
 }

@@ -3,6 +3,7 @@
 // Reference: Sveinn Steinarsson, "Downsampling Time Series for Visual Representation"
 
 use crate::core::plot::data_buffer::DataPoint;
+use crate::core::plot::envelope::EnvelopeSample;
 
 /// Apply LTTB downsampling to a sorted slice of data points.
 ///
@@ -97,6 +98,66 @@ pub fn lttb_downsample(data: &[DataPoint], threshold: usize) -> Vec<DataPoint> {
 #[inline]
 fn triangle_area(x_a: f64, y_a: f64, x_b: f64, y_b: f64, x_c: f64, y_c: f64) -> f64 {
     ((x_a - x_c) * (y_b - y_a) - (x_a - x_b) * (y_c - y_a)).abs()
+}
+
+/// LTTB downsampling for EnvelopeSample slices.
+/// Uses avg = (min+max)/2 as the y-value for triangle area calculation.
+/// x-axis is array index (treats data as uniformly-spaced).
+pub fn lttb_downsample_envelope(samples: &[EnvelopeSample], target: usize) -> Vec<EnvelopeSample> {
+    if target <= 2 || samples.len() <= target {
+        return samples.to_vec();
+    }
+    let data_length = samples.len();
+    let mut result = Vec::with_capacity(target);
+    result.push(samples[0]);
+
+    let bucket_size = (data_length - 2) as f64 / (target - 2) as f64;
+    let mut prev_idx = 0;
+
+    for i in 0..(target - 2) {
+        let avg_start = 1 + (i as f64 * bucket_size) as usize;
+        let avg_end = 1 + ((i as f64 + 1.0) * bucket_size) as usize;
+        let avg_end = avg_end.min(data_length - 1);
+        if avg_start >= avg_end {
+            continue;
+        }
+
+        let next_avg_start = avg_end;
+        let next_avg_end = 1 + ((i as f64 + 2.0) * bucket_size) as usize;
+        let next_avg_end = next_avg_end.min(data_length);
+
+        // Average of next bucket
+        let mut avg_x = 0.0f64;
+        let mut avg_y = 0.0f64;
+        let mut count = 0usize;
+        for j in next_avg_start..next_avg_end {
+            avg_x += j as f64;
+            avg_y += (samples[j].min + samples[j].max) as f64 * 0.5;
+            count += 1;
+        }
+        if count == 0 {
+            continue;
+        }
+        avg_x /= count as f64;
+        avg_y /= count as f64;
+
+        // Find point in current bucket with largest triangle area
+        let mut max_area = -1.0f64;
+        let mut max_idx = avg_start;
+        let prev_y = (samples[prev_idx].min + samples[prev_idx].max) as f64 * 0.5;
+        for j in avg_start..avg_end {
+            let y = (samples[j].min + samples[j].max) as f64 * 0.5;
+            let area = triangle_area(prev_idx as f64, prev_y, j as f64, y, avg_x, avg_y);
+            if area > max_area {
+                max_area = area;
+                max_idx = j;
+            }
+        }
+        result.push(samples[max_idx]);
+        prev_idx = max_idx;
+    }
+    result.push(samples[data_length - 1]);
+    result
 }
 
 /// Simple min/max decimation (faster than LTTB, slightly lower visual quality).
@@ -212,5 +273,19 @@ mod tests {
         assert!(result.len() <= 1000);
         assert_eq!(result[0].timestamp_ms, 0.0);
         assert_eq!(result.last().unwrap().timestamp_ms, 99999.0);
+    }
+
+    #[test]
+    fn test_lttb_envelope_basic() {
+        let samples: Vec<EnvelopeSample> = (0..1000)
+            .map(|i| EnvelopeSample {
+                min: i as f32,
+                max: (i + 1) as f32,
+            })
+            .collect();
+        let result = lttb_downsample_envelope(&samples, 50);
+        assert!(result.len() <= 50);
+        assert_eq!(result[0].min, 0.0);
+        assert_eq!(result.last().unwrap().max, 1000.0);
     }
 }

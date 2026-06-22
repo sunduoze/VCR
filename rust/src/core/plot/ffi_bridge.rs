@@ -289,11 +289,13 @@ pub extern "C" fn vcr_envelope_get_num_channels() -> u32 {
 #[no_mangle]
 pub extern "C" fn vcr_analog_ensure(channel_id: u32) -> bool {
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    use crate::core::plot::pipeline::ANALOG_LEVEL_COUNT;
     let mut map = FFI_CH_ANALOG.write();
     if map.contains_key(&channel_id) {
         return false;
     }
-    map.insert(channel_id, AnalogSegment::new(1000.0));
+    let level_count = *ANALOG_LEVEL_COUNT.read();
+    map.insert(channel_id, AnalogSegment::new(1000.0, level_count));
     true
 }
 
@@ -360,6 +362,99 @@ pub extern "C" fn vcr_analog_get_envelope(
     let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
     dest.copy_from_slice(&section.samples[..count]);
     count as u32
+}
+
+/// Copy raw f32 trace samples [start, end) into output buffer.
+/// Returns number of f32 values written.
+#[no_mangle]
+pub extern "C" fn vcr_analog_get_trace(
+    channel_id: u32,
+    start: u64,
+    end: u64,
+    out: *mut f32,
+    max_samples: u32,
+) -> u32 {
+    if out.is_null() || max_samples == 0 {
+        return 0;
+    }
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    let analog = match map.get(&channel_id) {
+        Some(a) => a,
+        None => return 0,
+    };
+    let samples = analog.read_trace(start, end);
+    let count = samples.len().min(max_samples as usize);
+    let dest = unsafe { std::slice::from_raw_parts_mut(out, count) };
+    dest.copy_from_slice(&samples[..count]);
+    count as u32
+}
+
+/// Set the samplerate for a channel's AnalogSegment (Hz).
+#[no_mangle]
+pub extern "C" fn vcr_analog_set_samplerate(channel_id: u32, rate: f64) {
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    if let Some(analog) = map.get(&channel_id) {
+        analog.set_samplerate(rate);
+    }
+}
+
+/// Get the samplerate for a channel's AnalogSegment (Hz).
+#[no_mangle]
+pub extern "C" fn vcr_analog_get_samplerate(channel_id: u32) -> f64 {
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    map.get(&channel_id).map(|a| a.get_samplerate()).unwrap_or(0.0)
+}
+
+/// Set the default pyramid level count for newly created AnalogSegments.
+/// Valid range: 3-10. Changes apply to future analog_ensure calls.
+/// Existing segments must be cleared and recreated for changes to take effect.
+#[no_mangle]
+pub extern "C" fn vcr_analog_set_level_count(level_count: u32) {
+    use crate::core::plot::pipeline::ANALOG_LEVEL_COUNT;
+    use crate::core::plot::constants::{MIN_LEVEL_COUNT, MAX_LEVEL_COUNT};
+    let count = (level_count as usize).clamp(MIN_LEVEL_COUNT, MAX_LEVEL_COUNT);
+    *ANALOG_LEVEL_COUNT.write() = count;
+}
+
+/// Get the current default pyramid level count.
+#[no_mangle]
+pub extern "C" fn vcr_analog_get_level_count() -> u32 {
+    use crate::core::plot::pipeline::ANALOG_LEVEL_COUNT;
+    *ANALOG_LEVEL_COUNT.read() as u32
+}
+
+/// Dump per-channel AnalogSegment debug info into a pre-allocated string buffer.
+/// Returns number of bytes written (excluding null terminator).
+/// Buffer must be at least 4096 bytes.
+#[no_mangle]
+pub extern "C" fn vcr_analog_dump_debug(channel_id: u32, buf: *mut u8, buf_len: u32) -> u32 {
+    if buf.is_null() || buf_len == 0 { return 0; }
+    use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let map = FFI_CH_ANALOG.read();
+    let analog = match map.get(&channel_id) {
+        Some(a) => a,
+        None => return 0,
+    };
+    let info = analog.dump_debug();
+    let bytes = info.as_bytes();
+    let len = bytes.len().min(buf_len as usize - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, len);
+        *buf.add(len) = 0; // null terminate
+    }
+    len as u32
+}
+
+/// Check and clear the DATA_READY flag atomically.
+/// Returns true if new data was available since last check.
+/// Dart Ticker calls this to decide whether to query envelopes.
+#[no_mangle]
+pub extern "C" fn vcr_pipeline_check_data_ready() -> bool {
+    use crate::core::plot::pipeline::DATA_READY;
+    DATA_READY.swap(false, Ordering::AcqRel)
 }
 
 /// Reset a channel's AnalogSegment.

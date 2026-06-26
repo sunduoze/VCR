@@ -100,9 +100,15 @@ class PlotGroup {
 /// samplesPerPixel >= ENVELOPE_THRESHOLD -> envelope mode (min-max band)
 const double ENVELOPE_THRESHOLD = 2.0;
 
-/// Feature flag: enable AnalogSegment envelope reads (parallel to TimeBucketPyramid).
-/// When true, reads envelope from AnalogSegment; when false, uses existing RENDER_ENVELOPE.
-const bool USE_ANALOG_ENVELOPE = true;
+/// Feature flag: skip RENDER_ENVELOPE FFI path (pipeline thread not started).
+/// When true, _refreshViewportData() falls through directly to per-channel pyramid query
+/// without calling _refreshViewportDataFromEnvelope() (saves 4 FFI calls/frame).
+/// Set to false after pipeline thread integration is complete.
+const bool RENDER_ENVELOPE_ACTIVE = false;
+
+/// Feature flag: enable AnalogSegment data structures and envelope rendering.
+/// Requires pipeline thread integration. Keep false until pipeline is fully wired.
+const bool USE_ANALOG_ENVELOPE = false;
 
 class PlotChannel {
   final String deviceId;
@@ -758,15 +764,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
-    // 🚀 P0-4: Try zero-copy envelope read first (pre-computed by Rust pipeline thread)
-    // When USE_ANALOG_ENVELOPE, pipeline routes AnalogSegment data into RENDER_ENVELOPE
-    // → _refreshViewportDataFromEnvelope() reads it through the same zero-copy C-ABI
-    if (_refreshViewportDataFromEnvelope()) return;
+    // 🚀 P0-4: Zero-copy envelope read (pre-computed by Rust pipeline thread).
+    // Currently disabled — pipeline thread not started, paths always fail.
+    // Set RENDER_ENVELOPE_ACTIVE=true after pipeline integration.
+    if (RENDER_ENVELOPE_ACTIVE) {
+      if (_refreshViewportDataFromEnvelope()) return;
+      if (_refreshViewportFromAnalog()) return;
+    }
 
-    // Fallback: try per-channel AnalogSegment direct query (legacy, kept for debugging)
-    if (USE_ANALOG_ENVELOPE && _refreshViewportFromAnalog()) return;
-
-    // Fallback: per-channel pyramid query
+    // Fallback: per-channel pyramid query (always active)
     final maxPts = _screenWidth.round().clamp(500, 4000);
     final bridge = FfiBridge.instance;
 
@@ -1099,6 +1105,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // (otherwise shouldRepaint returns false, reusing stale demo rendering).
       _viewportRefreshCount++;
 
+      // 🔧 P2-3: Reset EMA-smoothed Y-axis range on data-source switch.
+      // Without this, Demo↔Real carry-over pollutes Y axis for several seconds.
+      for (final ch in _channels) {
+        ch._smoothedYMin = null;
+        ch._smoothedYMax = null;
+      }
+
       if (_useRealData) {
         // Switch to real data: stop demo timer, start real data timer
         _demoTimer?.cancel();
@@ -1178,22 +1191,26 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     double minVal = double.infinity;
     double maxVal = double.negativeInfinity;
 
-    // P0-2: Prefer GC-free viewportData, fallback to ch.data (List<_DataPoint>)
+    // P1: Only scan viewportData (~800-4000 points) — never fall back to ch.data
+    // (250K _DataPoint heap objects). In real-time mode viewportData is always
+    // populated by _refreshViewportData() before _fitYAxis() runs. When empty
+    // (e.g. first frame, source switch), keep the previous smoothed range
+    // instead of iterating the full dataset.
     if (ch.viewportData.isNotEmpty) {
       for (int i = 0; i < ch.viewportData.length; i++) {
         final y = ch.viewportData.y(i);
         if (y < minVal) minVal = y;
         if (y > maxVal) maxVal = y;
       }
-    } else if (ch.data.isNotEmpty) {
-      for (final pt in ch.data) {
-        if (pt.y < minVal) minVal = pt.y;
-        if (pt.y > maxVal) maxVal = pt.y;
-      }
-    } else {
-      return;
     }
-    if (minVal.isInfinite) { minVal = -1; maxVal = 1; }
+    if (minVal.isInfinite) {
+      // No viewport data — use EMA carry-over or default range
+      if (ch._smoothedYMin != null) {
+        // Reuse previous smoothed range (stabilized, no oscillation)
+        return; // Don't touch ch.yMin/ch.yMax this frame
+      }
+      return; // Never had data — wait for first populated viewport
+    }
     final range = maxVal - minVal;
     final padding = range * 0.1;
     final targetMin = minVal - padding;
@@ -1638,6 +1655,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.viewportData.clear();
         ch.envelopeData.clear();
         ch.currentValue = 0.0;
+        // 🔧 P2-3: Reset EMA-smoothed Y-axis range on data clear.
+        // Without this, switch Demo↔Real carries over old channel's
+        // smoothed range → wrong Y-axis for several seconds.
+        ch._smoothedYMin = null;
+        ch._smoothedYMax = null;
+        ch.yMin = -1;
+        ch.yMax = 1;
       }
       // 🚀 Clear pyramid data on data reset
       FfiBridge.instance.clearAllChannelPyramids();
@@ -4069,13 +4093,17 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     
     // 🚀 P1-B 优化：批量绘制（替代 250K 次 drawCircle 调用）
     // drawRawPoints 需要扁平的 Float32List: [x1,y1, x2,y2, ...]
-    final points = Float32List(data.length * 2);
-    for (int i = 0; i < data.length; i++) {
-      // pt inlined (P0-2 _DataBuf)
-      points[i * 2] = _xToScreen(data.x(i), w) + ox;
-      points[i * 2 + 1] = yTransform(data.y(i)) + oy;
+    // 🔧 P0: reuse _lineBuf (same format), guarded with sublistView
+    final n = data.length;
+    if (_lineBuf == null || _lineBuf!.length < n * 2) {
+      _lineBuf = Float32List(n * 2);
     }
-    canvas.drawRawPoints(ui.PointMode.points, points, paint);
+    final buf = _lineBuf!;
+    for (int i = 0; i < n; i++) {
+      buf[i * 2] = _xToScreen(data.x(i), w) + ox;
+      buf[i * 2 + 1] = yTransform(data.y(i)) + oy;
+    }
+    canvas.drawRawPoints(ui.PointMode.points, Float32List.sublistView(buf, 0, n * 2), paint);
   }
 
   // 🚀 Phase B: Render envelope fill background (semi-transparent min-max band)
@@ -4103,7 +4131,8 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     }
 
     _envelopeFillPaint.color = ch.color.withValues(alpha: 0.25);
-    canvas.drawRawPoints(ui.PointMode.polygon, buf, _envelopeFillPaint);
+    final envView = Float32List.sublistView(buf, 0, pi);
+    canvas.drawRawPoints(ui.PointMode.polygon, envView, _envelopeFillPaint);
   }
 
   // 🚀 P1-2: Oscilloscope-style min-max vertical lines per bucket.
@@ -4138,7 +4167,8 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     }
 
     _minMaxLinePaint.color = ch.color.withValues(alpha: 0.40);
-    canvas.drawRawPoints(ui.PointMode.lines, buf, _minMaxLinePaint);
+    final mmView = Float32List.sublistView(buf, 0, pi);
+    canvas.drawRawPoints(ui.PointMode.lines, mmView, _minMaxLinePaint);
   }
 
   /// P4: Draw gap markers where data has temporal discontinuities.
@@ -4182,36 +4212,21 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
   void _drawDotLine(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     if (data.isEmpty) return;
 
-    // Reuse/resize buffer (2 floats per point: x, y)
-    final n = data.length;
-    if (_lineBuf == null || _lineBuf!.length < n * 2) {
-      _lineBuf = Float32List(n * 2);
-    }
-    final buf = _lineBuf!;
-    for (int i = 0; i < n; i++) {
-      buf[i * 2] = _xToScreen(data.x(i), w) + ox;
-      buf[i * 2 + 1] = yTransform(data.y(i)) + oy;
+    // 🔧 P0: Use Path (non-closing polyline) to avoid PointMode.polygon
+    // auto-close diagonal artifact. Also avoids stale buffer pollution.
+    _polylinePath.reset();
+    final sx = _xToScreen(data.x(0), w) + ox;
+    final sy = yTransform(data.y(0)) + oy;
+    _polylinePath.moveTo(sx, sy);
+    for (int i = 1; i < data.length; i++) {
+      _polylinePath.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
     }
     // Semi-transparent line
     _dotLinePaint.color = ch.color.withValues(alpha: 0.5);
     _dotLinePaint.strokeWidth = ch.lineWidth;
-    canvas.drawRawPoints(ui.PointMode.polygon, buf, _dotLinePaint);
+    canvas.drawPath(_polylinePath, _dotLinePaint);
 
-    // Dots on top (same buffer, PointMode.points)
-    _dotPointPaint.color = ch.color;
-    _dotPointPaint.strokeWidth = 2.5;
-    _dotPointPaint.strokeCap = StrokeCap.round;
-    canvas.drawRawPoints(ui.PointMode.points, buf, _dotPointPaint);
-  }
-
-  void _drawLine(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
-    if (data.isEmpty) return;
-
-    // Reuse static Paint (update mutable fields only)
-    _linePaint.color = ch.color;
-    _linePaint.strokeWidth = ch.lineWidth;
-
-    // Reuse/resize Float32List buffer (2 floats per point: x, y)
+    // Dots on top (reuse _lineBuf for drawRawPoints)
     final n = data.length;
     if (_lineBuf == null || _lineBuf!.length < n * 2) {
       _lineBuf = Float32List(n * 2);
@@ -4221,7 +4236,34 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
       buf[i * 2] = _xToScreen(data.x(i), w) + ox;
       buf[i * 2 + 1] = yTransform(data.y(i)) + oy;
     }
-    canvas.drawRawPoints(ui.PointMode.polygon, buf, _linePaint);
+    _dotPointPaint.color = ch.color;
+    _dotPointPaint.strokeWidth = 2.5;
+    _dotPointPaint.strokeCap = StrokeCap.round;
+    canvas.drawRawPoints(ui.PointMode.points, Float32List.sublistView(buf, 0, n * 2), _dotPointPaint);
+  }
+
+  // 🔧 P0: Reusable Path for non-closing polyline drawing.
+  // drawRawPoints(PointMode.polygon) auto-closes last→first → diagonal artifact.
+  // drawRawPoints(PointMode.lines) treats every pair as independent — breaks continuity.
+  // Path with moveTo+lineTo is the correct non-closing polyline primitive.
+  static final _polylinePath = Path();
+
+  void _drawLine(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
+    if (data.isEmpty) return;
+
+    _linePaint.color = ch.color;
+    _linePaint.strokeWidth = ch.lineWidth;
+
+    // 🔧 P0: Use Path (non-closing polyline) to avoid PointMode.polygon auto-close
+    // diagonal artifact AND avoid stale Float32List buffer pollution.
+    _polylinePath.reset();
+    final sx = _xToScreen(data.x(0), w) + ox;
+    final sy = yTransform(data.y(0)) + oy;
+    _polylinePath.moveTo(sx, sy);
+    for (int i = 1; i < data.length; i++) {
+      _polylinePath.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
+    }
+    canvas.drawPath(_polylinePath, _linePaint);
   }
 
   // ── Trace mode: raw sample polyline (no envelope, no downsampling) ──
@@ -4232,17 +4274,16 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     _linePaint.color = ch.color;
     _linePaint.strokeWidth = ch.lineWidth;
 
-    // Use Path (non-closing polyline) instead of PointMode.polygon.
-    // PointMode.polygon auto-closes the last→first point, creating
-    // visible diagonal artifacts (same root cause as the 3-dark-lines bug).
-    final path = Path();
+    // 🔧 P0: Reuse static _polylinePath (same as _drawLine).
+    // Avoid per-frame Path allocation.
+    _polylinePath.reset();
     final sx = _xToScreen(data.x(0), w) + ox;
     final sy = yTransform(data.y(0)) + oy;
-    path.moveTo(sx, sy);
+    _polylinePath.moveTo(sx, sy);
     for (int i = 1; i < data.length; i++) {
-      path.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
+      _polylinePath.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
     }
-    canvas.drawPath(path, _linePaint);
+    canvas.drawPath(_polylinePath, _linePaint);
   }
 
   void _drawFilled(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale, double chYMin, double chYMax) {

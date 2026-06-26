@@ -360,8 +360,13 @@ fn update_render_envelope_from_analog(t_min: f64, t_max: f64, target_points: u32
             let mut pt_count: u32 = 0;
 
             for (j, sample) in section.samples.iter().take(max_pts).enumerate() {
-                // Map envelope sample position to x in [t_min, t_max)
-                let frac = (j as f64) / (max_pts.max(1) as f64);
+                // Map envelope sample to its actual sample position.
+                // section.start + j * section.scale gives the absolute sample index
+                // within the AnalogSegment. Map to viewport range [start_sample, end_sample) → [t_min, t_max).
+                let abs_sample = section.start + (j as u64) * (section.scale as u64);
+                let viewport_samples = end_sample.saturating_sub(start_sample).max(1) as f64;
+                let frac = (abs_sample.saturating_sub(start_sample) as f64 / viewport_samples)
+                    .clamp(0.0, 1.0);
                 let x = t_min + frac * time_range;
 
                 let idx = (byte_offset as usize) + (pt_count as usize) * 2;

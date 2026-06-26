@@ -292,6 +292,12 @@ class FfiBridge {
           ..value = points[i].$2;
       }
       pyramidChPushBatch(channelId, ptr, points.length);
+      // Also push to AnalogSegment for envelope rendering.
+      // TimeBucketPyramid gets data via pyramidChPushBatch above;
+      // AnalogSegment needs explicit push_sample calls.
+      for (var i = 0; i < points.length; i++) {
+        analogPushSample(channelId, points[i].$2);
+      }
     } finally {
       calloc.free(ptr);
     }

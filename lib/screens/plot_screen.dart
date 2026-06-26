@@ -700,6 +700,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final totalSize = bridge.envelopeGetTotalSize();
     final envelopeBuf = dataPtr.asTypedList(totalSize);
 
+    bool anyData = false; // Track if any channel had non-zero count
     for (int ci = 0; ci < numCh && ci < _channels.length; ci++) {
       final ch = _channels[ci];
       if (!ch.visible || ch.data.isEmpty) {
@@ -715,6 +716,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.envelopeData.clear();
         continue;
       }
+      anyData = true;
 
       final newestAbsX = ch.data.last.x;
       ch.viewportData.clear();
@@ -740,6 +742,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.viewportData.add(lastX, lastY);
       }
     }
+
+    // If no channel had data, fall through to per-channel pyramid query
+    if (!anyData) return false;
 
     // Verify generation didn't change during read (pipeline update mid-read)
     // Note: asTypedList provides a live view; pipeline writes are atomic (generation check)
@@ -1086,11 +1091,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _useRealData = !_useRealData;
       _saveConfig();
 
-      // 🚀 Phase C: Clear all per-channel pyramids to prevent demo↔real data mixing.
-      // Pyramids are keyed by channel index; switching modes reuses the same indices
-      // but with different channel lists (_demoChannels vs _realChannels).
+      // 🚀 Clear pyramid data to prevent demo↔real data mixing.
+      // Demo and Real channels share integer indices (0,1,2,...) as pyramid keys;
+      // switching modes reuses same indices with different channel lists.
       FfiBridge.instance.clearAllChannelPyramids();
-      // 🚀 Also bump viewportRefreshCount to invalidate _PlotPainter cached picture
+      // Bump viewportRefreshCount to invalidate _PlotPainter cached picture
       // (otherwise shouldRepaint returns false, reusing stale demo rendering).
       _viewportRefreshCount++;
 
@@ -1634,7 +1639,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.envelopeData.clear();
         ch.currentValue = 0.0;
       }
-      // 🚀 Phase A: Clear per-channel pyramids on data reset
+      // 🚀 Clear pyramid data on data reset
       FfiBridge.instance.clearAllChannelPyramids();
       _totalPoints = 0;
       if (_scrollMode) {

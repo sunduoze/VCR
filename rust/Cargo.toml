@@ -35,5 +35,9 @@ mlua = { version = "0.10", features = ["lua53", "vendored", "serialize", "send"]
 dirs = "5"
 bytemuck = { version = "1.25.0", features = ["derive"] }
 
+[features]
+default = []
+lockfree = []
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(frb_expand)'] }

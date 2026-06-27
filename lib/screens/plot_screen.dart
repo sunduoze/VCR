@@ -200,8 +200,14 @@ class _DataBuf {
   bool get isNotEmpty => _len > 0;
   bool get isEmpty => _len == 0;
 
-  double x(int i) => _buf[i * 2];
-  double y(int i) => _buf[i * 2 + 1];
+  double x(int i) {
+    assert(i >= 0 && i < _len, '_DataBuf.x($i) out of bounds [0, $_len)');
+    return _buf[i * 2];
+  }
+  double y(int i) {
+    assert(i >= 0 && i < _len, '_DataBuf.y($i) out of bounds [0, $_len)');
+    return _buf[i * 2 + 1];
+  }
 
   double get firstX => _len > 0 ? _buf[0] : 0;
   double get firstY => _len > 0 ? _buf[1] : 0;
@@ -1776,29 +1782,33 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
       // Wide format CSV: Time,Ch1,Time,Ch2,Time,Ch3,...
       // Each channel writes its own X (timestamp) + Y value
-      final sb = StringBuffer();
-      for (int c = 0; c < visibleChannels.length; c++) {
-        if (c > 0) sb.write(',');
-        sb.write('Time,${visibleChannels[c].deviceName} - ${visibleChannels[c].channelName}');
-      }
-      sb.writeln();
-
-      int maxLen = visibleChannels.fold(0, (m, ch) => max(m, ch.data.length));
-      for (int i = 0; i < maxLen; i++) {
-        for (int c = 0; c < visibleChannels.length; c++) {
-          if (c > 0) sb.write(',');
-          final ch = visibleChannels[c];
-          if (i < ch.data.length) {
-            sb.write('${ch.data[i].x.toStringAsFixed(6)},${ch.data[i].y.toStringAsFixed(ch.decimals)}');
-          } else {
-            sb.write(',');
-          }
-        }
-        sb.writeln();
-      }
-
+      // P2-4: Stream write via IOSink — avoids StringBuffer explosion for 250K+ points
       final file = File(path);
-      await file.writeAsString(sb.toString());
+      final sink = file.openWrite(encoding: utf8);
+      try {
+        for (int c = 0; c < visibleChannels.length; c++) {
+          if (c > 0) sink.write(',');
+          sink.write('Time,${visibleChannels[c].deviceName} - ${visibleChannels[c].channelName}');
+        }
+        sink.writeln();
+
+        int maxLen = visibleChannels.fold(0, (m, ch) => max(m, ch.data.length));
+        for (int i = 0; i < maxLen; i++) {
+          for (int c = 0; c < visibleChannels.length; c++) {
+            if (c > 0) sink.write(',');
+            final ch = visibleChannels[c];
+            if (i < ch.data.length) {
+              sink.write('${ch.data[i].x.toStringAsFixed(6)},${ch.data[i].y.toStringAsFixed(ch.decimals)}');
+            } else {
+              sink.write(',');
+            }
+          }
+          sink.writeln();
+        }
+      } finally {
+        await sink.flush();
+        await sink.close();
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Exported to $path'), duration: const Duration(seconds: 2)),

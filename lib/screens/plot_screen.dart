@@ -826,30 +826,34 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final tMin = newestAbsX + _xMin;
       final tMax = newestAbsX + _xMax;
 
-      final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
-
-      if (count == 0) {
+      try {
+        final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
+        if (count == 0) {
+          ch.viewportData.clear();
+          ch.envelopeData.clear();
+          continue;
+        }
         ch.viewportData.clear();
         ch.envelopeData.clear();
-        continue;
-      }
-
-      ch.viewportData.clear();
-      ch.envelopeData.clear();
-      for (int i = 0; i < count; i += 2) {
-        if (i + 1 >= count) break;
-        final xMin = fb[i * 2] - newestAbsX;
-        final yMin = fb[i * 2 + 1];
-        final yMax = fb[(i + 1) * 2 + 1];
-        final yAvg = (yMin + yMax) * 0.5;
-        ch.viewportData.add(xMin, yAvg);
-        ch.envelopeData.add(xMin, yMin);
-        ch.envelopeData.add(xMin, yMax);
-      }
-      if (count % 2 != 0 && count > 0) {
-        final lastX = fb[(count - 1) * 2] - newestAbsX;
-        final lastY = fb[(count - 1) * 2 + 1];
-        ch.viewportData.add(lastX, lastY);
+        for (int i = 0; i < count; i += 2) {
+          if (i + 1 >= count) break;
+          final xMin = fb[i * 2] - newestAbsX;
+          final yMin = fb[i * 2 + 1];
+          final yMax = fb[(i + 1) * 2 + 1];
+          final yAvg = (yMin + yMax) * 0.5;
+          ch.viewportData.add(xMin, yAvg);
+          ch.envelopeData.add(xMin, yMin);
+          ch.envelopeData.add(xMin, yMax);
+        }
+        if (count % 2 != 0 && count > 0) {
+          final lastX = fb[(count - 1) * 2] - newestAbsX;
+          final lastY = fb[(count - 1) * 2 + 1];
+          ch.viewportData.add(lastX, lastY);
+        }
+      } catch (_) {
+        // FFI call failed (e.g. DLL unloaded, Rust panic) — clear this channel and continue
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
       }
 
     }
@@ -861,6 +865,15 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // Reads per-channel envelope from AnalogSegment via C-ABI (f32 min/max pairs).
   // When samplesPerPixel < ENVELOPE_THRESHOLD, uses trace mode (raw f32 values).
   bool _refreshViewportFromAnalog() {
+    // Wrap entire method in try to prevent calloc leaks on FFI crash (P2-3)
+    try {
+      return _refreshViewportFromAnalogImpl();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _refreshViewportFromAnalogImpl() {
     final bridge = FfiBridge.instance;
 
     // Use the existing render envelope's viewport range

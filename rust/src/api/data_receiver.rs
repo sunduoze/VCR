@@ -3,7 +3,6 @@
 
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
-use std::thread;
 
 /// 接收器运行状态
 static RUNNING: Lazy<Mutex<bool>> = Lazy::new(|| Mutex::new(false));

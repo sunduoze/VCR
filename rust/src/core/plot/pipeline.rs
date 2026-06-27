@@ -95,17 +95,6 @@ pub fn set_viewport_range(t_min: f64, t_max: f64, max_points: u32) {
     VP_DIRTY.store(true, Ordering::Release);
 }
 
-/// Read current viewport range.
-fn read_viewport_range() -> Option<(f64, f64, u32)> {
-    if !VP_DIRTY.load(Ordering::Acquire) {
-        return None;
-    }
-    let t_min = f64::from_bits(VP_T_MIN.load(Ordering::Acquire));
-    let t_max = f64::from_bits(VP_T_MAX.load(Ordering::Acquire));
-    let max_pts = VP_MAX_PTS.load(Ordering::Acquire) as u32;
-    Some((t_min, t_max, max_pts))
-}
-
 // ── Global pipeline state ──────────────────────────────────────────
 
 lazy_static! {
@@ -205,26 +194,62 @@ pub fn stop_pipeline() {
 
 /// Push a single sample into the batch buffer (producer-side).
 /// Stores explicit channel_id so pipeline_loop can route correctly.
+///
+/// When pipeline is ON:  batch → pipeline_loop drains → pyramids + analog (no dual-write race).
+/// When pipeline is OFF: direct push to pyramids for per-channel query.
 pub fn push_sample(channel_id: u32, value: f64) {
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
-    PENDING_BATCHES.lock().push(BatchEntry { x, values: vec![value], channel_id: Some(channel_id) });
-    DATA_READY.store(true, Ordering::Release);
+    if PIPELINE_RUNNING.load(Ordering::Acquire) {
+        PENDING_BATCHES.lock().push(BatchEntry { x, values: vec![value], channel_id: Some(channel_id) });
+        DATA_READY.store(true, Ordering::Release);
+    } else {
+        let mut pyramids = FFI_CH_PYRAMIDS.lock();
+        let pyramid = pyramids.entry(channel_id).or_default();
+        pyramid.push(x, value);
+    }
 }
 
 /// Push a multi-channel sample (one CSV line → multiple channels).
 /// Channel index = position in values array.
 pub fn push_sample_batch(values: &[f64]) {
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
-    PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
-    DATA_READY.store(true, Ordering::Release);
+    if PIPELINE_RUNNING.load(Ordering::Acquire) {
+        PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
+        DATA_READY.store(true, Ordering::Release);
+    } else {
+        let mut pyramids = FFI_CH_PYRAMIDS.lock();
+        for (ci, value) in values.iter().enumerate() {
+            let channel_id = ci as u32;
+            let pyramid = pyramids.entry(channel_id).or_default();
+            pyramid.push(x, *value);
+        }
+    }
 }
 
 /// Push a multi-channel sample with explicit X value (syncs with PLOT_DATA counter).
 /// Used from receive loop where PLOT_DATA.next_counter() is the canonical X.
-/// P0-1: Now writes to lightweight batch buffer; pipeline_loop drains & inserts into pyramids.
+///
+/// Data path:
+///   Pipeline ON  → PENDING_BATCHES → pipeline_loop drains → FFI_CH_PYRAMIDS + FFI_CH_ANALOG
+///   Pipeline OFF → Direct push to FFI_CH_PYRAMIDS (no pipeline thread running)
+///
+/// This eliminates the previous dual-write race: when the pipeline thread holds
+/// FFI_CH_PYRAMIDS lock during Step 1 drain, this function no longer contends on it.
 pub fn push_sample_batch_with_x(x: f64, values: &[f64]) {
-    PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
-    DATA_READY.store(true, Ordering::Release);
+    if PIPELINE_RUNNING.load(Ordering::Acquire) {
+        // Pipeline is active: only write to batch buffer.
+        // The pipeline loop will drain → push to pyramids + analog (single writer, no race).
+        PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
+        DATA_READY.store(true, Ordering::Release);
+    } else {
+        // Pipeline not running: push directly to pyramids for per-channel query path.
+        let mut pyramids = FFI_CH_PYRAMIDS.lock();
+        for (ci, value) in values.iter().enumerate() {
+            let channel_id = ci as u32;
+            let pyramid = pyramids.entry(channel_id).or_default();
+            pyramid.push(x, *value);
+        }
+    }
 }
 
 /// Get the current global sample index (for Dart to sync X values).
@@ -433,9 +458,16 @@ fn pipeline_loop() {
             }
         }
 
-        // ── Step 2: Update render envelope if viewport changed ──
-        if let Some((t_min, t_max, max_pts)) = read_viewport_range() {
-            update_render_envelope(t_min, t_max, max_pts);
+        // ── Step 2: Update render envelope on viewport change or new data ──
+        let vp_dirty = VP_DIRTY.swap(false, Ordering::AcqRel);
+        let data_ready = DATA_READY.swap(false, Ordering::AcqRel);
+        if vp_dirty || data_ready {
+            let t_min = f64::from_bits(VP_T_MIN.load(Ordering::Acquire));
+            let t_max = f64::from_bits(VP_T_MAX.load(Ordering::Acquire));
+            let max_pts = VP_MAX_PTS.load(Ordering::Acquire) as u32;
+            if t_max > t_min && max_pts > 0 {
+                update_render_envelope(t_min, t_max, max_pts);
+            }
         }
 
         thread::sleep(sleep_duration);

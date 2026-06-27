@@ -100,16 +100,6 @@ class PlotGroup {
 /// samplesPerPixel >= ENVELOPE_THRESHOLD -> envelope mode (min-max band)
 const double ENVELOPE_THRESHOLD = 2.0;
 
-/// Feature flag: skip RENDER_ENVELOPE FFI path (pipeline thread not started).
-/// When true, _refreshViewportData() falls through directly to per-channel pyramid query
-/// without calling _refreshViewportDataFromEnvelope() (saves 4 FFI calls/frame).
-/// Set to false after pipeline thread integration is complete.
-const bool RENDER_ENVELOPE_ACTIVE = false;
-
-/// Feature flag: enable AnalogSegment data structures and envelope rendering.
-/// Requires pipeline thread integration. Keep false until pipeline is fully wired.
-const bool USE_ANALOG_ENVELOPE = false;
-
 class PlotChannel {
   final String deviceId;
   String deviceName;
@@ -223,6 +213,8 @@ class _DataBuf {
   void add(double x, double y) {
     final idx = _len * 2;
     if (idx + 1 >= _buf.length) {
+      // Geometric growth with amortized O(1): each resize doubles capacity.
+      // For real-time rendering, prefer pre-sizing via the constructor.
       final newBuf = Float64List(_buf.length * 2);
       newBuf.setAll(0, _buf);
       _buf = newBuf;
@@ -236,13 +228,19 @@ class _DataBuf {
 
   /// Create from raw f32 trace values (each value = one sample, y only).
   /// x values are sequential starting from startSample.
+  /// Direct write — avoids add() resize loop for known-size batches.
   factory _DataBuf.fromTrace(List<double> values, int startSample) {
-    final buf = _DataBuf(values.length);
-    for (int i = 0; i < values.length; i++) {
-      buf.add(startSample + i.toDouble(), values[i]);
+    final n = values.length;
+    final buf = Float64List(n * 2);
+    for (int i = 0; i < n; i++) {
+      buf[i * 2] = startSample + i.toDouble();
+      buf[i * 2 + 1] = values[i];
     }
-    return buf;
+    final result = _DataBuf._fromBuffer(buf, n);
+    return result;
   }
+
+  _DataBuf._fromBuffer(this._buf, this._len);
 
   Float64List get rawBuf => _buf;
 }
@@ -316,6 +314,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // Render mode: auto (threshold-based), trace (always raw polyline), envelope (always min-max band)
   _RenderMode _renderMode = _RenderMode.auto;
   String _pyramidDebugText = '';
+
+  // ── Pipeline thread toggle ──
+  // When true, RENDER_ENVELOPE zero-copy path is active.
+  // The pipeline thread pre-computes envelope data each frame (VP_DIRTY or DATA_READY trigger).
+  // Toggle via toolbar button; off by default to keep startup simple.
+  bool _pipelineEnabled = false;
+
+  // ── AnalogSegment envelope toggle ──
+  // When true, the pipeline reads envelope from AnalogSegment (f32, 10-level 16^n pyramid)
+  // instead of TimeBucketPyramid (f64). Enables higher-precision decimation.
+  // Toggle via toolbar button; requires pipeline to be enabled.
+  bool _analogEnvelopeEnabled = false;
   int _fps = 0;
   int _totalPoints = 0;
   DateTime _lastFpsTime = DateTime.now();
@@ -421,10 +431,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initDemoChannels();
-    // ── AnalogSegment: create per-channel segments + enable envelope toggle ──
-    if (USE_ANALOG_ENVELOPE) {
-      _ensureAnalogSegments();
-    }
+    // ── AnalogSegment: deferred init (created when user enables toggle) ──
+    // AnalogSegments are created in _toggleAnalogEnvelope() to avoid unnecessary
+    // resource allocation at startup.
     _startDemoData();
     _loadConfig();
     // Apply buffer size to Rust immediately when page loads
@@ -765,10 +774,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
     // 🚀 P0-4: Zero-copy envelope read (pre-computed by Rust pipeline thread).
-    // Currently disabled — pipeline thread not started, paths always fail.
-    // Set RENDER_ENVELOPE_ACTIVE=true after pipeline integration.
-    if (RENDER_ENVELOPE_ACTIVE) {
+    // When pipeline is enabled, try envelope read first; fall back to pyramid query on failure.
+    if (_pipelineEnabled) {
       if (_refreshViewportDataFromEnvelope()) return;
+      if (_refreshViewportFromAnalog()) return;
+    } else if (_analogEnvelopeEnabled) {
+      // AnalogSegment direct C-ABI path (works without pipeline thread).
       if (_refreshViewportFromAnalog()) return;
     }
 
@@ -839,8 +850,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _viewportRefreshCount++;
   }
 
-  // ── AnalogSegment envelope read (alternative to RENDER_ENVELOPE) ──
-  // Called when USE_ANALOG_ENVELOPE is true.
+  // ── AnalogSegment envelope read ──
+  // Called when _analogEnvelopeEnabled is true (runtime toggle).
   // Reads per-channel envelope from AnalogSegment via C-ABI (f32 min/max pairs).
   // When samplesPerPixel < ENVELOPE_THRESHOLD, uses trace mode (raw f32 values).
   bool _refreshViewportFromAnalog() {
@@ -1004,7 +1015,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               showYAxis: false,
               plotGroupId: 'default',
             ));
-            if (USE_ANALOG_ENVELOPE) {
+            if (_analogEnvelopeEnabled) {
               final newChId = _channels.length - 1;
               FfiBridge.instance.analogEnsure(newChId);
               FfiBridge.instance.analogSetSamplerate(newChId, 1000.0 / _deltaTime);
@@ -1101,6 +1112,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // Demo and Real channels share integer indices (0,1,2,...) as pyramid keys;
       // switching modes reuses same indices with different channel lists.
       FfiBridge.instance.clearAllChannelPyramids();
+      // Clear AnalogSegment data as well (prevents demo↔real data mixing)
+      if (_analogEnvelopeEnabled) {
+        FfiBridge.instance.analogResetAll();
+      }
       // Bump viewportRefreshCount to invalidate _PlotPainter cached picture
       // (otherwise shouldRepaint returns false, reusing stale demo rendering).
       _viewportRefreshCount++;
@@ -1134,6 +1149,46 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
         _startDemoData();
       }
+    });
+  }
+
+  void _togglePipeline() {
+    setState(() {
+      _pipelineEnabled = !_pipelineEnabled;
+      if (_pipelineEnabled) {
+        FfiBridge.instance.startPipeline();
+        // If analog envelope is enabled, ensure segments exist after pipeline start
+        if (_analogEnvelopeEnabled) {
+          _ensureAnalogSegments();
+        }
+      } else {
+        FfiBridge.instance.stopPipeline();
+      }
+    });
+  }
+
+  /// Toggle AnalogSegment envelope rendering.
+  /// When enabled, the pipeline reads envelope data from AnalogSegment (f32, 10-level
+  /// 16^n pyramid) instead of TimeBucketPyramid (f64). This provides higher-precision
+  /// decimation at the cost of additional memory (f32 per level).
+  /// Requires pipeline to be enabled; auto-starts pipeline if needed.
+  void _toggleAnalogEnvelope() {
+    setState(() {
+      _analogEnvelopeEnabled = !_analogEnvelopeEnabled;
+      if (_analogEnvelopeEnabled) {
+        // Auto-start pipeline if not already running
+        if (!_pipelineEnabled) {
+          _pipelineEnabled = true;
+          FfiBridge.instance.startPipeline();
+        }
+        // Enable AnalogSegment as envelope source
+        FfiBridge.instance.analogSetEnvelopeEnabled(true);
+        _ensureAnalogSegments();
+      } else {
+        // Disable AnalogSegment envelope source (fall back to TimeBucketPyramid)
+        FfiBridge.instance.analogSetEnvelopeEnabled(false);
+      }
+      _saveConfig();
     });
   }
 
@@ -1355,13 +1410,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // P0-2: Ticker-driven vsync rendering — lightweight pyramid query + repaint
       // Timer still handles data generation/fetching; Ticker provides smooth 60fps rendering
       if (_useRealData) {
-        _notifyPipelineViewport(); // Feed viewport BEFORE refresh → pipeline computes async
+        if (_pipelineEnabled) _notifyPipelineViewport(); // Feed viewport BEFORE refresh → pipeline computes async
         _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
         if (_autoScaleY) _fitYAxis();
         if (!_scrollMode && _autoScaleX) _fitXAxis();
         setState(() {});
       } else {
-        _notifyPipelineViewport(); // Feed viewport BEFORE refresh
+        if (_pipelineEnabled) _notifyPipelineViewport(); // Feed viewport BEFORE refresh
         _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
         if (_scrollMode) {
           _xMax = 0.0;
@@ -1382,12 +1437,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker.dispose();
     _demoTimer?.cancel();
     _realDataTimer?.cancel();
-    // GPU 𫔰阌
+    // GPU 关闭
     if (_gpuInitialized) {
       RustLib.instance.api.crateApiGpuApiGpuCleanup();
     }
     // 停止 Rust 独立线程（方案3）
     RustLib.instance.api.crateApiDataReceiverStopDataReceiver();
+    // Stop pipeline thread if active
+    if (_pipelineEnabled) {
+      FfiBridge.instance.stopPipeline();
+    }
+    // Release static GPU Picture cache (prevents long-running memory leak)
+    _PlotPainter.disposeStaticCache();
     // 🚀 Phase C: Free reusable native query buffer
     if (_queryNative != null) {
       calloc.free(_queryNative!);
@@ -1465,6 +1526,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _plotThemeDark = json['plotThemeDark'] as bool? ?? true;
         _autoAddChannels = json['autoAddChannels'] as bool? ?? true;
         _useRealData = json['useRealData'] as bool? ?? false;
+        _pipelineEnabled = json['pipelineEnabled'] as bool? ?? false;
+        _analogEnvelopeEnabled = json['analogEnvelopeEnabled'] as bool? ?? false;
         _maxPointsController.text = _maxPoints.toString();
         _deltaTimeController.text = _deltaTime.toString();
         // Load Flutter log settings from app_config.json
@@ -1484,6 +1547,19 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
         // Refresh all UI with loaded config values
         if (mounted) setState(() {});
+        // Restore pipeline + analog envelope state after config load
+        if (_pipelineEnabled) {
+          FfiBridge.instance.startPipeline();
+        }
+        if (_analogEnvelopeEnabled) {
+          FfiBridge.instance.analogSetEnvelopeEnabled(true);
+          _ensureAnalogSegments();
+          // Auto-start pipeline if analog envelope needs it
+          if (!_pipelineEnabled) {
+            _pipelineEnabled = true;
+            FfiBridge.instance.startPipeline();
+          }
+        }
       }
     } catch (e) {
       debugPrint('Failed to load plot config: $e');
@@ -1526,6 +1602,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         'plotThemeDark': _plotThemeDark,
         'autoAddChannels': _autoAddChannels,
         'useRealData': _useRealData,
+        'pipelineEnabled': _pipelineEnabled,
+        'analogEnvelopeEnabled': _analogEnvelopeEnabled,
       }));
       // Also sync to app_config.json so settings screen picks it up
       final exeDir = File(Platform.resolvedExecutable).parent.path;
@@ -1785,7 +1863,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _fitXAxis();
         _fitYAxis();
       });
-      if (USE_ANALOG_ENVELOPE) {
+      if (_analogEnvelopeEnabled) {
         final bridge = FfiBridge.instance;
         for (int ci = 0; ci < _channels.length; ci++) {
           bridge.analogEnsure(ci);
@@ -1813,7 +1891,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         plotGroupId: _plotGroups.isNotEmpty ? _plotGroups.first.id : 'default',
       ));
     });
-    if (USE_ANALOG_ENVELOPE) {
+    if (_analogEnvelopeEnabled) {
       FfiBridge.instance.analogEnsure(idx);
     }
     _saveConfig();
@@ -1975,7 +2053,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   void _showPyramidDebug() {
-    if (USE_ANALOG_ENVELOPE) {
+    if (_analogEnvelopeEnabled) {
       final buf = StringBuffer();
       for (var i = 0; i < _channels.length; i++) {
         final info = FfiBridge.instance.analogDumpDebug(i);
@@ -1985,7 +2063,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
       _pyramidDebugText = buf.toString();
     } else {
-      _pyramidDebugText = 'AnalogSegment envelope is DISABLED.\nSet USE_ANALOG_ENVELOPE = true to view pyramid state.';
+      _pyramidDebugText = 'AnalogSegment envelope is DISABLED.\nEnable "Analog Envelope" in toolbar to view pyramid state.';
     }
 
     showDialog(
@@ -2161,6 +2239,40 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               });
             },
             tooltip: 'Render Mode: ${_renderMode.name.toUpperCase()}',
+          ),
+          // Pipeline toggle (pre-computed envelope)
+          IconButton(
+            icon: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: _pipelineEnabled ? AppTheme.primary.withValues(alpha: 0.2) : AppTheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Icon(
+                _pipelineEnabled ? Icons.memory : Icons.memory_outlined,
+                color: _pipelineEnabled ? AppTheme.primary : AppTheme.textSecondary,
+                size: 20,
+              ),
+            ),
+            onPressed: _togglePipeline,
+            tooltip: _pipelineEnabled ? 'Pipeline ON (zero-copy envelope)' : 'Pipeline OFF (per-channel query)',
+          ),
+          // AnalogSegment envelope toggle (f32 10-level 16^n pyramid)
+          IconButton(
+            icon: Container(
+              padding: const EdgeInsets.all(4),
+              decoration: BoxDecoration(
+                color: _analogEnvelopeEnabled ? Colors.purple.withValues(alpha: 0.2) : AppTheme.surfaceVariant,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Icon(
+                _analogEnvelopeEnabled ? Icons.stacked_bar_chart : Icons.stacked_bar_chart_outlined,
+                color: _analogEnvelopeEnabled ? Colors.purple : AppTheme.textSecondary,
+                size: 20,
+              ),
+            ),
+            onPressed: _toggleAnalogEnvelope,
+            tooltip: _analogEnvelopeEnabled ? 'Analog Envelope ON (f32 pyramid)' : 'Analog Envelope OFF (f64)',
           ),
           // Pyramid Debug
           IconButton(
@@ -2716,6 +2828,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       shareYAxis: _shareYAxis,
                       globalYMin: _yMin,
                       globalYMax: _yMax,
+                      viewportRefreshCount: _viewportRefreshCount,
                     ),
                   ),
                 ),
@@ -3389,6 +3502,7 @@ class _MinimapPainter extends CustomPainter {
   final double dataXMin, dataXMax;
   final bool shareYAxis;
   final double globalYMin, globalYMax;
+  final int viewportRefreshCount;
 
   _MinimapPainter({
     required this.channels,
@@ -3397,6 +3511,7 @@ class _MinimapPainter extends CustomPainter {
     required this.shareYAxis,
     required this.globalYMin,
     required this.globalYMax,
+    required this.viewportRefreshCount,
   });
 
   @override
@@ -3454,7 +3569,8 @@ class _MinimapPainter extends CustomPainter {
         dataXMax != old.dataXMax ||
         shareYAxis != old.shareYAxis ||
         globalYMin != old.globalYMin ||
-        globalYMax != old.globalYMax;
+        globalYMax != old.globalYMax ||
+        viewportRefreshCount != old.viewportRefreshCount;
   }
 }
 
@@ -3609,6 +3725,13 @@ class _PlotPainter extends CustomPainter {
   // P2-2: Static layer cache (background/grid/axes — rebuild only on layout/theme change)
   static ui.Picture? _staticPicture;
   static int _staticVersion = 0;
+
+  /// Release static GPU resources. Call from PlotScreen.dispose() or on theme switch.
+  static void disposeStaticCache() {
+    _staticPicture?.dispose();
+    _staticPicture = null;
+    _staticVersion = 0;
+  }
 
   ui.Picture? _cachedPicture;
   int _cacheVersion = 0;

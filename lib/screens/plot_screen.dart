@@ -630,7 +630,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // ── AnalogSegment envelope read ──
   // Called when _analogEnvelopeEnabled is true (runtime toggle).
   // Reads per-channel envelope from AnalogSegment via C-ABI (f32 min/max pairs).
-  // When samplesPerPixel < ENVELOPE_THRESHOLD, uses trace mode (raw f32 values).
+  // When samplesPerPixel < envelopeThreshold, uses trace mode (raw f32 values).
   bool _refreshViewportFromAnalog() {
     // Wrap entire method in try to prevent calloc leaks on FFI crash (P2-3)
     try {
@@ -678,7 +678,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final timePerPx = timeRange > 0 ? timeRange / _screenWidth : 0.0;
       final samplesPerPixelDouble = timePerPx > 0
           ? sampleCount * timePerPx / timeRange
-          : ENVELOPE_THRESHOLD.toDouble();
+          : envelopeThreshold.toDouble();
 
       // Map viewport [xMin, xMax] to sample indices [0, sampleCount)
       // Uses proportional mapping within ch.data x-range (works for both Demo
@@ -696,7 +696,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       ch.envelopeData.clear();
 
       final useTrace = _renderMode == _RenderMode.trace ||
-          (_renderMode == _RenderMode.auto && samplesPerPixelDouble < ENVELOPE_THRESHOLD);
+          (_renderMode == _RenderMode.auto && samplesPerPixelDouble < envelopeThreshold);
       // ── Trace mode: raw f32 values ──
       if (useTrace) {
         traceBuf ??= calloc<Float>(maxSamples);
@@ -711,7 +711,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
-      // ── Envelope mode (samplesPerPixel >= ENVELOPE_THRESHOLD): min/max pairs ──
+      // ── Envelope mode (samplesPerPixel >= envelopeThreshold): min/max pairs ──
       final sectionStartPtr = calloc<Uint64>();
       final sectionScalePtr = calloc<Uint32>();
       final count = bridge.analogGetEnvelope(

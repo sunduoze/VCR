@@ -76,9 +76,9 @@ class PlotGroup {
 }
 
 /// Threshold for envelope vs trace rendering mode.
-/// samplesPerPixel < ENVELOPE_THRESHOLD -> trace mode (raw polyline)
-/// samplesPerPixel >= ENVELOPE_THRESHOLD -> envelope mode (min-max band)
-const double ENVELOPE_THRESHOLD = 2.0;
+/// samplesPerPixel < envelopeThreshold -> trace mode (raw polyline)
+/// samplesPerPixel >= envelopeThreshold -> envelope mode (min-max band)
+const double envelopeThreshold = 2.0;
 
 class PlotChannel {
   final String deviceId;

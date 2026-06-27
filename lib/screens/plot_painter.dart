@@ -396,7 +396,7 @@ class _PlotPainter extends CustomPainter {
     // P3-3: Added shareYAxis to hash (toggling shareYAxis changes grid rendering)
     // Memory-leak fix: round float values to 4 significant digits so that tiny
     // auto-scale fluctuations (<0.01% of range) don't invalidate the cache every frame.
-    double _hashRound(double v) {
+    double hashRound(double v) {
       if (v == 0.0) return 0.0;
       final abs = v.abs();
       final scale = abs < 1e-6 ? 1e12 : abs > 1e6 ? 1 : 1e6 / abs;

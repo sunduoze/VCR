@@ -176,10 +176,10 @@ pub fn debug_get_active_device_names() -> Vec<(String, String)> {
 pub fn start_receive_loop_if_needed(device_id: &str) {
     let has_task = lock_mutex(&RECEIVE_TASKS).contains_key(device_id);
     if !has_task {
-        log::info!("🧪 [DEBUG] 启动接收循环: {}", device_id);
+        log::debug!("[rx] starting receive loop: {}", device_id);
         spawn_receive_loop(device_id.to_string());
     } else {
-        log::info!("🧪 [DEBUG] 接收循环已存在: {}", device_id);
+        log::debug!("[rx] receive loop already exists: {}", device_id);
     }
 }
 
@@ -193,23 +193,14 @@ fn spawn_receive_loop(device_id: String) {
         loop {
             // Phase 1: receive (tokio I/O — no panic risk here)
             let data: Result<Vec<u8>, TransportError> = match SESSIONS.receive(&id).await {
-                Ok(data) if !data.is_empty() => {
-                    log::debug!("🧪 [DEBUG] [数据链路] 步骤1: 收到数据: {} 字节", data.len());
-                    Ok(data)
-                }
-                Ok(_) => {
-                    log::debug!("🧪 [DEBUG] 收到空数据，继续等待...");
-                    continue; // empty timeout — retry
-                }
-                Err(TransportError::Timeout) => {
-                    log::debug!("🧪 [DEBUG] 接收超时，继续等待...");
-                    continue;
-                }
+                Ok(data) if !data.is_empty() => Ok(data),
+                Ok(_) => continue, // empty timeout — retry
+                Err(TransportError::Timeout) => continue,
                 Err(e) => {
                     let _ = std::panic::catch_unwind(|| {
                         DEBUG.log_error(&id, &format!("Device disconnected: {:?}", e));
                     });
-                    log::warn!("🧪 [DEBUG] 设备断开连接: {:?}", e);
+                    log::warn!("[rx] device disconnected: {} — {:?}", id, e);
                     break;
                 }
             };

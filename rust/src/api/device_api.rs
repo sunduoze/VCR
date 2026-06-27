@@ -190,60 +190,35 @@ pub fn scan_serial_ports() -> Vec<PortInfo> {
 // 连接控制（添加详细日志，输出到 stderr 方便捕获）
 // ============================================================================
 
-/// 连接设备 (专家调试版本：添加详细日志到 stderr)
+/// 连接设备
 #[flutter_rust_bridge::frb]
 pub async fn connect_device(device_id: String) -> bool {
-    // 专家调试：记录每一步到 stderr（方便捕获）
-    log::debug!("🧪 [DEBUG] connect_device() 开始");
-    log::debug!("   - device_id: {}", device_id);
+    log::debug!("[connect] device_id={}", device_id);
 
-    // 1. 连接设备
-    log::debug!("🧪 [DEBUG] 步骤 1: 调用 SESSIONS.connect()");
     let connect_result = SESSIONS.connect(&device_id).await;
-    log::debug!("🧪 [DEBUG] 步骤 1 完成，结果: {:?}", connect_result.is_ok());
+    log::debug!("[connect] result={:?}", connect_result.is_ok());
 
     match connect_result {
         Ok(_) => {
-            log::debug!("🧪 [DEBUG] 步骤 2: 标记设备为已连接");
             DEBUG.mark_connected(&device_id);
-
-            log::debug!("🧪 [DEBUG] 步骤 3: 启动接收循环");
             start_receive_loop_if_needed(&device_id);
-            log::debug!("🧪 [DEBUG] 步骤 3 完成");
 
             // 连接成功后应用保存的硬件流控制设置 (从设备地址中解析)
-            log::debug!("🧪 [DEBUG] 步骤 4: 应用硬件流控制设置");
             if let Some(device) = REGISTRY.get(&device_id) {
                 let address = device.address.clone();
                 let parts: Vec<&str> = address.split(':').collect();
-
                 if parts.len() >= 10 {
-                    log::debug!("🧪 [DEBUG] 步骤 4a: 解析硬件流控制设置");
-                    log::debug!("   - DTR: {}", parts[7]);
-                    log::debug!("   - RTS: {}", parts[8]);
-                    log::debug!("   - BREAK: {}", parts[9]);
-
-                    if parts[7] == "1" {
-                        log::debug!("🧪 [DEBUG] 步骤 4b: 设置 DTR");
-                        let _ = SESSIONS.set_dtr(&device_id, true);
-                    }
-                    if parts[8] == "1" {
-                        log::debug!("🧪 [DEBUG] 步骤 4c: 设置 RTS");
-                        let _ = SESSIONS.set_rts(&device_id, true);
-                    }
-                    if parts[9] == "1" {
-                        log::debug!("🧪 [DEBUG] 步骤 4d: 设置 BREAK");
-                        let _ = SESSIONS.set_break(&device_id);
-                    }
+                    log::debug!("[connect] flow-control DTR={} RTS={} BREAK={}", parts[7], parts[8], parts[9]);
+                    if parts[7] == "1" { let _ = SESSIONS.set_dtr(&device_id, true); }
+                    if parts[8] == "1" { let _ = SESSIONS.set_rts(&device_id, true); }
+                    if parts[9] == "1" { let _ = SESSIONS.set_break(&device_id); }
                 }
             }
-            log::debug!("🧪 [DEBUG] 步骤 4 完成");
-
-            log::debug!("🧪 [DEBUG] connect_device() 成功完成");
+            log::info!("[connect] success: {}", device_id);
             true
         }
         Err(e) => {
-            log::error!("🧪 [DEBUG] connect_device() 失败: {:?}", e);
+            log::error!("[connect] failed: {} — {:?}", device_id, e);
             DEBUG.log_error(&device_id, &format!("Connect error: {:?}", e));
             false
         }

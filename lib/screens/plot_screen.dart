@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
-import 'dart:ffi' hide Size; // 🚀 Phase C: Pointer for native buffer reuse (hide Size to avoid dart:ui conflict)
+import 'dart:ffi' hide Size; // NOTE: Phase C: Pointer for native buffer reuse (hide Size to avoid dart:ui conflict)
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/gestures.dart';
@@ -120,7 +120,7 @@ class PlotChannel {
   double yMaxManual;
   bool autoScaleY; // Per-channel auto-scale
   String plotGroupId; // Which PlotGroup this channel belongs to
-  double? _smoothedYMin; // 🩺 EMA-smoothed Y-axis range for glitch-free rendering
+  double? _smoothedYMin; // DIAG: EMA-smoothed Y-axis range for glitch-free rendering
   double? _smoothedYMax;
 
   PlotChannel({
@@ -248,7 +248,8 @@ class _DataBuf {
 
   _DataBuf._fromBuffer(this._buf, this._len);
 
-  Float64List get rawBuf => _buf;
+  /// Copy of the underlying data buffer (safe — caller cannot mutate internal state).
+  Float64List get rawBuf => Float64List.fromList(_buf.sublist(0, _len * 2));
 }
 
 /// Scrollbar drag mode
@@ -271,7 +272,7 @@ enum _RenderMode { auto, trace, envelope }
 class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateMixin {
   // ── Data source ──
   bool _useRealData = false; // false = demo, true = real device
-  Timer? _realDataTimer; // 🚀 单定时器：合并 data fetch + UI update，消除竞态
+  Timer? _realDataTimer; // NOTE: 单定时器：合并 data fetch + UI update，消除竞态
   
   // ── Plot Groups ──
   List<PlotGroup> _plotGroups = [
@@ -343,18 +344,18 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   ui.Image? _gpuWaveformImage;
   bool _isGpuRendering = false;
 
-  // 🚀 P2-B 优化：增量更新版本号
+  // FIXED(P2)-B 优化：增量更新版本号
   // ignore: unused_field
   BigInt _lastDataVersion = BigInt.zero;
 
-  // 🚀 P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
+  // NOTE: P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
   int _viewportRefreshCount = 0;
 
-  // 🩺 Diagnostic: set true to enable verbose per-frame logging (DISABLE for production)
+  // DIAG: Diagnostic: set true to enable verbose per-frame logging (DISABLE for production)
   static const bool _verbose = false;
   int _frameCount = 0;
 
-  // 🚀 Phase C: Reusable query buffers (allocated once, resized lazily)
+  // NOTE: Phase C: Reusable query buffers (allocated once, resized lazily)
   Float64List? _queryBuffer;        // Reusable Float64List for _refreshViewportData
   Pointer<CDataPoint>? _queryNative; // Reusable native buffer for FFI queries
   int _queryNativeCap = 0;           // Current native buffer capacity (in CDataPoint elements)
@@ -422,7 +423,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Assign colors sequentially from the palette so adjacent channels always
   /// get contrasting hues.  Wraps at palette length for 17+ channels.
   Color _assignChannelColor() {
-    return _channelColors[_channels.length % _channelColors.length];
+    // HSL auto-generation: evenly distribute hues across the circle
+    // Maintains perceptual distinctiveness beyond 16 channels (P3-3)
+    final idx = _channels.length;
+    if (idx < _channelColors.length) return _channelColors[idx];
+    // Fallback: HSL with golden-ratio hue spacing for arbitrary channel count
+    final hue = (idx * 137.508) % 360; // golden angle ~137.5°, maximises colour separation
+    return HSLColor.fromAHSL(1.0, hue, 0.7, 0.55).toColor();
   }
 
   // ── Config persistence ──
@@ -609,7 +616,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _demoSampleIndices[i]++;
         }
       }
-      // 🚀 Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
+      // NOTE: Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
       final bridge = FfiBridge.instance;
       for (int i = 0; i < _channels.length; i++) {
         if (batchPerChannel[i].isNotEmpty) {
@@ -633,7 +640,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _debugLog('[TICK] sampleIndex=$_sampleIndex, totalPoints=$_totalPoints, first.ch.data.length=${_channels.isNotEmpty ? _channels.first.data.length : 0}');
       }
 
-      // 🩺 Fix: _refreshViewportData() MUST run BEFORE _fitYAxis() to ensure
+      // DIAG: Fix: _refreshViewportData() MUST run BEFORE _fitYAxis() to ensure
       // Y-axis uses the same data that will be rendered (not stale data from previous frame).
       // This eliminates a one-frame Y-axis↔data mismatch glitch.
       _refreshViewportData(); // Step 1: populate ch.viewportData with fresh data
@@ -673,7 +680,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Refresh viewportData for all channels using current _xMin/_xMax.
   /// Called after scrollbar drag, zoom, or any ChartViewport change.
-  /// 🚀 Phase A: Uses per-channel Rust LOD pyramid (pre-computed bucket aggregation)
+  /// NOTE: Phase A: Uses per-channel Rust LOD pyramid (pre-computed bucket aggregation)
   /// instead of O(n) binary search + sublist + step decimation.
   void _clearViewportCaches() {
     for (final ch in _channels) {
@@ -779,7 +786,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _refreshViewportData() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
-    // 🚀 P0-4: Zero-copy envelope read (pre-computed by Rust pipeline thread).
+    // FIXED(P0)-4: Zero-copy envelope read (pre-computed by Rust pipeline thread).
     // When pipeline is enabled, try envelope read first; fall back to pyramid query on failure.
     if (_pipelineEnabled) {
       if (_refreshViewportDataFromEnvelope()) return;
@@ -793,14 +800,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final maxPts = _screenWidth.round().clamp(500, 4000);
     final bridge = FfiBridge.instance;
 
-    // 🚀 Reusable Float64List buffer for pyramid query results
+    // NOTE: Reusable Float64List buffer for pyramid query results
     final maxDatapoints = maxPts * 2;
     if (_queryBuffer == null || _queryBuffer!.length != maxDatapoints * 2) {
       _queryBuffer = Float64List(maxDatapoints * 2);
     }
     final fb = _queryBuffer!;
 
-    // 🚀 Phase C: Reuse native CDataPoint buffer
+    // NOTE: Phase C: Reuse native CDataPoint buffer
     Pointer<CDataPoint> nativeBuf;
     if (_queryNative != null && _queryNativeCap >= maxDatapoints) {
       nativeBuf = _queryNative!;
@@ -985,7 +992,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// 分离的数据轮询（策略 B: 减少 FRB 调用）
   /// 后台快速轮询，不触发 UI 更新
   void _fetchRealData() {
-    // 🚀 P3-B 双缓冲：每次获取数据前，先 swap 缓冲区
+    // NOTE: P3-B 双缓冲：每次获取数据前，先 swap 缓冲区
     RustLib.instance.api.crateApiPlotApiPlotSwapBuffers();
     
     if (!_useRealData) return; // Skip in demo mode
@@ -1053,7 +1060,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             final allPoints = plotGetAllChannels(deviceId: deviceId);
             final pts = allPoints[chName];
             if (pts != null && pts.isNotEmpty) {
-              // 🚀 P0-1: Use Rust timestampMs as X value (synced with pipeline pyramid)
+              // FIXED(P0)-1: Use Rust timestampMs as X value (synced with pipeline pyramid)
               ch.data = pts.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
               ch.currentValue = pts.last.value;
               // Pipeline pushes from receive loop — no Dart push needed
@@ -1063,7 +1070,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             try {
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
-                // 🚀 P0-1: Use Rust timestampMs (synced with pipeline::push_sample_batch_with_x)
+                // FIXED(P0)-1: Use Rust timestampMs (synced with pipeline::push_sample_batch_with_x)
                 for (int k = 0; k < latestData.length; k++) {
                   ch.data.add(_DataPoint(latestData[k].timestampMs, latestData[k].value));
                 }
@@ -1073,7 +1080,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   ch.data.removeRange(0, ch.data.length - _maxPoints);
                   // Pyramid self-manages via TimeBucket::max_buckets — no Dart trimming needed
                 }
-                // 🚀 Incremental point counting (avoid O(all_data) fold)
+                // NOTE: Incremental point counting (avoid O(all_data) fold)
                 _totalPoints += latestData.length;
               }
             } catch (_) {}
@@ -1091,14 +1098,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _startRealData() {
     _realDataTimer?.cancel();
 
-    // 🚀 单定时器架构：数据获取 + UI 更新在同一回调中顺序执行
+    // NOTE: 单定时器架构：数据获取 + UI 更新在同一回调中顺序执行
     // 消除 _fetchTimer / _realDataTimer 双定时器竞态：
     // - 旧架构：两个独立 100ms Timer，执行顺序不确定
     // - 新架构：单个 50ms Timer，先 fetch → 再 UI update，保证 pyramid 数据就绪
     // _updateRealDataUI 内部保留 33ms 节流，控制实际 UI 刷新率
     _realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       _fetchRealData();
-      // 🩺 Diagnostic: track viewportData population
+      // DIAG: Diagnostic: track viewportData population
       if (_channels.isNotEmpty) {
         final hasData = _channels.where((c) => c.visible && c.data.isNotEmpty);
         final noViewport = hasData.where((c) => c.viewportData.isEmpty);
@@ -1107,7 +1114,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
         _frameCount++;
       }
-      // 🩺 Diagnostic: check Rust-side overflow counts every 200 frames (~10s)
+      // DIAG: Diagnostic: check Rust-side overflow counts every 200 frames (~10s)
       if (_frameCount % 200 == 0) {
         try {
           final overflow = RustLib.instance.api.crateApiPlotApiPlotGetOverflowCounts();
@@ -1127,7 +1134,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _useRealData = !_useRealData;
       _saveConfig();
 
-      // 🚀 Clear pyramid data to prevent demo↔real data mixing.
+      // NOTE: Clear pyramid data to prevent demo↔real data mixing.
       // Demo and Real channels share integer indices (0,1,2,...) as pyramid keys;
       // switching modes reuses same indices with different channel lists.
       FfiBridge.instance.clearAllChannelPyramids();
@@ -1139,7 +1146,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // (otherwise shouldRepaint returns false, reusing stale demo rendering).
       _viewportRefreshCount++;
 
-      // 🔧 P2-3: Reset EMA-smoothed Y-axis range on data-source switch.
+      // FIX: P2-3: Reset EMA-smoothed Y-axis range on data-source switch.
       // Without this, Demo↔Real carry-over pollutes Y axis for several seconds.
       for (final ch in _channels) {
         ch._smoothedYMin = null;
@@ -1241,7 +1248,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _debugLog('[FITX] Default: no channels, xMin=$bufMin');
   }
 
-  // 🚀 性能优化：计算绘图区域尺寸（用于GPU渲染）
+  // NOTE: 性能优化：计算绘图区域尺寸（用于GPU渲染）
   double _plotWidth() {
     final yAxisChannels = _channels.where((ch) => ch.visible && ch.showYAxis).toList();
     final leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
@@ -1290,7 +1297,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final targetMin = minVal - padding;
     final targetMax = maxVal + padding;
     
-    // 🩺 EMA-smooth Y-axis to eliminate 1-frame range oscillation glitches.
+    // DIAG: EMA-smooth Y-axis to eliminate 1-frame range oscillation glitches.
     // Smoothing factor 0.4: ~40% new + 60% old. Smaller = more stable, larger = faster adaptation.
     const double ySmooth = 0.4;
     if (ch._smoothedYMin == null) {
@@ -1303,7 +1310,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     ch.yMin = ch._smoothedYMin!;
     ch.yMax = ch._smoothedYMax!;
     ch.autoScaleY = true;
-    // 🩺 Diagnostic: detect Y-axis oscillation (target range change > 5%)
+    // DIAG: Diagnostic: detect Y-axis oscillation (target range change > 5%)
     // Note: smoothed values are used for rendering; this detects raw target oscillations
     if (prevYMax != double.negativeInfinity) {
       final yRangeDelta = ((targetMax - targetMin) - (prevYMax - prevYMin)).abs();
@@ -1468,7 +1475,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     // Release static GPU Picture cache (prevents long-running memory leak)
     _PlotPainter.disposeStaticCache();
-    // 🚀 Phase C: Free reusable native query buffer
+    // NOTE: Phase C: Free reusable native query buffer
     if (_queryNative != null) {
       calloc.free(_queryNative!);
       _queryNative = null;
@@ -1752,7 +1759,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.viewportData.clear();
         ch.envelopeData.clear();
         ch.currentValue = 0.0;
-        // 🔧 P2-3: Reset EMA-smoothed Y-axis range on data clear.
+        // FIX: P2-3: Reset EMA-smoothed Y-axis range on data clear.
         // Without this, switch Demo↔Real carries over old channel's
         // smoothed range → wrong Y-axis for several seconds.
         ch._smoothedYMin = null;
@@ -1760,7 +1767,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.yMin = -1;
         ch.yMax = 1;
       }
-      // 🚀 Clear pyramid data on data reset
+      // NOTE: Clear pyramid data on data reset
       FfiBridge.instance.clearAllChannelPyramids();
       _totalPoints = 0;
       if (_scrollMode) {
@@ -3620,7 +3627,7 @@ class _PlotPainter extends CustomPainter {
   static final _aaDownsamplePaint = Paint()
     ..filterQuality = FilterQuality.medium
     ..blendMode = BlendMode.srcOver;
-  // 🚀 P1: Reusable per-channel Paint + Path objects (zero per-frame allocation)
+  // FIXED(P1): Reusable per-channel Paint + Path objects (zero per-frame allocation)
   static final _linePaint = Paint()..style = PaintingStyle.stroke;
   static final _envelopeFillPaint = Paint()
     ..style = PaintingStyle.fill;
@@ -3861,7 +3868,7 @@ class _PlotPainter extends CustomPainter {
       }
       picture.dispose();
     } else {
-      // 🚀 P1-A 优化：PictureRecorder 缓存
+      // FIXED(P1)-A 优化：PictureRecorder 缓存
       // Content-based hash: tracks actual viewport data shape, not frame counter.
       // The counter changes every frame in real-time mode → cache was always invalid.
       int contentHash = Object.hash(xMin, xMax, yMin, yMax);
@@ -3940,7 +3947,7 @@ class _PlotPainter extends CustomPainter {
     }
 
     if (_staticPicture == null || _staticVersion != staticHash) {
-      // 🩺 Memory leak fix: dispose old Picture before creating new one.
+      // DIAG: Memory leak fix: dispose old Picture before creating new one.
       // Skia Picture wraps native GPU resources; without explicit dispose(),
       // the old picture's resources leak until Dart GC runs (which may take
       // minutes → multi-GB accumulation). Root cause of the ~9.5GB issue.
@@ -4200,7 +4207,7 @@ class _PlotPainter extends CustomPainter {
       return;
     }
 
-    // 🚀 Phase B: Render envelope fill (semi-transparent min-max band) before foreground line
+    // NOTE: Phase B: Render envelope fill (semi-transparent min-max band) before foreground line
     final envData = ch.envelopeData;
     if (envData.isNotEmpty && envData.length >= 2) {
       _drawEnvelope(canvas, ch, envData, ox, oy, w, h, yTransform);
@@ -4227,19 +4234,19 @@ class _PlotPainter extends CustomPainter {
   }
 
   // 数据抽取：将大量数据点减少到适合屏幕显示的密度
-  // 🚀 性能优化：每个像素bucket只保留1个最有代表性的点
+  // NOTE: 性能优化：每个像素bucket只保留1个最有代表性的点
 void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     if (data.isEmpty) return;
     
-    // 🚀 性能优化：使用Path批量绘制，减少draw call次数
+    // NOTE: 性能优化：使用Path批量绘制，减少draw call次数
     final paint = Paint()
       ..color = ch.color
       ..strokeWidth = ch.lineWidth
       ..strokeCap = StrokeCap.round;
     
-    // 🚀 P1-B 优化：批量绘制（替代 250K 次 drawCircle 调用）
+    // FIXED(P1)-B 优化：批量绘制（替代 250K 次 drawCircle 调用）
     // drawRawPoints 需要扁平的 Float32List: [x1,y1, x2,y2, ...]
-    // 🔧 P0: reuse _lineBuf (same format), guarded with sublistView
+    // FIX: P0: reuse _lineBuf (same format), guarded with sublistView
     final n = data.length;
     if (_lineBuf == null || _lineBuf!.length < n * 2) {
       _lineBuf = Float32List(n * 2);
@@ -4252,7 +4259,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     canvas.drawRawPoints(ui.PointMode.points, Float32List.sublistView(buf, 0, n * 2), paint);
   }
 
-  // 🚀 Phase B: Render envelope fill background (semi-transparent min-max band)
+  // NOTE: Phase B: Render envelope fill background (semi-transparent min-max band)
   void _drawEnvelope(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
     if (data.length < 4) return; // need ≥2 buckets (4 points: min0,max0,min1,max1)
 
@@ -4281,7 +4288,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     canvas.drawRawPoints(ui.PointMode.polygon, envView, _envelopeFillPaint);
   }
 
-  // 🚀 P1-2: Oscilloscope-style min-max vertical lines per bucket.
+  // FIXED(P1)-2: Oscilloscope-style min-max vertical lines per bucket.
   // Draws a thin vertical line from yMin to yMax for each downsampled time bucket.
   // Combined with envelope fill, this gives the classic oscilloscope density view:
   //   envelope fill → wide band (25% alpha)
@@ -4358,7 +4365,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
   void _drawDotLine(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale) {
     if (data.isEmpty) return;
 
-    // 🔧 P0: Use Path (non-closing polyline) to avoid PointMode.polygon
+    // FIX: P0: Use Path (non-closing polyline) to avoid PointMode.polygon
     // auto-close diagonal artifact. Also avoids stale buffer pollution.
     _polylinePath.reset();
     final sx = _xToScreen(data.x(0), w) + ox;
@@ -4388,7 +4395,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     canvas.drawRawPoints(ui.PointMode.points, Float32List.sublistView(buf, 0, n * 2), _dotPointPaint);
   }
 
-  // 🔧 P0: Reusable Path for non-closing polyline drawing.
+  // FIX: P0: Reusable Path for non-closing polyline drawing.
   // drawRawPoints(PointMode.polygon) auto-closes last→first → diagonal artifact.
   // drawRawPoints(PointMode.lines) treats every pair as independent — breaks continuity.
   // Path with moveTo+lineTo is the correct non-closing polyline primitive.
@@ -4400,7 +4407,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     _linePaint.color = ch.color;
     _linePaint.strokeWidth = ch.lineWidth;
 
-    // 🔧 P0: Use Path (non-closing polyline) to avoid PointMode.polygon auto-close
+    // FIX: P0: Use Path (non-closing polyline) to avoid PointMode.polygon auto-close
     // diagonal artifact AND avoid stale Float32List buffer pollution.
     _polylinePath.reset();
     final sx = _xToScreen(data.x(0), w) + ox;
@@ -4420,7 +4427,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     _linePaint.color = ch.color;
     _linePaint.strokeWidth = ch.lineWidth;
 
-    // 🔧 P0: Reuse static _polylinePath (same as _drawLine).
+    // FIX: P0: Reuse static _polylinePath (same as _drawLine).
     // Avoid per-frame Path allocation.
     _polylinePath.reset();
     final sx = _xToScreen(data.x(0), w) + ox;
@@ -4546,13 +4553,13 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
 
   @override
   bool shouldRepaint(covariant _PlotPainter oldDelegate) {
-    // 🚀 Mouse/cursor moved? Always repaint (instant crosshair feedback)
+    // NOTE: Mouse/cursor moved? Always repaint (instant crosshair feedback)
     if (mousePosition != oldDelegate.mousePosition) return true;
 
-    // 🚀 Render mode changed? Repaint needed
+    // NOTE: Render mode changed? Repaint needed
     if (renderMode != oldDelegate.renderMode) return true;
 
-    // 🚀 Channel config changed (decimals, showYAxis, etc)? Repaint needed
+    // NOTE: Channel config changed (decimals, showYAxis, etc)? Repaint needed
     if (channels.length != oldDelegate.channels.length) return true;
     for (int i = 0; i < channels.length; i++) {
       final a = channels[i];
@@ -4566,7 +4573,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
       }
     }
 
-    // 🔧 P3-B revisited: viewportRefreshCount is incremented whenever
+    // FIX: P3-B revisited: viewportRefreshCount is incremented whenever
     // _refreshViewportData() runs → new viewportData is available → MUST repaint.
     // Previously this was a negative check (return false when equal but skip when
     // different), which meant xMin/xMax/yMin/yMax changes were sometimes missed.
@@ -4574,7 +4581,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
       return true; // Viewport data was refreshed — always repaint
     }
     
-    // 🚀 If viewport counter hasn't changed, check whether coordinates moved
+    // NOTE: If viewport counter hasn't changed, check whether coordinates moved
     // (scrollbar drag / pan / zoom can change coordinates without refreshing viewport data).
     if (xMin != oldDelegate.xMin || xMax != oldDelegate.xMax ||
         yMin != oldDelegate.yMin || yMax != oldDelegate.yMax) {

@@ -405,7 +405,7 @@ class _PlotPainter extends CustomPainter {
     int staticHash = Object.hash(
       isDarkTheme,
       plotLeft, plotTop, plotW, plotH,
-      _hashRound(xMin), _hashRound(xMax), _hashRound(yMin), _hashRound(yMax),
+      hashRound(xMin), hashRound(xMax), hashRound(yMin), hashRound(yMax),
       deltaTime, globalDecimals,
       shareYAxis,
       yAxisChannels.length,
@@ -414,8 +414,8 @@ class _PlotPainter extends CustomPainter {
       final ch = yAxisChannels[ci];
       staticHash = Object.hash(staticHash,
         ch.visible, ch.showYAxis, ch.decimals, ch.color.toARGB32(),
-        ch.autoScaleY, _hashRound(ch.yMin), _hashRound(ch.yMax),
-        _hashRound(ch.yMinManual), _hashRound(ch.yMaxManual),
+        ch.autoScaleY, hashRound(ch.yMin), hashRound(ch.yMax),
+        hashRound(ch.yMinManual), hashRound(ch.yMaxManual),
         ci % 2, // left/right side
       );
     }
@@ -675,7 +675,7 @@ class _PlotPainter extends CustomPainter {
     // produce ugly wide vertical bars. A simple polyline is cleaner.
     final samplesPerPixel = data.length / w;
     final useTrace = renderMode == _RenderMode.trace ||
-        (renderMode == _RenderMode.auto && samplesPerPixel < ENVELOPE_THRESHOLD);
+        (renderMode == _RenderMode.auto && samplesPerPixel < envelopeThreshold);
     if (useTrace) {
       _drawTrace(canvas, ch, data, ox, oy, w, h, yTransform);
       return;
@@ -894,7 +894,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
   }
 
   // ── Trace mode: raw sample polyline (no envelope, no downsampling) ──
-  // Used when samplesPerPixel < ENVELOPE_THRESHOLD (zoomed in).
+  // Used when samplesPerPixel < envelopeThreshold (zoomed in).
   void _drawTrace(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
     if (data.isEmpty) return;
 

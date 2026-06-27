@@ -79,7 +79,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _isPlaying = true;
 
   // Render mode: auto (threshold-based), trace (always raw polyline), envelope (always min-max band)
+  // Pause anomaly fix: when resuming from ExtendedPause (>~10s), force one full refresh
+  // so the waveform doesn't show stale data from before the pause.
   _RenderMode _renderMode = _RenderMode.auto;
+  DateTime _pauseEndTime = DateTime.now();
   String _pyramidDebugText = '';
 
   // ── Pipeline thread toggle ──
@@ -2106,11 +2109,19 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               _isPlaying = !_isPlaying;
             });
             if (!_isPlaying) {
-              // Pause: cancel timer to stop all updates
+              // Pause: cancel all timers
               _realDataTimer?.cancel();
-            } else if (_useRealData) {
-              // Resume: restart timers
-              _startRealData();
+              _demoTimer?.cancel();
+            } else {
+              // Resume: restart timers + force viewport refresh
+              if (_useRealData) {
+                _startRealData();
+              } else {
+                _startDemoData();
+              }
+              _refreshViewportData();
+              if (_autoScaleY) _fitYAxis();
+              if (!_scrollMode && _autoScaleX) _fitXAxis();
             }
           },
             tooltip: _isPlaying ? 'Pause Display' : 'Resume Display',
@@ -2420,8 +2431,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     _yMin = _dragStartYMin + dy / h * yRange;
                     _yMax = _dragStartYMax + dy / h * yRange;
                   }
-                  // ⚡ skip _refreshViewportData during drag for smooth panning
-                  _clearViewportCaches();
+                  // BUGFIX #2/#4: Don't clear viewportData during drag.
+                  // _clearViewportCaches() created empty-viewport frames → flash.
+                  // Instead, reuse existing viewportData with updated xMin/xMax;
+                  // the painter maps coordinates correctly. Slightly stale data
+                  // (shifted viewport) is far better than a blank screen.
+                  // On drag end, _refreshViewportData fills in new range.
                 });
               },
               onPanEnd: (_) {
@@ -2446,6 +2461,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     // Zoom factor: scroll up = zoom in (factor < 1), scroll down = zoom out (factor > 1)
                     final factor = dy > 0 ? 1.1 : 0.9;
 
+                    // BUGFIX #5: After zoom, immediately refresh viewport data.
+                    // Without this, zooming in shows stale/empty data until
+                    // the next tick (up to 50ms delay).
+                    // All zoom logic is preserved below, then: _refreshViewportData.
                     setState(() {
                       if (nearXAxis) {
                         // X-axis scroll: zoom X only
@@ -2500,6 +2519,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         _yMax = yCenter + yRange / 2 * factor;
                       }
                     });
+                    _refreshViewportData();
                   }
                 },
                 child: CustomPaint(
@@ -2655,7 +2675,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       } else {
                         _autoScaleX = false;
                       }
-                      setState(() { _clearViewportCaches(); }); // ⚡ drag-only: skip _refreshViewportData (17 FFI calls) for smooth UI
+                      // BUGFIX #2/#4: Don't clear viewport during scrollbar drag.
+                      // Reuse existing data with shifted coordinates.
                     },
                     onHorizontalDragEnd: (d) {
                       _scrollbarDrag = _ScrollbarDrag.none;
@@ -2703,7 +2724,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         } else {
                           _autoScaleX = false;
                         }
-                        setState(() { _clearViewportCaches(); }); // ⚡ drag-only: skip _refreshViewportData
+                        // BUGFIX #2/#4: Don't clear viewport during drag
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;
@@ -2751,7 +2772,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         } else {
                           _autoScaleX = false;
                         }
-                        setState(() { _clearViewportCaches(); }); // ⚡ drag-only: skip _refreshViewportData
+                        // BUGFIX #2/#4: Don't clear viewport during drag
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;

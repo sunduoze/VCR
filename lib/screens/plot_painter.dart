@@ -793,7 +793,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
       buf[pi++] = syMax;
     }
 
-    _minMaxLinePaint.color = ch.color.withValues(alpha: 0.40);
+    _minMaxLinePaint.color = ch.color.withValues(alpha: 0.65);
     final mmView = Float32List.sublistView(buf, 0, pi);
     canvas.drawRawPoints(ui.PointMode.lines, mmView, _minMaxLinePaint);
   }
@@ -895,22 +895,34 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
 
   // ── Trace mode: raw sample polyline (no envelope, no downsampling) ──
   // Used when samplesPerPixel < envelopeThreshold (zoomed in).
+  // BUGFIX #1: Respect ch.lineStyle instead of always drawing a continuous polyline.
+  // Previously all styles rendered as Line in trace mode, because _drawTrace
+  // ignored the channel's lineStyle setting. Now delegates to the correct drawer.
   void _drawTrace(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
     if (data.isEmpty) return;
 
-    _linePaint.color = ch.color;
-    _linePaint.strokeWidth = ch.lineWidth;
-
-    // FIX: P0: Reuse static _polylinePath (same as _drawLine).
-    // Avoid per-frame Path allocation.
-    _polylinePath.reset();
-    final sx = _xToScreen(data.x(0), w) + ox;
-    final sy = yTransform(data.y(0)) + oy;
-    _polylinePath.moveTo(sx, sy);
-    for (int i = 1; i < data.length; i++) {
-      _polylinePath.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
+    switch (ch.lineStyle) {
+      case LineStyle.dot:
+        _drawDots(canvas, ch, data, ox, oy, w, h, yTransform, 1.0);
+        break;
+      case LineStyle.dotLine:
+        _drawDotLine(canvas, ch, data, ox, oy, w, h, yTransform, 1.0);
+        break;
+      case LineStyle.line:
+      case LineStyle.filled:
+        // Both use a continuous polyline in trace mode
+        _linePaint.color = ch.color;
+        _linePaint.strokeWidth = ch.lineWidth;
+        _polylinePath.reset();
+        final sx = _xToScreen(data.x(0), w) + ox;
+        final sy = yTransform(data.y(0)) + oy;
+        _polylinePath.moveTo(sx, sy);
+        for (int i = 1; i < data.length; i++) {
+          _polylinePath.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
+        }
+        canvas.drawPath(_polylinePath, _linePaint);
+        break;
     }
-    canvas.drawPath(_polylinePath, _linePaint);
   }
 
   void _drawFilled(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform, double scale, double chYMin, double chYMax) {

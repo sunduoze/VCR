@@ -1,300 +1,315 @@
-# VCR - Visual Data Recording & Plotting Tool
+# VCR — 虚拟仪器控制与可视化终端
 
-English | [中文](#vcr---可视化数据记录与绘图工具)
-
-A cross-platform desktop application for real-time data visualization, built with **Flutter** and **Rust**.
-
-## 🚀 Features
-
-- **Real-time Plotting**: Multi-channel data visualization with adjustable sample rates
-- **Data Recording**: Save data to CSV files for offline analysis
-- **Protocol Support**: Serial port, TCP/UDP, and custom protocols
-- **Cross-platform**: Windows, Linux (WIP)
-- **High Performance**: Rust backend with Flutter frontend
-- **Flexible Display**: Share Y-axis, per-channel Y-axis, scroll mode (oscilloscope-style)
-- **Data Export/Import**: CSV import for offline analysis
-- **Debug Console**: Real-time log output for troubleshooting
-
-## 📦 Architecture
-
-```
-VCR/
-├── lib/                  # Flutter frontend
-│   ├── screens/         # UI screens (plot_screen.dart)
-│   ├── widgets/         # Reusable widgets
-│   └── models/          # Data models
-├── rust/                # Rust backend
-│   ├── src/
-│   │   ├── api/         # FFI bindings (debug_api.rs, plot_api.rs)
-│   │   ├── core/        # Core logic (protocol, plot)
-│   │   └── ffi/        # Foreign function interface
-│   └── Cargo.toml
-├── linux/               # Linux platform files
-├── windows/             # Windows platform files
-└── test/                # Unit and integration tests
-```
-
-## 🛠️ Building from Source
-
-### Prerequisites
-
-- **Flutter**: 3.24+ (tested on 3.41.7)
-- **Rust**: 1.75+ (tested on 1.95.0)
-- **flutter_rust_bridge**: 2.0+ (tested on 2.12.0)
-- **Visual Studio 2022** (Windows only, for MSVC toolchain)
-
-### Windows
-
-```powershell
-# Clone the repository
-git clone <repo-url>
-cd VCR
-
-# Install dependencies
-flutter pub get
-cargo build --release
-
-# Generate FFI bindings
-flutter_rust_bridge_codegen generate
-
-# Build the application
-flutter build windows --release
-```
-
-### Linux (Work in Progress)
-
-```bash
-# Install dependencies
-sudo apt-get install libudev-dev
-
-# Build
-flutter build linux --release
-```
-
-## ⚙️ Configuration
-
-### Rust Mirror (China)
-
-If you're in China, configure Rust crate mirror:
-
-```toml
-# ~/.cargo/config.toml
-[source.crates-io]
-replace-with = 'rsproxy'
-
-[source.rsproxy]
-registry = "https://rsproxy.cn/index/"
-```
-
-### Flutter Mirror (China)
-
-```bash
-# Use Tsinghua mirror
-export FLUTTER_STORAGE_BASE_URL=https://mirrors.tuna.tsinghua.edu.cn/flutter
-flutter config --enable-windows-uwp-desktop
-```
-
-## 🐛 Debugging
-
-### Debug Console
-
-The application includes a debug console window that shows real-time logs:
-
-- **Log file**: `vcr_debug_YYYYMMDD_HHMMSS.log` (saved in working directory)
-- **Log levels**: `debug`, `info`, `warn`, `error`
-- **Dual output**: Logs are written to both file and debug console
-
-### Common Issues
-
-**1. Ch0 Data Display Error**
-- **Symptom**: Ch0 curve shape is incorrect
-- **Cause**: CSV parsing may misinterpret prefix
-- **Fix**: Check `rust/src/core/protocol/csv_parser.rs`
-
-**2. Pause Button Doesn't Stop Data**
-- **Symptom**: Pause button doesn't stop data updates
-- **Cause**: Timers not cancelled on pause
-- **Fix**: Cancel `_fetchTimer` and `_realDataTimer` in `_togglePause()`
-
-**3. Y-Axis Display Issue**
-- **Symptom**: Y-axis shows incorrectly when all channels have `showYAxis = false`
-- **Cause**: `yAxisChannels.length <= 1` incorrectly handles empty list
-- **Fix**: Changed to `yAxisChannels.length == 1`
-
-## 📊 Performance Optimization
-
-- **Viewport Decimation**: Automatically decimates data when zooming/scrolling
-- **Ring Buffer**: Rust-side `ChannelBuffer` uses fixed-size ring buffer (10,000 points)
-- **Throttled UI Updates**: UI updates throttled to ~30 FPS
-- **Batch Data Fetching**: Single FFI call fetches all channel data
-
-## 🤝 Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/foo`)
-3. Commit your changes (`git commit -am 'Add foo'`)
-4. Push to the branch (`git push origin feature/foo`)
-5. Create a Pull Request
-
-## 📄 License
-
-TODO: Add license information
+**V**irtual Instrument **C**ontrol & **R**ecording — 一款跨平台实时数据采集与波形可视化桌面应用，基于 Flutter + Rust 混合架构构建。
 
 ---
-
-# VCR - 可视化数据记录与绘图工具
-
-[English](#vcr---visual-data-recording--plotting-tool) | 中文
-
-一个用于实时数据可视化的跨平台桌面应用程序，使用 **Flutter** 和 **Rust** 构建。
 
 ## 🚀 功能特性
 
-- **实时绘图**：多通道数据可视化，可调采样率
-- **数据记录**：保存数据到 CSV 文件，用于离线分析
-- **协议支持**：串口、TCP/UDP、自定义协议
-- **跨平台**：Windows、Linux（进行中）
-- **高性能**：Rust 后端 + Flutter 前端
-- **灵活显示**：共享 Y 轴、每通道独立 Y 轴、滚动模式（示波器风格）
-- **数据导出/导入**：CSV 导入用于离线分析
-- **调试控制台**：实时日志输出，便于故障排查
+| 模块 | 功能 |
+|------|------|
+| **实时波形绘图** | 多通道示波器级渲染，12 通道 Demo 波形 + 真实设备数据采集 |
+| **多模式显示** | 滚动模式（示波器扫掠）、定格模式、缩放/平移 |
+| **样式系统** | Line / Dot / Dot-Line / Filled 四种线型，16 色感知均匀通道调色板 |
+| **数据记录** | CSV 导入导出，支持离线回放分析 |
+| **协议解析** | 串口、TCP、Modbus RTU/TCP、SCPI、Raw 协议插件 |
+| **Lua 脚本引擎** | 内置 Lua 5.3 运行时，支持自动化测试、数据生成、协议解析脚本 |
+| **虚拟设备** | 内置虚拟设备模拟器，无需硬件即可开发测试 |
+| **GPU 加速** | 基于 wgpu (WebGPU) 的硬件加速渲染管线 |
+| **调试控制台** | 实时日志输出，分级控制 (trace/debug/info/warn/error) |
+| **跨平台** | Windows（主力）、Linux（WIP） |
 
-## 📦 项目结构
+## 🏗️ 架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Flutter (Dart)                          │
+│  screens/   widgets/   models/   core/   render/   app/     │
+│     ▲                                                       │
+│     │  flutter_rust_bridge v2.12  (FFI / 零拷贝)             │
+│     ▼                                                       │
+│                       Rust (vcr_lib)                         │
+│  api/  core/  renderer/                                      │
+│  ┌──────────┬──────────────┬──────────────┬───────────┐    │
+│  │  device  │    plot      │  protocol    │ transport │    │
+│  │  registry│  pipeline    │  csv/modbus  │ serial    │    │
+│  │  models  │  analog_seg  │  scpi/raw    │ tcp       │    │
+│  │  preset  │  time_bucket │  registry    │ modbus    │    │
+│  └──────────┴──────────────┴──────────────┴───────────┘    │
+│  ┌──────────┬──────────────┬──────────────────────────┐    │
+│  │ session  │ virtual_dev  │  renderer (wgpu/WebGPU)   │    │
+│  │ manager  │ simulator    │  shader_waveform.wgsl     │    │
+│  └──────────┴──────────────┴──────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 数据路径
+
+```
+硬件/虚拟设备 → Transport → Protocol Parser → ChannelBuffer (ring)
+                                                    │
+                    ┌───────────────────────────────┤
+                    ▼                               ▼
+          TimeBucketPyramid                 AnalogSegment (f32, 10-level 16ⁿ)
+          (f64, LOD 层级)                         │
+                    │                               │
+                    └───────────┬───────────────────┘
+                                ▼
+                     Pipeline Thread (async)
+                     · 零拷贝 envelope 预计算
+                     · 双缓冲 gen-lock
+                                │
+                                ▼
+                     _PlotScreenState._onTick()
+                     · _refreshViewportData()
+                     · _fitYAxis() / _fitXAxis()
+                     · setState() → CustomPainter
+```
+
+### 渲染管线
+
+```
+采样点/像素 < envelopeThreshold (2.0)
+  → Trace 模式：原始折线 (raw polyline)
+  → 按 LineStyle 路由到 _drawLine / _drawDots / _drawDotLine / _drawFilled
+
+采样点/像素 ≥ envelopeThreshold
+  → Envelope 模式：
+    1. _drawEnvelope() — 半透明 min-max 填充带 (α=0.25)
+    2. _drawMinMaxLines() — 竖线密度条 (α=0.65)
+    3. _drawGapMarkers() — 时间断点标记 (α=0.18)
+    4. 前景线 — avg trace (α=1.0)
+```
+
+## 📂 项目结构
 
 ```
 VCR/
-├── lib/                  # Flutter 前端
-│   ├── screens/         # UI 界面 (plot_screen.dart)
-│   ├── widgets/         # 可复用组件
-│   └── models/          # 数据模型
-├── rust/                # Rust 后端
+├── lib/                          # Flutter 前端 (Dart)
+│   ├── main.dart                 # 入口，RustLib.init(), 日志初始化
+│   ├── app/
+│   │   ├── routes.dart           # 路由表 (7 screens + MainShell)
+│   │   └── theme.dart            # 主题定义
+│   ├── screens/
+│   │   ├── plot_screen.dart      # ★ 核心：示波器波形界面 (~3200 行)
+│   │   ├── plot_models.dart      # PlotChannel, PlotGroup, LineStyle, _DataBuf
+│   │   ├── plot_painter.dart     # CustomPainter：envelope/trace/dots 渲染
+│   │   ├── device_list_screen.dart
+│   │   ├── device_detail_screen.dart
+│   │   ├── settings_screen.dart  # 日志级别、文件日志、主题设置
+│   │   ├── debug_console_screen.dart
+│   │   ├── lua_script_screen.dart # Lua 脚本编辑器 + 运行时
+│   │   └── gpu_test_screen.dart  # GPU 诊断
+│   ├── widgets/
+│   │   ├── main_shell.dart       # 主导航框架 (5-tab)
+│   │   ├── multi_send_panel.dart
+│   │   └── status_indicator.dart
+│   ├── core/
+│   │   ├── ffi_bridge.dart       # 零拷贝 FFI：Pointer.asTypedList, 批量查询
+│   │   ├── viewport.dart
+│   │   └── typed_data_pool.dart
+│   ├── render/
+│   │   └── picture_cache.dart    # PictureRecorder 缓存
+│   ├── models/
+│   │   └── multi_send_item.dart
+│   ├── api/                      # FRB 生成的 Dart API 包装
+│   ├── src/rust/                 # FRB 生成的 Rust↔Dart 绑定
+│   └── frb_generated.dart
+│
+├── rust/                         # Rust 后端
+│   ├── Cargo.toml                # crate: vcr_lib (cdylib + staticlib)
 │   ├── src/
-│   │   ├── api/         # FFI 绑定 (debug_api.rs, plot_api.rs)
-│   │   ├── core/        # 核心逻辑 (protocol, plot)
-│   │   └── ffi/        # 外部函数接口
-│   └── Cargo.toml
-├── linux/               # Linux 平台文件
-├── windows/             # Windows 平台文件
-└── test/                # 单元测试和集成测试
+│   │   ├── lib.rs                # crate root: api, core, renderer, frb_generated
+│   │   ├── api/                  # FFI 导出接口
+│   │   │   ├── plot_api.rs       # 波形查询、缓冲区、overflow
+│   │   │   ├── device_api.rs     # 设备发现/管理
+│   │   │   ├── debug_api.rs      # 日志控制
+│   │   │   ├── lua_api.rs        # Lua 脚本引擎
+│   │   │   ├── gpu_api.rs        # GPU 渲染接口
+│   │   │   ├── data_receiver.rs  # 数据接收线程
+│   │   │   ├── virtual_api.rs    # 虚拟设备 API
+│   │   │   └── simple.rs
+│   │   ├── core/
+│   │   │   ├── plot/             # ★ 核心绘图引擎
+│   │   │   │   ├── pipeline.rs       # 异步 envelope 预计算线程
+│   │   │   │   ├── analog_segment.rs # f32 16ⁿ 层级金字塔
+│   │   │   │   ├── time_bucket.rs    # f64 时间桶聚合
+│   │   │   │   ├── data_buffer.rs    # ChannelBuffer 环形缓冲区
+│   │   │   │   ├── query.rs          # LOD 金字塔查询
+│   │   │   │   ├── envelope.rs       # RenderEnvelope 零拷贝结构
+│   │   │   │   ├── ffi_bridge.rs     # C-ABI 桥接
+│   │   │   │   ├── segment.rs        # 数据段管理
+│   │   │   │   ├── lttb.rs           # LTTB 降采样
+│   │   │   │   ├── lockfree_buffer.rs
+│   │   │   │   └── constants.rs
+│   │   │   ├── device/           # 设备管理
+│   │   │   │   ├── registry.rs
+│   │   │   │   ├── models.rs
+│   │   │   │   └── preset.rs
+│   │   │   ├── protocol/         # 协议解析插件
+│   │   │   │   ├── trait.rs
+│   │   │   │   ├── registry.rs
+│   │   │   │   ├── csv_parser.rs
+│   │   │   │   └── plugins/
+│   │   │   │       ├── csv.rs
+│   │   │   │       ├── modbus_rtu.rs
+│   │   │   │       ├── modbus_tcp.rs
+│   │   │   │       ├── scpi.rs
+│   │   │   │       └── raw.rs
+│   │   │   ├── session/          # 会话管理
+│   │   │   │   ├── session_manager.rs
+│   │   │   │   └── debug_session.rs
+│   │   │   ├── transport/        # 传输层
+│   │   │   │   ├── serial.rs
+│   │   │   │   ├── tcp.rs
+│   │   │   │   ├── modbus.rs
+│   │   │   │   └── virtual_channel.rs
+│   │   │   ├── virtual_device/   # 虚拟设备
+│   │   │   │   ├── simulator.rs
+│   │   │   │   ├── scpi_responder.rs
+│   │   │   │   └── data_generator.rs
+│   │   │   └── app_context.rs
+│   │   ├── renderer/             # wgpu GPU 渲染
+│   │   │   ├── gpu_renderer.rs
+│   │   │   ├── shader_waveform.wgsl
+│   │   │   ├── shader_lttb.wgsl
+│   │   │   └── shader.wgsl
+│   │   └── frb_generated.rs
+│   └── target/
+│
+├── rust_builder/                 # FRB 构建桥 (cargokit)
+├── windows/                      # Windows 平台文件 (CMake)
+├── scripts/                      # Lua 示例脚本 (13个)
+├── tools/                        # 辅助 Python 脚本
+├── test_hardware/                # 硬件测试数据
+├── docs/                         # 设计文档
+├── assets/                       # 字体 (DS-Digital) + 图片
+├── rebuild.ps1                   # ★ 一键构建脚本
+└── pubspec.yaml
 ```
 
-## 🛠️ 从源码构建
+## 🔧 构建
 
-### 依赖项
+### 环境要求
 
-- **Flutter**: 3.24+ (测试版本 3.41.7)
-- **Rust**: 1.75+ (测试版本 1.95.0)
-- **flutter_rust_bridge**: 2.0+ (测试版本 2.12.0)
-- **Visual Studio 2022** (仅 Windows，用于 MSVC 工具链)
+| 工具 | 最低版本 | 测试版本 |
+|------|---------|---------|
+| Flutter | 3.24+ | 3.41.7 |
+| Rust | 1.75+ | 1.95.0 |
+| flutter_rust_bridge | 2.0+ | 2.12.0 |
+| Visual Studio 2022 | — | BuildTools (MSVC) |
 
-### Windows
+### 一键构建 (Windows)
 
 ```powershell
-# 克隆仓库
-git clone <repo-url>
-cd VCR
+powershell -ExecutionPolicy Bypass -File rebuild.ps1
+```
 
-# 安装依赖
-flutter pub get
-cargo build --release
+脚本自动完成：Rust 编译 → Codegen 生成 → Flutter 编译 → 启动
 
-# 生成 FFI 绑定
-flutter_rust_bridge_codegen generate
+### 分步构建
 
-# 构建应用程序
+```powershell
+# 1. Rust
+cd rust; cargo build --release
+Copy-Item target\release\vcr_lib.dll ..\build\windows\x64\runner\Release\
+
+# 2. Dart bindings
+cd ..; flutter_rust_bridge_codegen generate
+
+# 3. Flutter
 flutter build windows --release
 ```
 
-### Linux (进行中)
+### 调试运行
 
-```bash
-# 安装依赖
-sudo apt-get install libudev-dev
-
-# 构建
-flutter build linux --release
+```powershell
+flutter run -d windows    # Debug 模式（控制台可见日志）
 ```
 
-## ⚙️ 配置
-
-### Rust 镜像源（中国）
-
-如果您在中国，请配置 Rust crate 镜像源：
+### 国内镜像
 
 ```toml
 # ~/.cargo/config.toml
 [source.crates-io]
 replace-with = 'rsproxy'
-
 [source.rsproxy]
 registry = "https://rsproxy.cn/index/"
 ```
 
-### Flutter 镜像源（中国）
+## ⚙️ 核心设计
 
-```bash
-# 使用清华镜像
-export FLUTTER_STORAGE_BASE_URL=https://mirrors.tuna.tsinghua.edu.cn/flutter
-flutter config --enable-windows-uwp-desktop
-```
+### 零拷贝 FFI
 
-## 🐛 调试
+Flutter 端通过 `Pointer.asTypedList()` 将 Rust `Vec<f64>` 内存直接映射为 Dart `Float64List`，消除每帧约 8000 次 FFI 边界跨越。配合 gen-lock（双缓冲 + 奇偶世代号）保证读安全。
 
-### 调试控制台
+### LOD 金字塔
 
-应用程序包含调试控制台窗口，可显示实时日志：
+Rust 端维护两层金字塔结构，视口查询 O(log n)：
+- **TimeBucketPyramid** (f64): 固定桶宽，适合时间序列
+- **AnalogSegment** (f32, 10-level 16ⁿ): 高精度降采样，10 层级每层 16 倍聚合
 
-- **日志文件**: `vcr_debug_YYYYMMDD_HHMMSS.log` (保存在工作目录)
-- **日志级别**: `debug`, `info`, `warn`, `error`
-- **双输出**: 日志同时写入文件和调试控制台
+### 性能优化
 
-### 常见问题
+- **GC-free 数据缓冲** (`_DataBuf`): `Float64List` 预分配，零堆分配
+- **帧预算保护** (`_tickBusy`): 跳过仍在渲染的帧，防止级联卡顿
+- **空闲跳过**: `checkDataReady()` + `envelopeGetGeneration()` 检测无新数据时跳过重绘
+- **EMA Y 轴平滑**: 40% 新值 + 60% 旧值，消除范围振荡
+- **批量 FFI**: `pushChannelBatch()` 一次推送全部子采样点
+- **Canvas 复用**: 静态 `Path` + `Paint` + `Float32List` 缓冲区
+- **PictureRecorder 缓存**: Viewport 不变时跳过 `canvas.drawPath`
 
-**1. Ch0 数据显示错误**
-- **症状**: Ch0 曲线形状不正确
-- **原因**: CSV 解析可能错误解释前缀
-- **修复**: 检查 `rust/src/core/protocol/csv_parser.rs`
+### Lua 脚本引擎
 
-**2. 暂停按钮无法停止数据**
-- **症状**: 暂停按钮无法停止数据更新
-- **原因**: 暂停时未取消定时器
-- **修复**: 在 `_togglePause()` 中取消 `_fetchTimer` 和 `_realDataTimer`
+内置 mlua (Lua 5.3) 运行时，支持：
+- 定时器、协程 (`sys.taskInit`, `sys.wait`)
+- UART 收发 (`uart.write`, `uart.read`)
+- 波形绘图 (`plot.add_data`)
+- Pub/Sub 消息系统
+- 自动化测试脚本
 
-**3. Y 轴显示问题**
-- **症状**: 所有通道 `showYAxis = false` 时 Y 轴显示不正确
-- **原因**: `yAxisChannels.length <= 1` 错误处理空列表
-- **修复**: 改为 `yAxisChannels.length == 1`
+示例脚本见 `scripts/` 目录（13 个示例，从基础到协议解析）。
 
-## 📊 性能优化
+## 🖥️ 界面导航
 
-- **视口降采样**: 缩放/滚动时自动降采样数据
-- **环形缓冲区**: Rust 侧 `ChannelBuffer` 使用固定大小环形缓冲区（10,000 点）
-- **节流 UI 更新**: UI 更新节流到 ~30 FPS
-- **批量数据获取**: 单次 FFI 调用获取所有通道数据
+| Tab | 路由 | 功能 |
+|-----|------|------|
+| Devices | `/`, `/devices` | 设备发现、连接管理 |
+| Plot | `/monitor` | ★ 示波器波形界面 |
+| Debug | `/debug` | 实时日志控制台 |
+| Settings | `/settings` | 日志配置、主题 |
+| Lua | `/lua` | 脚本编辑器 + 运行时 |
+
+## 📊 依赖
+
+### Rust (核心)
+
+| crate | 用途 |
+|-------|------|
+| `flutter_rust_bridge` =2.12 | Flutter↔Rust FFI 桥梁 |
+| `wgpu` 23 | WebGPU 硬件加速渲染 |
+| `tokio` + `tokio-serial` | 异步运行时 + 串口 |
+| `serialport` 4.6 | 同步串口通信 |
+| `crossbeam-channel` | 线程间消息传递 |
+| `mlua` 0.10 (lua53) | Lua 脚本引擎 |
+| `parking_lot` | 高性能同步原语 |
+| `chrono` + `serde` | 时间处理 + 序列化 |
+
+### Flutter
+
+| package | 用途 |
+|---------|------|
+| `flutter_rust_bridge` ^2.12 | FFI 集成 |
+| `ffi` ^2.2 | 原生指针操作 |
+| `file_picker` | 文件导入导出 |
+| `flutter_highlight` | Lua 代码高亮 |
 
 ## 🤝 贡献
 
-欢迎贡献！请遵循以下步骤：
-
-1. Fork 本仓库
-2. 创建功能分支 (`git checkout -b feature/foo`)
-3. 提交更改 (`git commit -am 'Add foo'`)
-4. 推送到分支 (`git push origin feature/foo`)
-5. 创建 Pull Request
+1. Fork → Feature Branch → PR
+2. 遵循现有代码风格（Dart: lints 5.x, Rust: clippy）
+3. 核心改动请附设计说明
 
 ## 📄 许可证
 
-TODO: 添加许可证信息
-
----
-
-## 📝 TODO
-
-- [ ] Add unit tests for Rust backend
-- [ ] Add widget tests for Flutter frontend
-- [ ] Implement Linux CI build (currently commented out due to Rust compilation errors)
-- [ ] Add more protocol plugins (Modbus, CAN bus)
-- [ ] Add data analysis tools (FFT, filtering)
-- [ ] Add multi-language support (i18n)
+TODO

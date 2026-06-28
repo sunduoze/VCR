@@ -92,7 +92,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // When true, the pipeline reads envelope from AnalogSegment (f32, 10-level 16^n pyramid)
   // instead of TimeBucketPyramid (f64). Enables higher-precision decimation.
   // Toggle via toolbar button; requires pipeline to be enabled.
-  bool _analogEnvelopeEnabled = false;
+  bool _analogEnvelopeEnabled = true;
   int _fps = 0;
   int _totalPoints = 0;
   DateTime _lastFpsTime = DateTime.now();
@@ -204,9 +204,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initDemoChannels();
-    // ── AnalogSegment: deferred init (created when user enables toggle) ──
-    // AnalogSegments are created in _toggleAnalogEnvelope() to avoid unnecessary
-    // resource allocation at startup.
+    // ── AnalogSegment: early init ──
+    // Enable AnalogSegment envelope rendering by default so zoom+pan
+    // uses the 10-level f32 pyramid rather than TimeBucketPyramid (sliding window).
+    _ensureAnalogSegments();
     _startDemoData();
     _loadConfig();
     // Apply buffer size to Rust immediately when page loads
@@ -374,6 +375,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _channels[i].currentValue = val;
           batchPerChannel[i].add((x, val));
           _demoSampleIndices[i]++;
+          // Feed AnalogSegment so _refreshViewportFromAnalogImpl has data
+          FfiBridge.instance.analogPushSample(i, val);
         }
       }
       // NOTE: Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
@@ -667,24 +670,23 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
-      // Calculate samplesPerPixel: total samples / num pixels in viewport
-      final timeRange = _xMax - _xMin;
-      final timePerPx = timeRange > 0 ? timeRange / _screenWidth : 0.0;
-      final samplesPerPixelDouble = timePerPx > 0
-          ? sampleCount * timePerPx / timeRange
-          : envelopeThreshold.toDouble();
+      // Calculate samplesPerPixel: viewport sample span / screen width.
+      // FIX: old formula "sampleCount * timePerPx / timeRange" cancelled
+      // algebraically to sampleCount/_screenWidth ≈ constant, so zoom never
+      // changed the pyramid level. New formula is just:
+      //   spp = viewport_samples / screen_pixels
+      final samplesPerPixelDouble = (_xMax - _xMin) / _screenWidth;
 
-      // Map viewport [xMin, xMax] to sample indices [0, sampleCount)
-      // Uses proportional mapping within ch.data x-range (works for both Demo
-      // x=sample_index and Real x=timestamp)      
-      final chDataFirst = ch.data.isNotEmpty ? ch.data.first.x : 0.0;
-      final chDataLast = ch.data.isNotEmpty ? ch.data.last.x : 1.0;
-      final chXSpan = chDataLast - chDataFirst;
-      final invSpan = chXSpan > 0.0 ? 1.0 / chXSpan : 0.0;
-      final startSample = ((_xMin - chDataFirst) * invSpan * sampleCount)
-          .round().clamp(0, sampleCount - 1);
-      final clampedEnd = ((_xMax - chDataFirst) * invSpan * sampleCount)
-          .round().clamp(startSample + 1, sampleCount);
+      // Map relative viewport coords to absolute sample indices.
+      // _xMin/_xMax are relative to newest sample (newest=0, older<0).
+      // AnalogSegment stores samples by absolute index [0, sampleCount).
+      //   newestSample = sampleCount - 1   (0-indexed)
+      //   absIdx = newestSample + _xRel  →  startSample = newestSample + _xMin
+      final newestSample = sampleCount - 1;
+      final startSample = (newestSample + _xMin).round().clamp(0, sampleCount - 1);
+      final clampedEnd = (newestSample + _xMax).round().clamp(startSample + 1, sampleCount);
+      // Base offset: convert absolute index back to painter-relative coordinate
+      final double xBase = -newestSample.toDouble();
 
       ch.viewportData.clear();
       ch.envelopeData.clear();
@@ -698,8 +700,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           ci, startSample, clampedEnd, traceBuf, maxSamples,
         );
         if (traceCount > 0) {
+          // startSample + xBase gives the painter-relative x for the first trace point.
+          final relStart = startSample + xBase.toInt();
           final values = List<double>.generate(traceCount, (i) => traceBuf![i].toDouble());
-          ch.viewportData = _DataBuf.fromTrace(values, startSample);
+          ch.viewportData = _DataBuf.fromTrace(values, relStart);
           anyData = true;
         }
         continue;
@@ -723,8 +727,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final yMin = sample.min.toDouble();
           final yMax = sample.max.toDouble();
           final yAvg = (yMin + yMax) * 0.5;
-          // Section-aware x: section.start + i * section.scale is the actual sample position
-          final xRel = (sectionStart + (i * sectionScale)).toDouble();
+          // absolute sample index → painter-relative x coordinate
+          final xRel = (sectionStart + (i * sectionScale)).toDouble() + xBase;
 
           ch.viewportData.add(xRel, yAvg);
           ch.envelopeData.add(xRel, yMin);

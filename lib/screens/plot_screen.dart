@@ -79,10 +79,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _isPlaying = true;
 
   // Render mode: auto (threshold-based), trace (always raw polyline), envelope (always min-max band)
-  // Pause anomaly fix: when resuming from ExtendedPause (>~10s), force one full refresh
-  // so the waveform doesn't show stale data from before the pause.
   _RenderMode _renderMode = _RenderMode.auto;
-  DateTime _pauseEndTime = DateTime.now();
   String _pyramidDebugText = '';
 
   // ── Pipeline thread toggle ──
@@ -445,12 +442,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Called after scrollbar drag, zoom, or any ChartViewport change.
   /// NOTE: Phase A: Uses per-channel Rust LOD pyramid (pre-computed bucket aggregation)
   /// instead of O(n) binary search + sublist + step decimation.
-  void _clearViewportCaches() {
-    for (final ch in _channels) {
-      ch.viewportData.clear();
-      ch.envelopeData.clear();
-    }
-  }
 
   /// Feed current viewport range to pipeline for async envelope pre-computation.
   /// Cheap: just atomics, no locks. Pipeline reads this and computes envelopes at ~60Hz.
@@ -2432,7 +2423,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     _yMax = _dragStartYMax + dy / h * yRange;
                   }
                   // BUGFIX #2/#4: Don't clear viewportData during drag.
-                  // _clearViewportCaches() created empty-viewport frames → flash.
+                  // Clearing viewportData created empty-viewport frames → flash.
                   // Instead, reuse existing viewportData with updated xMin/xMax;
                   // the painter maps coordinates correctly. Slightly stale data
                   // (shifted viewport) is far better than a blank screen.

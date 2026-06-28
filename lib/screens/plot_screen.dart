@@ -637,15 +637,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
   }
 
+  /// Query AnalogSegment per-channel for viewport rendering.
+  /// Iterates _channels directly (not RENDER_ENVELOPE, which only pipeline sets).
   bool _refreshViewportFromAnalogImpl() {
     final bridge = FfiBridge.instance;
-
-    // Use the existing render envelope's viewport range
-    final gen1 = bridge.envelopeGetGeneration();
-    if (gen1 & 1 != 0) return false;
-
-    final numCh = bridge.envelopeGetNumChannels();
-    if (numCh == 0) return false;
 
     // per-sample CEnvelopeSample output buffer (f32 min/max), max 8000 samples
     final maxSamples = _screenWidth.round().clamp(500, 8000);
@@ -653,11 +648,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // Trace mode buffer: raw f32 values (one per pixel)
     Pointer<Float>? traceBuf;
 
-    // Compute samplesPerPixel from viewport and total sample count
     bool anyData = false;
-    for (int ci = 0; ci < numCh && ci < _channels.length; ci++) {
+    for (int ci = 0; ci < _channels.length; ci++) {
       final ch = _channels[ci];
-      if (!ch.visible || ch.data.isEmpty) {
+      if (!ch.visible) {
         ch.viewportData.clear();
         ch.envelopeData.clear();
         continue;
@@ -671,11 +665,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
 
       // Calculate samplesPerPixel: viewport sample span / screen width.
-      // FIX: old formula "sampleCount * timePerPx / timeRange" cancelled
-      // algebraically to sampleCount/_screenWidth ≈ constant, so zoom never
-      // changed the pyramid level. New formula is just:
-      //   spp = viewport_samples / screen_pixels
-      final samplesPerPixelDouble = (_xMax - _xMin) / _screenWidth;
+      final samplesPerPixelDouble = (_xMax - _xMin).abs() / _screenWidth;
 
       // Map relative viewport coords to absolute sample indices.
       // _xMin/_xMax are relative to newest sample (newest=0, older<0).
@@ -700,7 +690,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           ci, startSample, clampedEnd, traceBuf, maxSamples,
         );
         if (traceCount > 0) {
-          // startSample + xBase gives the painter-relative x for the first trace point.
           final relStart = startSample + xBase.toInt();
           final values = List<double>.generate(traceCount, (i) => traceBuf![i].toDouble());
           ch.viewportData = _DataBuf.fromTrace(values, relStart);
@@ -709,7 +698,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
-      // ── Envelope mode (samplesPerPixel >= envelopeThreshold): min/max pairs ──
+      // ── Envelope mode: min/max pairs from AnalogSegment pyramid ──
       final sectionStartPtr = calloc<Uint64>();
       final sectionScalePtr = calloc<Uint32>();
       final count = bridge.analogGetEnvelope(
@@ -727,7 +716,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           final yMin = sample.min.toDouble();
           final yMax = sample.max.toDouble();
           final yAvg = (yMin + yMax) * 0.5;
-          // absolute sample index → painter-relative x coordinate
           final xRel = (sectionStart + (i * sectionScale)).toDouble() + xBase;
 
           ch.viewportData.add(xRel, yAvg);
@@ -741,9 +729,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     calloc.free(sampleBuf);
     if (traceBuf != null) calloc.free(traceBuf);
 
-    final gen2 = bridge.envelopeGetGeneration();
-    if (gen1 != gen2) return false;
-
+    if (anyData) {
+      _viewportRefreshCount++;
+    }
     return anyData;
   }
 

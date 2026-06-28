@@ -154,10 +154,14 @@ impl AnalogSegment {
 
             // Coverage: how much of the requested envelope range is filled?
             let coverage = if requested > 0 { length as f64 / requested as f64 } else { 0.0 };
-            if coverage < 0.1 && level > 0 {
-                continue; // < 10% coverage → likely not ready, try lower level
+            // FIX: Require 100% coverage for envelope to avoid partial data gaps.
+            // If not fully covered, fallback to lower level (finer granularity).
+            if coverage < 1.0 && level > 0 {
+                continue; // Incomplete coverage → try lower level for full coverage
             }
 
+            // Level 0 is the last resort: return what we have (even if partial)
+            // Dart side will detect partial coverage and may fallback to trace mode
             let samples = layer.samples[env_start as usize..actual_end as usize].to_vec();
             return EnvelopeSection {
                 start: env_start << scale_power,

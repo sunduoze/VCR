@@ -376,8 +376,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _channels[i].currentValue = val;
           batchPerChannel[i].add((x, val));
           _demoSampleIndices[i]++;
-          // Feed AnalogSegment so _refreshViewportFromAnalogImpl has data
-          FfiBridge.instance.analogPushSample(i, val);
+          // NOTE: analogPushSample is called inside pushChannelBatch, no need to call here.
         }
       }
       // NOTE: Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
@@ -644,7 +643,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final bridge = FfiBridge.instance;
 
     // per-sample CEnvelopeSample output buffer (f32 min/max), max 8000 samples
-    final maxSamples = _screenWidth.round().clamp(500, 8000);
+    // FIX: Use fixed max 8000 instead of _screenWidth to avoid truncation on wide viewports.
+    // Screen width limits pixel resolution, not data samples. Envelope samples are decimated
+    // based on samplesPerPixel, so we need enough buffer for the full viewport range.
+    final maxSamples = 8000;
     final sampleBuf = calloc<CEnvelopeSample>(maxSamples);
     // Trace mode buffer: raw f32 values (one per pixel)
     Pointer<Float>? traceBuf;
@@ -682,8 +684,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       ch.viewportData.clear();
       ch.envelopeData.clear();
 
-      final useTrace = _renderMode == _RenderMode.trace ||
-          (_renderMode == _RenderMode.auto && samplesPerPixelDouble < envelopeThreshold);
+      // FIX: When viewport range exceeds maxSamples, force envelope mode to avoid truncation.
+      // Trace mode returns at most maxSamples (8000) points; large viewports would show partial data.
+      final viewportSampleCount = clampedEnd - startSample;
+      final useTrace = (_renderMode == _RenderMode.trace ||
+          (_renderMode == _RenderMode.auto && samplesPerPixelDouble < envelopeThreshold))
+          && viewportSampleCount <= maxSamples; // Force envelope if too many samples
       // ── Trace mode: raw f32 values ──
       if (useTrace) {
         traceBuf ??= calloc<Float>(maxSamples);
@@ -700,30 +706,52 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
 
       // ── Envelope mode: min/max pairs from AnalogSegment pyramid ──
-      final sectionStartPtr = calloc<Uint64>();
-      final sectionScalePtr = calloc<Uint32>();
-      final count = bridge.analogGetEnvelope(
-        ci, startSample, clampedEnd, samplesPerPixelDouble, sampleBuf, maxSamples,
-        sectionStartPtr, sectionScalePtr,
-      );
-      final sectionStart = sectionStartPtr.value;
-      final sectionScale = sectionScalePtr.value;
-      calloc.free(sectionStartPtr);
-      calloc.free(sectionScalePtr);
-
-      if (count > 0) {
+      // Loop to fetch multiple sections if needed to cover the full viewport range.
+      // This handles the case where a single envelope section doesn't cover [startSample, clampedEnd]
+      // due to pyramid level boundaries or incomplete data cascading.
+      int currentStart = startSample;
+      int loopSafety = 0;
+      const maxLoops = 10; // Prevent infinite loops
+      
+      while (currentStart < clampedEnd && loopSafety < maxLoops) {
+        loopSafety++;
+        
+        final sectionStartPtr = calloc<Uint64>();
+        final sectionScalePtr = calloc<Uint32>();
+        final remainingCapacity = maxSamples - ch.viewportData.length;
+        if (remainingCapacity <= 0) break;
+        
+        final count = bridge.analogGetEnvelope(
+          ci, currentStart, clampedEnd, samplesPerPixelDouble, sampleBuf, remainingCapacity,
+          sectionStartPtr, sectionScalePtr,
+        );
+        final sectionStart = sectionStartPtr.value;
+        final sectionScale = sectionScalePtr.value;
+        calloc.free(sectionStartPtr);
+        calloc.free(sectionScalePtr);
+        
+        if (count == 0) break;
+        
+        // Add samples from this section
         for (int i = 0; i < count; i++) {
           final sample = sampleBuf[i];
           final yMin = sample.min.toDouble();
           final yMax = sample.max.toDouble();
           final yAvg = (yMin + yMax) * 0.5;
           final xRel = (sectionStart + (i * sectionScale)).toDouble() + xBase;
-
+          
           ch.viewportData.add(xRel, yAvg);
           ch.envelopeData.add(xRel, yMin);
           ch.envelopeData.add(xRel, yMax);
         }
         anyData = true;
+        
+        // Calculate where this section ends and advance
+        final sectionEndAbs = sectionStart + (count - 1) * sectionScale;
+        currentStart = (sectionEndAbs + sectionScale).toInt(); // Advance past this section
+        
+        // If we've covered the requested range, we're done
+        if (sectionEndAbs >= clampedEnd - 1) break;
       }
     }
 

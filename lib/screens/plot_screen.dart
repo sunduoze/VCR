@@ -204,12 +204,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initDemoChannels();
-    // ── AnalogSegment: early init ──
-    // Enable AnalogSegment envelope rendering by default so zoom+pan
-    // uses the 10-level f32 pyramid rather than TimeBucketPyramid (sliding window).
+    _loadConfig();
+    // ── AnalogSegment: init BEFORE _startDemoData so data is captured from first tick ──
+    // Must be AFTER _loadConfig (saved config may overwrite _analogEnvelopeEnabled=false),
+    // but BEFORE _startDemoData (otherwise initial samples are dropped silently).
     _ensureAnalogSegments();
     _startDemoData();
-    _loadConfig();
     // Apply buffer size to Rust immediately when page loads
     try {
       RustLib.instance.api.crateApiPlotApiPlotSetBufferCapacity(capacity: BigInt.from(_maxPoints));
@@ -238,6 +238,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// and set the pipeline's envelope source to AnalogSegment.
   /// Also sets samplerate based on _deltaTime (time-per-sample in ms).
   void _ensureAnalogSegments() {
+    _analogEnvelopeEnabled = true; // Sync Dart field (saved config may have set it to false)
     final bridge = FfiBridge.instance;
     bridge.analogSetEnvelopeEnabled(true);
     final samplerateHz = 1000.0 / _deltaTime; // deltaTime=1ms → 1000Hz

@@ -1,4 +1,4 @@
-# VCR — 虚拟仪器控制与可视化终端
+# VCR — 仪器控制与可视化终端
 
 **V**irtual Instrument **C**ontrol & **R**ecording — 一款跨平台实时数据采集与波形可视化桌面应用，基于 Flutter + Rust 混合架构构建。
 

@@ -12,12 +12,14 @@ class DebugLogEntry {
   final String direction;
   final Uint8List data;
   final String display;
+  final BigInt index;
 
   const DebugLogEntry({
     required this.timestamp,
     required this.direction,
     required this.data,
     required this.display,
+    required this.index,
   });
 
   @override
@@ -25,7 +27,8 @@ class DebugLogEntry {
       timestamp.hashCode ^
       direction.hashCode ^
       data.hashCode ^
-      display.hashCode;
+      display.hashCode ^
+      index.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -35,5 +38,6 @@ class DebugLogEntry {
           timestamp == other.timestamp &&
           direction == other.direction &&
           data == other.data &&
-          display == other.display;
+          display == other.display &&
+          index == other.index;
 }

@@ -67,6 +67,16 @@ List<DebugLogEntry> debugGetLogWithLimit({
   maxSize: maxSize,
 );
 
+/// P1: 增量日志查询 — 只返回 index > since 的条目。
+/// Dart 端维护 _lastLogIndex，避免每 50ms FRB 全量序列化。
+List<DebugLogEntry> debugGetLogSince({
+  required String deviceId,
+  required PlatformInt64 since,
+}) => RustLib.instance.api.crateApiDebugApiDebugGetLogSince(
+  deviceId: deviceId,
+  since: since,
+);
+
 void debugSetBufferSize({required String deviceId, required int maxSize}) =>
     RustLib.instance.api.crateApiDebugApiDebugSetBufferSize(
       deviceId: deviceId,

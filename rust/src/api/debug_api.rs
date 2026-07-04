@@ -133,6 +133,13 @@ pub fn debug_get_log_with_limit(device_id: String, max_size: i32) -> Vec<DebugLo
     DEBUG.get_log_with_limit(&device_id, max_size as usize)
 }
 
+/// P1: 增量日志查询 — 只返回 index > since 的条目。
+/// Dart 端维护 _lastLogIndex，避免每 50ms FRB 全量序列化。
+#[flutter_rust_bridge::frb(sync)]
+pub fn debug_get_log_since(device_id: String, since: i64) -> Vec<DebugLogEntry> {
+    DEBUG.get_log_since(&device_id, since as u64)
+}
+
 #[flutter_rust_bridge::frb(sync)]
 pub fn debug_set_buffer_size(device_id: String, max_size: i32) {
     DEBUG.set_max_size(&device_id, max_size as usize);

@@ -279,6 +279,14 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   // ── Log change detection (for conditional setState) ──
   int _lastLogCount = 0;
 
+  // ── Cached log: avoid calling debugGetLogWithLimit twice per frame ──
+  // _refreshLog() populates this; build() reads it.
+  // Eliminates 1 FRB serialization (~200KB) per 50ms tick.
+  List<DebugLogEntry> _cachedLog = [];
+  int _lastLogIndex = 0; // P1: incremental query — tracks highest entry.index seen
+  int _fullSyncCounter = 0; // P1: periodic full sync to correct drift after Rust trim
+  static const int _fullSyncInterval = 30; // full sync every 30 ticks (~1.5s)
+
   // ── TextSpan cache: avoid rebuilding RichText trees on every setState ──
   List<TextSpan> _cachedLineSpans = [];
   int _cachedSpanHash = 0;
@@ -785,16 +793,60 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     if (_selectedDeviceId == null) return;
     _syncDeviceStates(); // keep connection/isSerial state in sync (outside build)
     final cs = _cs;
-    final newLog = debugGetLogWithLimit(
-      deviceId: _selectedDeviceId!,
-      maxSize: cs.bufferSize,
-    );
-    _updateCounters(cs, newLog);
-    // Only rebuild UI if log count changed (new entries arrived)
-    final hasNewData = newLog.length != _lastLogCount;
-    if (hasNewData) {
-      _lastLogCount = newLog.length;
+
+    // P1: Incremental query — only fetch new entries (FRB serialization 200KB → ~2KB).
+    // Every _fullSyncInterval ticks, do a full sync to correct for Rust-side trim drift.
+    final bool doFullSync = (_fullSyncCounter % _fullSyncInterval == 0);
+    _fullSyncCounter++;
+
+    final bool hasNewData;
+    if (doFullSync) {
+      // Full sync: replace entire cache (handles Rust-side trim).
+      final fullLog = debugGetLogWithLimit(
+        deviceId: _selectedDeviceId!,
+        maxSize: cs.bufferSize,
+      );
+      _cachedLog = fullLog;
+      _updateCounters(cs, fullLog);
+      // Update index tracker from the freshest entry.
+      if (fullLog.isNotEmpty) {
+        _lastLogIndex = fullLog.last.index.toInt();
+      }
+      hasNewData = fullLog.length != _lastLogCount;
+      _lastLogCount = fullLog.length;
+    } else {
+      // Incremental: only fetch entries with index > _lastLogIndex.
+      final delta = debugGetLogSince(
+        deviceId: _selectedDeviceId!,
+        since: _lastLogIndex,
+      );
+      if (delta.isNotEmpty) {
+        _cachedLog.addAll(delta);
+        // Update counters incrementally to avoid O(N) full recalc.
+        int rxBytes = 0, txBytes = 0, rxPkt = 0, txPkt = 0;
+        for (final e in delta) {
+          final bc = e.data.length;
+          if (e.direction == 'TX') { txBytes += bc; txPkt++; }
+          else { rxBytes += bc; rxPkt++; }
+        }
+        cs.txBytes += txBytes;
+        cs.rxBytes += rxBytes;
+        cs.txPackets += txPkt;
+        cs.rxPackets += rxPkt;
+        cs.updateRates(txBytes, rxBytes);
+        cs.lastLogCount = _cachedLog.length;
+        _lastLogIndex = delta.last.index.toInt();
+        // Trim local cache to avoid unbounded growth (Rust also trims).
+        if (_cachedLog.length > 5000) {
+          _cachedLog = _cachedLog.sublist(_cachedLog.length - 3000);
+        }
+        hasNewData = true;
+        _lastLogCount = _cachedLog.length;
+      } else {
+        hasNewData = false;
+      }
     }
+
     if (hasNewData && mounted) setState(() {});
     // Smart auto-scroll via post-frame callback: wait until layout finishes
     // before jumping, so maxScrollExtent reflects the new content height.
@@ -1448,14 +1500,12 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     // called from _refreshLog() and _initializeAsync(). Do NOT mutate
     // _deviceStates inside build() — it causes AXTree errors.
 
-    // Fetch log for current device (kept in Rust)
-    List<DebugLogEntry> rawLog = [];
-    if (_selectedDeviceId != null && _connected) {
-      rawLog = debugGetLogWithLimit(
-        deviceId: _selectedDeviceId!,
-        maxSize: _cs.bufferSize,
-      );
-    }
+    // Use cached log from _refreshLog() (50ms polling).
+    // Previously build() called debugGetLogWithLimit again —
+    // a second 200KB FRB serialization on every setState trigger.
+    final rawLog = _selectedDeviceId != null && _connected
+        ? _cachedLog
+        : const <DebugLogEntry>[];
 
     final filteredLog = rawLog.where((e) {
       if (e.direction == 'TX' && !_cs.showTx) return false;

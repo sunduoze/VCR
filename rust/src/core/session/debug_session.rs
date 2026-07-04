@@ -20,6 +20,7 @@ pub struct DebugLogEntry {
     pub direction: String,
     pub data: Vec<u8>,
     pub display: String,
+    pub index: u64, // 全局递增索引，支持增量查询 (P1)
 }
 
 /// 调试会话内部状态
@@ -27,6 +28,7 @@ struct DebugSessionInner {
     log: Vec<DebugLogEntry>,
     connected: bool,
     max_size: usize, // 最大缓冲区大小（字节）
+    entry_index: u64, // 全局递增的条目索引，支持增量查询
 }
 
 impl Default for DebugSessionInner {
@@ -35,6 +37,7 @@ impl Default for DebugSessionInner {
             log: Vec::new(),
             connected: false,
             max_size: 200 * 1024, // 默认 200KB
+            entry_index: 0,
         }
     }
 }
@@ -55,11 +58,14 @@ impl DebugSessionManager {
         let mut sessions = lock_mutex(&self.sessions);
         let entry = sessions.entry(device_id.to_string()).or_default();
         entry.connected = true;
+        let idx = entry.entry_index;
+        entry.entry_index += 1;
         entry.log.push(DebugLogEntry {
             timestamp: now_ms(),
             direction: "SYS".into(),
             data: vec![],
             display: "[System] Connected".into(),
+            index: idx,
         });
     }
 
@@ -67,11 +73,14 @@ impl DebugSessionManager {
         let mut sessions = lock_mutex(&self.sessions);
         if let Some(s) = sessions.get_mut(device_id) {
             s.connected = false;
+            let idx = s.entry_index;
+            s.entry_index += 1;
             s.log.push(DebugLogEntry {
                 timestamp: now_ms(),
                 direction: "SYS".into(),
                 data: vec![],
                 display: "[System] Disconnected".into(),
+                index: idx,
             });
         }
     }
@@ -114,35 +123,61 @@ impl DebugSessionManager {
             .unwrap_or_default()
     }
 
-    /// 获取日志并裁剪到指定大小
+    /// 获取日志并裁剪到指定大小。
+    /// P0: mem::take 指针交换 — 持锁 <1µs，trim 在锁外完成。
+    /// 接收线程 log_rx/push_entry 不再被此函数阻塞。
     pub fn get_log_with_limit(&self, device_id: &str, max_size: usize) -> Vec<DebugLogEntry> {
-        let mut sessions = lock_mutex(&self.sessions);
-        if let Some(s) = sessions.get_mut(device_id) {
-            // 更新 max_size
-            s.max_size = max_size;
-
-            // 计算当前总大小
-            let total_size: usize = s.log.iter().map(|e| e.data.len()).sum();
-
-            if total_size > max_size {
-                // 需要裁剪：从前面删除旧条目直到总大小 <= max_size
-                let mut current_size = total_size;
-                let mut remove_count = 0;
-
-                for entry in &s.log {
-                    if current_size <= max_size {
-                        break;
-                    }
-                    current_size -= entry.data.len();
-                    remove_count += 1;
-                }
-
-                if remove_count > 0 {
-                    s.log.drain(0..remove_count);
-                }
+        // Phase 1: extract log under lock (pointer swap, O(1) real work)
+        let mut log = {
+            let mut sessions = lock_mutex(&self.sessions);
+            if let Some(s) = sessions.get_mut(device_id) {
+                s.max_size = max_size;
+                std::mem::take(&mut s.log) // swap with empty Vec — <1µs
+            } else {
+                return Vec::new();
             }
+        }; // lock released — receiver thread can now push new entries to the empty log
 
-            s.log.clone()
+        // Phase 2: trim to max_size (lock-free)
+        let total_size: usize = log.iter().map(|e| e.data.len()).sum();
+        if total_size > max_size {
+            let mut current_size = total_size;
+            let mut remove_count = 0;
+            for entry in &log {
+                if current_size <= max_size {
+                    break;
+                }
+                current_size -= entry.data.len();
+                remove_count += 1;
+            }
+            if remove_count > 0 {
+                log.drain(0..remove_count);
+            }
+        }
+
+        // Phase 3: merge back — append any new entries the receiver added during Phase 2
+        {
+            let mut sessions = lock_mutex(&self.sessions);
+            if let Some(s) = sessions.get_mut(device_id) {
+                let new_entries = std::mem::take(&mut s.log); // entries added during Phase 2
+                log.extend(new_entries); // trimmed log + new entries
+                s.log = log.clone();
+            }
+        }
+
+        log
+    }
+
+    /// P1: 返回索引 > since_index 的日志条目（增量查询）。
+    /// 相比 get_log_with_limit，FRB 序列化量从 200KB → 通常 <2KB。
+    pub fn get_log_since(&self, device_id: &str, since_index: u64) -> Vec<DebugLogEntry> {
+        let sessions = lock_mutex(&self.sessions);
+        if let Some(s) = sessions.get(device_id) {
+            s.log
+                .iter()
+                .filter(|e| e.index > since_index)
+                .cloned()
+                .collect()
         } else {
             Vec::new()
         }
@@ -159,6 +194,7 @@ impl DebugSessionManager {
     pub fn clear_log(&self, device_id: &str) -> bool {
         if let Some(s) = lock_mutex(&self.sessions).get_mut(device_id) {
             s.log.clear();
+            s.entry_index = 0; // 重置索引，增量查询从 0 重新开始
             true
         } else {
             false
@@ -188,12 +224,16 @@ impl DebugSessionManager {
         let mut sessions = lock_mutex(&self.sessions);
         let entry = sessions.entry(device_id.to_string()).or_default();
 
+        let idx = entry.entry_index;
+        entry.entry_index += 1;
+
         // 添加新条目
         entry.log.push(DebugLogEntry {
             timestamp: now_ms(),
             direction: direction.to_string(),
             data: data.to_vec(),
             display,
+            index: idx,
         });
 
         // 检查是否超过缓冲区限制

@@ -88,6 +88,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   // Toggle via toolbar button; off by default to keep startup simple.
   bool _pipelineEnabled = false;
 
+  // Flag: set to true when _clearData() is called, cleared after first _fetchRealData.
+  // Prevents _fetchRealData from calling plotGetAllChannels() with stale PLOT_DATA
+  // after _clearData() cleared ch.data — that would pull back 100K+ historical points
+  // and make _xMin jump to -100000, hiding the first few thousand new data points.
+  bool _justClearedData = false;
+
   // ── AnalogSegment envelope toggle ──
   // When true, the pipeline reads envelope from AnalogSegment (f32, 10-level 16^n pyramid)
   // instead of TimeBucketPyramid (f64). Enables higher-precision decimation.
@@ -205,6 +211,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _ticker.start();
     _initDemoChannels();
     _loadConfig();
+    // ── Sync Rust PYRAMIDS_ACCEPT_CONSOLE guard with loaded config ──
+    // If saved config has _useRealData=true, the guard must be opened
+    // BEFORE any data arrives, otherwise push_sample_batch_with_x returns
+    // immediately and AnalogSegment/TimeBucketPyramid stay empty forever.
+    FfiBridge.instance.pyramidsSetAcceptConsole(_useRealData);
     // ── AnalogSegment: init BEFORE _startDemoData so data is captured from first tick ──
     // Must be AFTER _loadConfig (saved config may overwrite _analogEnvelopeEnabled=false),
     // but BEFORE _startDemoData (otherwise initial samples are dropped silently).
@@ -448,6 +459,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Feed current viewport range to pipeline for async envelope pre-computation.
   /// Cheap: just atomics, no locks. Pipeline reads this and computes envelopes at ~60Hz.
+  ///
+  /// Passes ABSOLUTE coordinates (anchorX + _xMin, anchorX + _xMax) plus `anchor`
+  /// (= ch.data.last.x). The Rust side uses:
+  /// - TimeBucketPyramid path: t_min/t_max directly (pyramid stores abs coords)
+  /// - AnalogSegment path: converts to relative via `t_min - anchor` → sample index
   void _notifyPipelineViewport() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = _screenWidth.round().clamp(500, 4000);
@@ -459,7 +475,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final tMinAbs = anchorX + _xMin;
     final tMaxAbs = anchorX + _xMax;
     try {
-      FfiBridge.instance.envelopeSetViewport(tMinAbs, tMaxAbs, maxPts);
+      FfiBridge.instance.envelopeSetViewport(tMinAbs, tMaxAbs, maxPts, anchorX);
     } catch (_) {}
   }
 
@@ -507,7 +523,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       ch.viewportData.clear();
       ch.envelopeData.clear();
 
-      // Envelope format: [ts0,lo0, ts0+ϵ,hi0, ts1,lo1, ts1+ϵ,hi1, ...] alternating min/max per bucket
+      // Envelope format: [ts0,lo0, ts0+ϵ,hi0, ts1,lo1, ...] alternating min/max per bucket
+      // Envelope stores ABSOLUTE coords; subtract newestAbsX to get relative.
       // P1: Direct Float64List index — pure Dart, zero FFI boundary cross
       for (int i = 0; i < count; i += 2) {
         if (i + 1 >= count) break;
@@ -642,13 +659,20 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   bool _refreshViewportFromAnalogImpl() {
     final bridge = FfiBridge.instance;
 
-    // per-sample CEnvelopeSample output buffer (f32 min/max), max 8000 samples
-    // FIX: Use fixed max 8000 instead of _screenWidth to avoid truncation on wide viewports.
-    // Screen width limits pixel resolution, not data samples. Envelope samples are decimated
-    // based on samplesPerPixel, so we need enough buffer for the full viewport range.
-    final maxSamples = 8000;
+    // Dynamic batch size:
+    // Each analogGetEnvelope call returns at most this many envelope samples.
+    // Must be large enough to hold the entire viewport at the *finest* pyramid level.
+    // Finest level = Level 0 (1 envelope per 16 raw samples).
+    // So maxSamples >= ceil(viewportSamples / 16) + safety_margin.
+    //   viewportSamples = _xMax - _xMin (abs values, e.g. 250000)
+    //   level0_envelopes = ceil(250000 / 16) = 15625
+    // Add 50% headroom for multi-section拼接: 15625 * 1.5 = 23437 → round to 24000.
+    // Cap at 65536 (CEnvelopeSample array reasonable limit, ~2MB).
+    final viewportSamples = (_xMax - _xMin).abs().round();
+    final level0Envelopes = (viewportSamples / 16).ceil() + 2000; // +2000 headroom for partial sections
+    final maxSamples = level0Envelopes.clamp(4000, 65536);
     final sampleBuf = calloc<CEnvelopeSample>(maxSamples);
-    // Trace mode buffer: raw f32 values (one per pixel)
+    // Trace mode buffer: raw f32 values (sized dynamically below)
     Pointer<Float>? traceBuf;
 
     bool anyData = false;
@@ -830,15 +854,34 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           if (targetIdx == -1) continue;
           
           final ch = _channels[targetIdx];
-          // 只在 ch.data 为空时拉一次全量（避免每帧传输 250K 点）
+          // After _clearData(): don't pull full PLOT_DATA history.
+          // ch.data was cleared, but PLOT_DATA has already accumulated new data
+          // from the still-running console receiver. plotGetAllChannels() would
+          // return 100K+ points → _xMin jumps to -100000 → pyramid (just cleared!)
+          // returns empty for that range → 10+ seconds of blank screen.
+          // Instead, start incrementally: treat this like first-connection.
           if (ch.data.isEmpty) {
-            final allPoints = plotGetAllChannels(deviceId: deviceId);
-            final pts = allPoints[chName];
-            if (pts != null && pts.isNotEmpty) {
-              // FIXED(P0)-1: Use Rust timestampMs as X value (synced with pipeline pyramid)
-              ch.data = pts.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
-              ch.currentValue = pts.last.value;
-              // Pipeline pushes from receive loop — no Dart push needed
+            if (_justClearedData) {
+              // Skip full pull; incremental path below will populate from delta.
+              // But PLOT_DATA may have already accumulated data since clear —
+              // pull only the latest data via get_latest, not getAll.
+              try {
+                final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
+                if (latestData.isNotEmpty) {
+                  for (int k = 0; k < latestData.length; k++) {
+                    ch.data.add(_DataPoint(latestData[k].timestampMs, latestData[k].value));
+                  }
+                  ch.currentValue = latestData.last.value;
+                }
+              } catch (_) {}
+            } else {
+              // First connection: pull full history from PLOT_DATA
+              final allPoints = plotGetAllChannels(deviceId: deviceId);
+              final pts = allPoints[chName];
+              if (pts != null && pts.isNotEmpty) {
+                ch.data = pts.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+                ch.currentValue = pts.last.value;
+              }
             }
           } else {
             // Get delta data: all new points since last swap (front buffer has delta only)
@@ -863,6 +906,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
       }
     } catch (e) {
+    }
+
+    // Clear _justClearedData after first successful data fetch.
+    // The flag was set by _clearData() to block plotGetAllChannels().
+    // Once we've populated ch.data incrementally, allow normal operation.
+    if (_justClearedData && _channels.any((c) => c.data.isNotEmpty)) {
+      _justClearedData = false;
     }
   }
 
@@ -909,24 +959,47 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _useRealData = !_useRealData;
       _saveConfig();
 
-      // NOTE: Clear pyramid data to prevent demo↔real data mixing.
+      // Bug A fix: prevent console data (timestampMs) from polluting Demo's
+      // FFI_CH_PYRAMIDS[0..11] which use sample-index keys.
+      // Real mode: allow console → pyramids. Demo mode: block console → pyramids.
+      FfiBridge.instance.pyramidsSetAcceptConsole(_useRealData);
+
+      // ── Full isolation: prevent Demo↔Real data mixing ──
       // Demo and Real channels share integer indices (0,1,2,...) as pyramid keys;
       // switching modes reuses same indices with different channel lists.
       FfiBridge.instance.clearAllChannelPyramids();
-      // Clear AnalogSegment data as well (prevents demo↔real data mixing)
-      if (_analogEnvelopeEnabled) {
-        FfiBridge.instance.analogResetAll();
-      }
-      // Bump viewportRefreshCount to invalidate _PlotPainter cached picture
-      // (otherwise shouldRepaint returns false, reusing stale demo rendering).
-      _viewportRefreshCount++;
 
-      // FIX: P2-3: Reset EMA-smoothed Y-axis range on data-source switch.
-      // Without this, Demo↔Real carry-over pollutes Y axis for several seconds.
-      for (final ch in _channels) {
+      // Clear per-channel data in BOTH channel lists, not just the active one.
+      // _channels getter switches when _useRealData changes, so we must iterate
+      // both lists explicitly to cover all channels.
+      final allChannels = [..._demoChannels, ..._realChannels];
+      for (int i = 0; i < allChannels.length; i++) {
+        if (_analogEnvelopeEnabled) {
+          FfiBridge.instance.analogReset(i);
+        }
+      }
+      for (final ch in allChannels) {
+        ch.data.clear();
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
         ch._smoothedYMin = null;
         ch._smoothedYMax = null;
       }
+
+      // BUGFIX: Re-create AnalogSegments after reset. Without this the new
+      // channel list has no FFI_CH_ANALOG entries → analogPushSample drops all data silently.
+      if (_analogEnvelopeEnabled) {
+        _ensureAnalogSegments();
+      }
+
+      // Reset viewport: auto-scale as data accumulates from scratch.
+      // Without this, _xMin stays at -250000 (from _fitXAxis with empty data),
+      // making the first few thousand data points invisible (0.02% of viewport).
+      _autoScaleX = true;
+      _autoScaleY = true;
+      _xMin = -50;  // Tiny initial viewport, _fitXAxis expands as data accumulates
+      _xMax = 0;
+      _viewportRefreshCount++;
 
       if (_useRealData) {
         // Switch to real data: stop demo timer, start real data timer
@@ -1010,10 +1083,23 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _debugLog('[FITX] Unified mode: numPoints=$numPoints, bufMin=$bufMin, xMin=$_xMin, _maxPoints=$_maxPoints');
         return;
       }
-      // 数据为空，使用默认范围
-      _debugLog('[FITX] Unified mode: no data, setting xMin=$bufMin, _maxPoints=$_maxPoints');
-      _xMin = bufMin;
-      _xMax = 0.0;
+      // ch.data 为空时，检查 AnalogSegment 作为 fallback。
+      // Real 模式下 console 数据直接推送到 AnalogSegment，不经过
+      // PLOT_DATA → ch.data。如果 _clearData() 清空了 ch.data 但
+      // AnalogSegment 仍有样本（console 持续推送），_fitXAxis 必须
+      // 根据 AnalogSegment 的 sampleCount 设置正确的视口范围。
+      if (_analogEnvelopeEnabled) {
+        final asCount = FfiBridge.instance.analogSampleCount(0);
+        if (asCount > 0) {
+          _xMin = (-asCount).toDouble().clamp(bufMin, 0.0);
+          _xMax = 0.0;
+          _debugLog('[FITX] AnalogSegment fallback: asCount=$asCount, xMin=$_xMin');
+          return;
+        }
+      }
+      // 数据为空：保持当前 _xMin 不变（切换模式时已设为 -50）。
+      // 不跳转到 bufMin=-250000，否则刚切换后第一个数据点会被压缩到视口的 0.02%，肉眼不可见。
+      _debugLog('[FITX] Unified mode: no data, keeping xMin=$_xMin (bufMin=$bufMin)');
       return;
     }
     
@@ -1212,12 +1298,17 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // Timer still handles data generation/fetching; Ticker provides smooth 60fps rendering
       if (_useRealData) {
         if (_pipelineEnabled) _notifyPipelineViewport(); // Feed viewport BEFORE refresh → pipeline computes async
+        // _fitXAxis BEFORE _refreshViewportData: _fitXAxis reads ch.data (not viewport),
+        // so it can safely establish the correct viewport first. Otherwise, after
+        // _clearData(), the initial _xMin=-50 forces _refreshViewportData to sample
+        // only the last 50 data points out of _xMin, producing a right-edge blip.
+        if (!_scrollMode && _autoScaleX) _fitXAxis();
         _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
         if (_autoScaleY) _fitYAxis();
-        if (!_scrollMode && _autoScaleX) _fitXAxis();
         setState(() {});
       } else {
         if (_pipelineEnabled) _notifyPipelineViewport(); // Feed viewport BEFORE refresh
+        if (!_scrollMode && _autoScaleX) _fitXAxis();
         _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
         if (_scrollMode) {
           _xMax = 0.0;
@@ -1225,7 +1316,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _scrollMinTime = _xMin;
         }
         if (_autoScaleY) _fitYAxis();
-        if (!_scrollMode && _autoScaleX) _fitXAxis();
         setState(() {});
       }
     } finally {
@@ -1542,15 +1632,36 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         ch.yMin = -1;
         ch.yMax = 1;
       }
-      // NOTE: Clear pyramid data on data reset
+      // NOTE: Clear BOTH pyramid data stores on data reset.
+      // - FFI_CH_PYRAMIDS (TimeBucketPyramid): per-channel time-bucket pyamid
+      // - FFI_CH_ANALOG (AnalogSegment): per-channel 10-level envelope pyramid
+      // Without clearing both, _refreshViewportFromAnalogImpl picks up stale
+      // AnalogSegment data (old 250K sample indices) in the new [-1000,0] viewport.
+      // The old absolute indices don't map onto the new ch.data coordinate system
+      // → waveform appears compressed at 0s right edge.
       FfiBridge.instance.clearAllChannelPyramids();
+      if (_analogEnvelopeEnabled) {
+        FfiBridge.instance.analogResetAll();
+        // Re-create segments so pushChannelBatch has targets to write into.
+        _ensureAnalogSegments();
+      }
       _totalPoints = 0;
+      // Flag to prevent _fetchRealData from calling plotGetAllChannels()
+      // (which returns the full PLOT_DATA buffer — 100K+ stale points).
+      _justClearedData = true;
       if (_scrollMode) {
         _scrollMinTime = 0;
       }
       _autoScaleX = true;
       _autoScaleY = true;
-      _fitXAxis();
+      // Reset to tiny viewport: auto-scale via _fitXAxis as data accumulates.
+      // Using a very small initial window (-50 samples) ensures that even the
+      // first few data points are visible (not compressed to 0.02% of viewport).
+      // _fitXAxis will expand the viewport as ch.data grows each Ticker frame.
+      // Note: _xMin=-50 is small enough that _fitXAxis immediately overrides it
+      // once ch.data has any points, preventing the "right-edge blip" symptom.
+      _xMin = -50;
+      _xMax = 0;
       _fitYAxis();
     });
   }
@@ -1575,25 +1686,31 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         return;
       }
 
-      // Wide format CSV: Time,Ch1,Time,Ch2,Time,Ch3,...
-      // Each channel writes its own X (timestamp) + Y value
+      // Tabular CSV: Time column + one column per channel.
+      // Header: Time,Ch1,Ch2,Ch3,...
+      // Data:   t1, val1, val2, val3, ...
       // P2-4: Stream write via IOSink — avoids StringBuffer explosion for 250K+ points
       final file = File(path);
       final sink = file.openWrite(encoding: utf8);
       try {
+        // Header: Time + channel names
+        sink.write('Time');
         for (int c = 0; c < visibleChannels.length; c++) {
-          if (c > 0) sink.write(',');
-          sink.write('Time,${visibleChannels[c].deviceName} - ${visibleChannels[c].channelName}');
+          sink.write(',${visibleChannels[c].deviceName} - ${visibleChannels[c].channelName}');
         }
         sink.writeln();
 
+        // Use first channel as time source (all channels share same X axis)
+        final timeCh = visibleChannels.first;
         int maxLen = visibleChannels.fold(0, (m, ch) => max(m, ch.data.length));
         for (int i = 0; i < maxLen; i++) {
+          if (i < timeCh.data.length) {
+            sink.write(timeCh.data[i].x.toStringAsFixed(6));
+          }
           for (int c = 0; c < visibleChannels.length; c++) {
-            if (c > 0) sink.write(',');
             final ch = visibleChannels[c];
             if (i < ch.data.length) {
-              sink.write('${ch.data[i].x.toStringAsFixed(6)},${ch.data[i].y.toStringAsFixed(ch.decimals)}');
+              sink.write(',${ch.data[i].y.toStringAsFixed(ch.decimals)}');
             } else {
               sink.write(',');
             }

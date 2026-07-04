@@ -94,6 +94,10 @@ pub extern "C" fn vcr_pyramid_ch_push_batch(
     for dp in slice {
         pyramid.push(dp.timestamp_ms, dp.value);
     }
+    // Signal pipeline that new data is available, so it updates the render envelope.
+    // Without this, Pipeline=ON + Demo mode (which bypasses PENDING_BATCHES) would
+    // never trigger envelope refresh.
+    pipeline::DATA_READY.store(true, std::sync::atomic::Ordering::Release);
     true
 }
 
@@ -211,8 +215,8 @@ pub extern "C" fn vcr_pipeline_reset() {
 /// Set the viewport range for the pipeline envelope computation.
 /// Called from Dart Ticker each frame (or when viewport changes).
 #[no_mangle]
-pub extern "C" fn vcr_envelope_set_viewport(t_min: f64, t_max: f64, max_points: u32) {
-    pipeline::set_viewport_range(t_min, t_max, max_points);
+pub extern "C" fn vcr_envelope_set_viewport(t_min: f64, t_max: f64, max_points: u32, anchor: f64) {
+    pipeline::set_viewport_range(t_min, t_max, max_points, anchor);
 }
 
 /// Get the current envelope for a specific channel (zero-copy pointer).
@@ -306,6 +310,10 @@ pub extern "C" fn vcr_analog_push_sample(channel_id: u32, value: f32) {
     let map = FFI_CH_ANALOG.read();
     if let Some(analog) = map.get(&channel_id) {
         analog.push_sample(value);
+        // Signal pipeline that new analog data is available.
+        // Without this, Pipeline=ON + Demo mode (which calls analogPushSample directly
+        // from pushChannelBatch) would never trigger envelope refresh.
+        pipeline::DATA_READY.store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -504,6 +512,15 @@ pub extern "C" fn vcr_analog_set_envelope_enabled(enabled: bool) {
 pub extern "C" fn vcr_analog_is_envelope_enabled() -> bool {
     use crate::core::plot::pipeline::USE_ANALOG_FOR_ENVELOPE;
     *USE_ANALOG_FOR_ENVELOPE.read()
+}
+
+/// Toggle: allow/disallow console data (debug_api) to write to FFI_CH_PYRAMIDS.
+/// When Demo is active, console data uses timestampMs x-values which conflict
+/// with Demo's sample-index scheme in the same pyramid channels [0..11].
+#[no_mangle]
+pub extern "C" fn vcr_pyramids_set_accept_console(accept: bool) {
+    use crate::core::plot::pipeline::PYRAMIDS_ACCEPT_CONSOLE;
+    *PYRAMIDS_ACCEPT_CONSOLE.write() = accept;
 }
 
 // ── Shutdown ────────────────────────────────────────────────────────

@@ -114,6 +114,10 @@ typedef _AnalogIsEnvelopeEnabledDart = bool Function();
 typedef _AnalogDumpDebugNative = Uint32 Function(Uint32 channelId, Pointer<Uint8> buf, Uint32 bufLen);
 typedef _AnalogDumpDebugDart = int Function(int channelId, Pointer<Uint8> buf, int bufLen);
 
+// Console pyramid guard (prevents console data from polluting Demo pyramids)
+typedef _PyramidsSetAcceptConsoleNative = Void Function(Bool accept);
+typedef _PyramidsSetAcceptConsoleDart = void Function(bool accept);
+
 // Pipeline control
 typedef _PipelineStartNative = Bool Function();
 typedef _PipelineStartDart = bool Function();
@@ -125,8 +129,8 @@ typedef _PipelineCheckDataReadyNative = Bool Function();
 typedef _PipelineCheckDataReadyDart = bool Function();
 
 // Render envelope (pipeline pre-computation)
-typedef _EnvelopeSetViewportNative = Void Function(Double tMin, Double tMax, Uint32 maxPoints);
-typedef _EnvelopeSetViewportDart = void Function(double tMin, double tMax, int maxPoints);
+typedef _EnvelopeSetViewportNative = Void Function(Double tMin, Double tMax, Uint32 maxPoints, Double anchor);
+typedef _EnvelopeSetViewportDart = void Function(double tMin, double tMax, int maxPoints, double anchor);
 typedef _EnvelopeGetChannelOffsetNative = Uint32 Function(Uint32 channelId);
 typedef _EnvelopeGetChannelOffsetDart = int Function(int channelId);
 typedef _EnvelopeGetChannelCountNative = Uint32 Function(Uint32 channelId);
@@ -173,6 +177,7 @@ class FfiBridge {
   late final _AnalogSetEnvelopeEnabledDart analogSetEnvelopeEnabled;
   late final _AnalogIsEnvelopeEnabledDart analogIsEnvelopeEnabled;
   late final _AnalogDumpDebugDart analogDumpDebugRaw;
+  late final _PyramidsSetAcceptConsoleDart pyramidsSetAcceptConsole;
 
   // Pipeline control
   late final _PipelineStartDart pipelineStart;
@@ -249,6 +254,7 @@ class FfiBridge {
       analogSetEnvelopeEnabled = _lib.lookupFunction<_AnalogSetEnvelopeEnabledNative, _AnalogSetEnvelopeEnabledDart>('vcr_analog_set_envelope_enabled');
       analogIsEnvelopeEnabled = _lib.lookupFunction<_AnalogIsEnvelopeEnabledNative, _AnalogIsEnvelopeEnabledDart>('vcr_analog_is_envelope_enabled');
       analogDumpDebugRaw = _lib.lookupFunction<_AnalogDumpDebugNative, _AnalogDumpDebugDart>('vcr_analog_dump_debug');
+      pyramidsSetAcceptConsole = _lib.lookupFunction<_PyramidsSetAcceptConsoleNative, _PyramidsSetAcceptConsoleDart>('vcr_pyramids_set_accept_console');
     } catch (e) {
       print('[FfiBridge] AnalogSegment bindings unavailable (DLL may be outdated), degrade gracefully: $e');
     }

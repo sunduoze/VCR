@@ -225,6 +225,12 @@ class DebugConsoleScreen extends StatefulWidget {
   final String? deviceId;
   const DebugConsoleScreen({super.key, this.deviceId});
 
+  /// Tab visibility flag (set by MainShell._navigateTo).
+  /// When false (user on Plot/Devices/Settings/Lua tab),
+  /// polling timers are suspended to avoid FRB serialization
+  /// overhead on the UI thread.
+  static bool isTabVisible = true; // default true for IndexedStack init
+
   /// Called by MainShell when switching away from Console tab
   static Future<void> saveCurrentState() async {
     await _DebugConsoleScreenState._instance?._saveGlobalConfig();
@@ -1286,7 +1292,10 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     _stopPolling();
     _pollTimer = Timer.periodic(
       const Duration(milliseconds: kPollIntervalMs),
-      (_) => _refreshLog(),
+      (_) {
+        if (!DebugConsoleScreen.isTabVisible) return; // Don't FRB-serialize logs when on other tabs
+        _refreshLog();
+      },
     );
   }
 

@@ -55,6 +55,13 @@ lazy_static! {
     /// Toggle: when true, update_render_envelope reads from AnalogSegment
     /// instead of TimeBucketPyramid. Set via C-ABI from Dart.
     pub static ref USE_ANALOG_FOR_ENVELOPE: RwLock<bool> = RwLock::new(false);
+
+    /// Toggle: when true, push_sample* via console (debug_api) routes to pyramids.
+    /// When false (Demo active), console data is blocked from FFI_CH_PYRAMIDS
+    /// to prevent timestampMs collision with Demo's sample-index-based pyramid entries.
+    /// DEFAULT: false — VCR starts in Demo mode; real data is blocked until
+    /// _toggleDataSource() explicitly enables it.
+    pub static ref PYRAMIDS_ACCEPT_CONSOLE: RwLock<bool> = RwLock::new(false);
 }
 
 /// Drain all pending batches (called from pipeline_loop only).
@@ -69,10 +76,18 @@ fn drain_pending_batches() -> Vec<BatchEntry> {
 
 // ── Viewport range storage (Dart → pipeline communication) ──────────
 
-/// Dart sets this to the current viewport range.
+/// Dart sets this to the current viewport range (ABSOLUTE coordinates).
 /// Stored as f64 bit patterns in atomics for lock-free read.
 static VP_T_MIN: AtomicU64 = AtomicU64::new(0);
 static VP_T_MAX: AtomicU64 = AtomicU64::new(f64::to_bits(1.0));
+/// Anchor: the absolute X of the newest data point (ch.data.last.x).
+/// Used by `update_render_envelope_from_analog` to convert absolute
+/// viewport coords → AnalogSegment sample indices.
+///   start_sample = anchor + (t_min - anchor) = t_min  (when anchor ≈ sample_count-1)
+/// But in Real mode anchor=timestampMs while AnalogSegment uses push_count,
+/// so we need the relative form: rel_min = t_min - anchor (= _xMin)
+/// and then: start_sample = (sample_count - 1) + rel_min
+static VP_ANCHOR: AtomicU64 = AtomicU64::new(0);
 static VP_MAX_PTS: AtomicU64 = AtomicU64::new(2000);
 /// Non-zero when Dart has set the viewport at least once.
 static VP_DIRTY: AtomicBool = AtomicBool::new(false);
@@ -85,9 +100,14 @@ pub static DATA_READY: AtomicBool = AtomicBool::new(false);
 
 /// Set the viewport range from Dart.
 /// Called each frame (or when viewport changes) from Ticker callback.
-pub fn set_viewport_range(t_min: f64, t_max: f64, max_points: u32) {
+/// `t_min`/`t_max` are ABSOLUTE coords (e.g. timestampMs or sample-index).
+/// `anchor` = ch.data.last.x (the newest data point's X).
+/// For TimeBucketPyramid: uses `t_min`/`t_max` directly (pyramid stores abs coords).
+/// For AnalogSegment: converts to relative via `t_min - anchor` → AnalogSegment idx.
+pub fn set_viewport_range(t_min: f64, t_max: f64, max_points: u32, anchor: f64) {
     let old_min = VP_T_MIN.swap(f64::to_bits(t_min), Ordering::Release);
     let old_max = VP_T_MAX.swap(f64::to_bits(t_max), Ordering::Release);
+    VP_ANCHOR.store(f64::to_bits(anchor), Ordering::Release);
     VP_MAX_PTS.store(max_points as u64, Ordering::Release);
     if (old_min != f64::to_bits(t_min)) || (old_max != f64::to_bits(t_max)) {
         VP_GEN.fetch_add(1, Ordering::Release);
@@ -198,30 +218,48 @@ pub fn stop_pipeline() {
 /// When pipeline is ON:  batch → pipeline_loop drains → pyramids + analog (no dual-write race).
 /// When pipeline is OFF: direct push to pyramids for per-channel query.
 pub fn push_sample(channel_id: u32, value: f64) {
+    // Demo mode: console data must NOT pollute any Rust data path.
+    // PYRAMIDS_ACCEPT_CONSOLE=false means Demo is active — console data
+    // (timestampMs) would corrupt Demo's AnalogSegment and pyramid (sample-index based).
+    if !*PYRAMIDS_ACCEPT_CONSOLE.read() {
+        return;
+    }
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
     if PIPELINE_RUNNING.load(Ordering::Acquire) {
         PENDING_BATCHES.lock().push(BatchEntry { x, values: vec![value], channel_id: Some(channel_id) });
         DATA_READY.store(true, Ordering::Release);
     } else {
+        let analog_map = FFI_CH_ANALOG.read();
         let mut pyramids = FFI_CH_PYRAMIDS.lock();
         let pyramid = pyramids.entry(channel_id).or_default();
         pyramid.push(x, value);
+        if let Some(analog) = analog_map.get(&channel_id) {
+            analog.push_sample(value as f32);
+        }
     }
 }
 
 /// Push a multi-channel sample (one CSV line → multiple channels).
 /// Channel index = position in values array.
 pub fn push_sample_batch(values: &[f64]) {
+    // Demo mode guard: same rationale as push_sample.
+    if !*PYRAMIDS_ACCEPT_CONSOLE.read() {
+        return;
+    }
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
     if PIPELINE_RUNNING.load(Ordering::Acquire) {
         PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
         DATA_READY.store(true, Ordering::Release);
     } else {
+        let analog_map = FFI_CH_ANALOG.read();
         let mut pyramids = FFI_CH_PYRAMIDS.lock();
         for (ci, value) in values.iter().enumerate() {
             let channel_id = ci as u32;
             let pyramid = pyramids.entry(channel_id).or_default();
             pyramid.push(x, *value);
+            if let Some(analog) = analog_map.get(&channel_id) {
+                analog.push_sample(*value as f32);
+            }
         }
     }
 }
@@ -236,18 +274,23 @@ pub fn push_sample_batch(values: &[f64]) {
 /// This eliminates the previous dual-write race: when the pipeline thread holds
 /// FFI_CH_PYRAMIDS lock during Step 1 drain, this function no longer contends on it.
 pub fn push_sample_batch_with_x(x: f64, values: &[f64]) {
+    // Demo mode guard: same rationale as push_sample.
+    if !*PYRAMIDS_ACCEPT_CONSOLE.read() {
+        return;
+    }
     if PIPELINE_RUNNING.load(Ordering::Acquire) {
-        // Pipeline is active: only write to batch buffer.
-        // The pipeline loop will drain → push to pyramids + analog (single writer, no race).
         PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
         DATA_READY.store(true, Ordering::Release);
     } else {
-        // Pipeline not running: push directly to pyramids for per-channel query path.
+        let analog_map = FFI_CH_ANALOG.read();
         let mut pyramids = FFI_CH_PYRAMIDS.lock();
         for (ci, value) in values.iter().enumerate() {
             let channel_id = ci as u32;
             let pyramid = pyramids.entry(channel_id).or_default();
             pyramid.push(x, *value);
+            if let Some(analog) = analog_map.get(&channel_id) {
+                analog.push_sample(*value as f32);
+            }
         }
     }
 }
@@ -329,14 +372,31 @@ fn update_render_envelope_from_pyramids(t_min: f64, t_max: f64, target_points: u
 }
 
 /// Envelope from AnalogSegment (10-level 16^n pyramid, f32).
-/// Sample indices are used as pseudo-timestamps (aligned with Demo mode's
-/// global counter, where x ≈ sample_index).
+///
+/// `t_min`/`t_max` are ABSOLUTE coordinates (from ch.data's X axis).
+/// `anchor` = ch.data.last.x (newest data point's X).
+///
+/// AnalogSegment uses push_count as its index (0-based, continuous), independent
+/// of ch.data's X coordinate (which is sample-index in Demo, timestampMs in Real).
+///
+/// Mapping:
+///   rel_min = t_min - anchor  (= _xMin, negative)
+///   rel_max = t_max - anchor  (= _xMax, usually 0)
+///   start_sample = (sample_count - 1) + rel_min
+///   end_sample   = (sample_count - 1) + rel_max
+/// Output X = absolute coords (t_min + frac * range), so Dart side can use
+/// `xRel = envelopeX - newestAbsX` uniformly for both pyramid and analog paths.
 fn update_render_envelope_from_analog(t_min: f64, t_max: f64, target_points: u32) {
     let analog_map = FFI_CH_ANALOG.read();
     let num_channels = analog_map.len().min(MAX_CHANNELS);
     if num_channels == 0 {
         return;
     }
+
+    let anchor = f64::from_bits(VP_ANCHOR.load(Ordering::Acquire));
+    let rel_min = t_min - anchor;
+    let rel_max = t_max - anchor;
+    let time_range = t_max - t_min;
 
     let mut envelope = RENDER_ENVELOPE.lock();
 
@@ -348,8 +408,8 @@ fn update_render_envelope_from_analog(t_min: f64, t_max: f64, target_points: u32
     channel_ids.sort_unstable();
     channel_ids.truncate(MAX_CHANNELS);
 
-    let time_range = t_max - t_min;
     if time_range <= 0.0 {
+        envelope.generation = envelope.generation.wrapping_add(1);
         return;
     }
 
@@ -365,11 +425,14 @@ fn update_render_envelope_from_analog(t_min: f64, t_max: f64, target_points: u32
                 continue;
             }
 
-            // Map viewport time range to sample range.
-            // In Demo mode, x ≈ sample_index (global counter increments per tick),
-            // so the mapping is nearly 1:1.
-            let start_sample = (t_min.max(0.0) as u64).min(sample_count);
-            let end_sample = (t_max as u64).min(sample_count);
+            // Map relative viewport coords to absolute sample indices.
+            let newest_sample = sample_count - 1;
+            let start_sample = ((newest_sample as f64 + rel_min).round() as i64)
+                .max(0)
+                .min(sample_count as i64) as u64;
+            let end_sample = ((newest_sample as f64 + rel_max).round() as i64)
+                .max(start_sample as i64 + 1)
+                .min(sample_count as i64) as u64;
 
             if start_sample >= end_sample {
                 envelope.channel_counts[i] = 0;
@@ -386,21 +449,19 @@ fn update_render_envelope_from_analog(t_min: f64, t_max: f64, target_points: u32
 
             for (j, sample) in section.samples.iter().take(max_pts).enumerate() {
                 // Map envelope sample to its actual sample position.
-                // section.start + j * section.scale gives the absolute sample index
-                // within the AnalogSegment. Map to viewport range [start_sample, end_sample) → [t_min, t_max).
+                // section.start + j * section.scale = absolute sample index in AnalogSegment.
+                // Convert to absolute X coordinate: absX = anchor + (abs_sample - newest_sample)
                 let abs_sample = section.start + (j as u64) * (section.scale as u64);
-                let viewport_samples = end_sample.saturating_sub(start_sample).max(1) as f64;
-                let frac = (abs_sample.saturating_sub(start_sample) as f64 / viewport_samples)
-                    .clamp(0.0, 1.0);
-                let x = t_min + frac * time_range;
+                let rel_x = abs_sample as f64 - newest_sample as f64;
+                let x_abs = anchor + rel_x;
 
                 let idx = (byte_offset as usize) + (pt_count as usize) * 2;
                 if idx + 3 < envelope.data.len() {
                     // Write min point (f32 → f64)
-                    envelope.data[idx] = x;
+                    envelope.data[idx] = x_abs;
                     envelope.data[idx + 1] = sample.min as f64;
                     // Write max point (slight x offset for visual pair)
-                    envelope.data[idx + 2] = x + 0.001;
+                    envelope.data[idx + 2] = x_abs + 0.001;
                     envelope.data[idx + 3] = sample.max as f64;
                     pt_count += 2;
                 }
@@ -431,7 +492,10 @@ fn pipeline_loop() {
         // ── Step 1: Drain pending batches into pyramids ──
         // Only the pipeline thread touches FFI_CH_PYRAMIDS (producer writes to PENDING_BATCHES)
         let batches = drain_pending_batches();
-        if !batches.is_empty() {
+        // Guard: Demo mode blocks console data from all Rust paths.
+        // When PYRAMIDS_ACCEPT_CONSOLE is false, discard any residual batches
+        // (e.g. from a mode switch where PENDING_BATCHES still has entries).
+        if !batches.is_empty() && *PYRAMIDS_ACCEPT_CONSOLE.read() {
             let mut pyramids = FFI_CH_PYRAMIDS.lock();
             let analog_map = FFI_CH_ANALOG.read();
             for entry in batches {
@@ -491,6 +555,8 @@ pub fn reset_pipeline() {
     }
     drop(analog_map);
     FFI_CH_ANALOG.write().clear();
+    // Reset viewport anchor
+    VP_ANCHOR.store(0, Ordering::Release);
     let mut envelope = RENDER_ENVELOPE.lock();
     envelope.num_channels = 0;
     envelope.generation = 0;

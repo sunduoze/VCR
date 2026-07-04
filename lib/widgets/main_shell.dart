@@ -147,6 +147,11 @@ class MainShellState extends State<MainShell> {
   void _navigateTo(int index) {
     if (index == _currentIndex) return;
 
+    // Console tab visibility toggle — suspends 50ms FRB polling
+    // when user is on other tabs, preventing UI-thread blocking
+    // from log serialization during real-time Plot rendering.
+    DebugConsoleScreen.isTabVisible = (index == 1);
+
     // Save Console state before switching away from it (belt-and-suspenders;
     // IndexedStack keeps state alive, but we also persist to disk for crash safety)
     // Console is at index 1 (Devices=0, Console=1, Plot=2, Settings=3, Lua=4)

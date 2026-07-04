@@ -20,3 +20,7 @@ pub const UNIT_SIZE: usize = std::mem::size_of::<f32>(); // 4
 pub const MAX_CHUNK_SIZE: usize = 1 * 1024 * 1024;
 /// Maximum number of channels (unchanged from existing)
 pub const MAX_CHANNELS: usize = 64;
+/// Max raw_trace samples per channel (250K × 4 bytes = 1MB).
+/// Caps the unbounded Vec<f32> to prevent realloc memcpy spikes
+/// when push_sample is called at high frequency (720/sec per channel).
+pub const MAX_RAW_TRACE_SAMPLES: usize = 250_000;

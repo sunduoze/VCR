@@ -11,6 +11,7 @@
 // Level selection: ln(samples_per_pixel) / ln(16) - 1
 
 use parking_lot::{Mutex, RwLock};
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
@@ -32,13 +33,19 @@ pub struct AnalogSegment {
     pub max_value: RwLock<f32>,
     /// Total pushed sample count (for Demo mode x-axis)
     pub push_count: AtomicU64,
+    /// Offset: absolute sample index of raw_trace[0].
+    /// When pop_front() drops old samples, this increments to keep
+    /// read_trace(start, end) → absolute indexing correct.
+    raw_trace_offset: AtomicU64,
     /// Ring buffer of recent raw samples for envelope computation.
     /// Accumulates up to ENVELOPE_SCALE_FACTOR samples, then computes a
     /// Level 0 EnvelopeSample and clears. Avoids storing all raw data.
     raw_buffer: Mutex<Vec<f32>>,
     /// Full raw trace for trace-mode rendering (samplesPerPixel < ENVELOPE_THRESHOLD).
-    /// Stores every pushed sample as f32 value. Read via read_trace().
-    raw_trace: Mutex<Vec<f32>>,
+    /// Uses VecDeque with a capacity cap (MAX_RAW_TRACE_SAMPLES) to prevent
+    /// unbounded memory growth and realloc memcpy spikes on the UI thread.
+    /// When the cap is exceeded, the oldest samples are popped from the front.
+    raw_trace: Mutex<VecDeque<f32>>,
     /// Sampling rate in Hz. Settable via set_samplerate().
     samplerate: RwLock<f64>,
 }
@@ -59,8 +66,9 @@ impl AnalogSegment {
             min_value: RwLock::new(f32::MAX),
             max_value: RwLock::new(f32::MIN),
             push_count: AtomicU64::new(0),
+            raw_trace_offset: AtomicU64::new(0),
             raw_buffer: Mutex::new(Vec::with_capacity(ENVELOPE_SCALE_FACTOR as usize)),
-            raw_trace: Mutex::new(Vec::new()),
+            raw_trace: Mutex::new(VecDeque::with_capacity(MAX_RAW_TRACE_SAMPLES)),
             samplerate: RwLock::new(samplerate),
         })
     }
@@ -82,8 +90,15 @@ impl AnalogSegment {
                 *max = value;
             }
         }
-        // Append to full raw trace for trace-mode rendering
-        self.raw_trace.lock().push(value);
+        // Append to full raw trace (VecDeque with cap: pop front when full)
+        {
+            let mut trace = self.raw_trace.lock();
+            if trace.len() >= MAX_RAW_TRACE_SAMPLES {
+                trace.pop_front();
+                self.raw_trace_offset.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            trace.push_back(value);
+        }
         // Accumulate in ring buffer; compute envelope when buffer is full
         self.try_compact_envelope(value);
     }
@@ -233,11 +248,17 @@ impl AnalogSegment {
     /// Returns empty vec if range is out of bounds.
     pub fn read_trace(&self, start: u64, end: u64) -> Vec<f32> {
         let trace = self.raw_trace.lock();
-        let end = end.min(trace.len() as u64);
-        if start >= end {
+        let offset = self.raw_trace_offset.load(std::sync::atomic::Ordering::Acquire);
+        let _total_pushed = offset + trace.len() as u64;
+        // Convert absolute sample indices to VecDeque indices
+        let rel_start = if start > offset { start - offset } else { 0 };
+        let rel_end = (end - offset).min(trace.len() as u64);
+        if rel_start >= rel_end {
             return vec![];
         }
-        trace[start as usize..end as usize].to_vec()
+        // VecDeque makes_range iter uses contiguous slices internally
+        let result: Vec<f32> = trace.iter().skip(rel_start as usize).take((rel_end - rel_start) as usize).copied().collect();
+        result
     }
 
     /// Set the sampling rate (Hz).

@@ -84,6 +84,7 @@ class PlotChannel {
   final String deviceId;
   String deviceName;
   String channelName;
+  final int deviceKey; // 0-15, unique per device for FFI routing
   Color color;
   bool visible;
   int decimals;
@@ -107,6 +108,7 @@ class PlotChannel {
     required this.deviceId,
     required this.deviceName,
     required this.channelName,
+    this.deviceKey = 0,
     this.color = AppTheme.primary,
     this.visible = true,
     this.decimals = 3,
@@ -129,6 +131,7 @@ class PlotChannel {
     'deviceId': deviceId,
     'deviceName': deviceName,
     'channelName': channelName,
+    'deviceKey': deviceKey,
     'visible': visible,
     'decimals': decimals,
     'showYAxis': showYAxis,
@@ -145,6 +148,7 @@ class PlotChannel {
     deviceId: json['deviceId'] as String? ?? '',
     deviceName: json['deviceName'] as String? ?? '',
     channelName: json['channelName'] as String? ?? '',
+    deviceKey: (json['deviceKey'] as num?)?.toInt() ?? 0,
     visible: json['visible'] as bool? ?? true,
     decimals: json['decimals'] as int? ?? 3,
     showYAxis: json['showYAxis'] as bool? ?? true,
@@ -238,6 +242,75 @@ enum _ScrollbarDrag { none, thumb, leftEdge, rightEdge }
 /// Min visible X range (prevents zooming to zero)
 // ignore: unused_element
 const _minVisibleRange = 0.01;
+
+/// Multi-device context — each device has its own data source, channels, and viewport state.
+class DeviceContext {
+  final int deviceKey; // 0-15, unique per device for FFI routing
+  String deviceId; // for real devices, the Rust device_id
+  String label; // display name in tabs/grid
+  bool isRealData; // false=demo, true=real device
+  List<PlotChannel> channels;
+  bool isActive; // whether this device is being displayed
+
+  // Per-device viewport state (mirrors single-device _PlotScreenState fields)
+  double xMin, xMax, yMin, yMax;
+  bool autoScaleX, autoScaleY;
+  bool scrollMode;
+  double scrollWindowWidth;
+  double scrollMinTime;
+  bool pipelineEnabled;
+  bool analogEnvelopeEnabled;
+  int viewportRefreshCount;
+
+  // Per-device demo state
+  double demoPhase;
+  int sampleIndex;
+  List<int> demoSampleIndices;
+  Timer? demoTimer;
+
+  // Per-device real data state
+  Timer? realDataTimer;
+  bool justClearedData;
+
+  DeviceContext({
+    required this.deviceKey,
+    this.deviceId = '',
+    this.label = '',
+    this.isRealData = false,
+    List<PlotChannel>? channels,
+    this.isActive = true,
+    this.xMin = -1000,
+    this.xMax = 0,
+    this.yMin = -1,
+    this.yMax = 1,
+    this.autoScaleX = true,
+    this.autoScaleY = true,
+    this.scrollMode = false,
+    this.scrollWindowWidth = 0.0,
+    this.scrollMinTime = 0.0,
+    this.pipelineEnabled = false,
+    this.analogEnvelopeEnabled = true,
+    this.viewportRefreshCount = 0,
+    this.demoPhase = 0,
+    this.sampleIndex = 0,
+    List<int>? demoSampleIndices,
+    this.demoTimer,
+    this.realDataTimer,
+    this.justClearedData = false,
+  }) : channels = channels ?? [],
+       demoSampleIndices = demoSampleIndices ?? [];
+
+  /// Channels visible from this device
+  List<PlotChannel> get visibleChannels => channels.where((c) => c.visible).toList();
+
+  /// Whether all channels' data is empty
+  bool get hasNoData => channels.every((c) => c.data.isEmpty);
+
+  /// Effective scroll window width (auto = maxPoints)
+  double get effectiveScrollWindowWidth => scrollWindowWidth > 0 ? scrollWindowWidth : _defaultMaxPoints.toDouble();
+
+  static const int _defaultMaxPoints = 250000;
+}
 
 class PlotScreen extends StatefulWidget {
   const PlotScreen({super.key});

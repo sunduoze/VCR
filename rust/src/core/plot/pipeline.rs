@@ -20,6 +20,7 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use lazy_static::lazy_static;
 
+use crate::core::plot::ffi_bridge::dev_ch_key;
 use crate::core::plot::ffi_bridge::FFI_CH_PYRAMIDS;
 use crate::core::plot::analog_segment::AnalogSegment;
 use std::sync::Arc;
@@ -36,6 +37,7 @@ use parking_lot::RwLock;
 /// One CSV line worth of multi-channel data
 struct BatchEntry {
     x: f64,
+    device_idx: u8,
     /// values[i] = sample value for channel i (single-channel push uses vec![value])
     values: Vec<f64>,
     /// If Some(id), override channel index (0-based) with explicit channel_id
@@ -62,6 +64,13 @@ lazy_static! {
     /// DEFAULT: false — VCR starts in Demo mode; real data is blocked until
     /// _toggleDataSource() explicitly enables it.
     pub static ref PYRAMIDS_ACCEPT_CONSOLE: RwLock<bool> = RwLock::new(false);
+
+    /// Registry: device_id (String) → device_idx (u8, 0..15).
+    /// Devices are assigned indices on first use. Max 16 devices.
+    pub static ref DEVICE_REGISTRY: parking_lot::RwLock<HashMap<String, u8>> = parking_lot::RwLock::new(HashMap::new());
+
+    /// Next available device index (atomic counter).
+    static ref NEXT_DEVICE_IDX: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 }
 
 /// Drain all pending batches (called from pipeline_loop only).
@@ -72,6 +81,21 @@ fn drain_pending_batches() -> Vec<BatchEntry> {
         return Vec::new();
     }
     std::mem::take(&mut *pending)
+}
+
+/// Get or assign a device index for the given device_id.
+/// Returns the device_idx (0..15). Panics if more than 16 devices are registered.
+pub fn get_or_assign_device_idx(device_id: &str) -> u8 {
+    {
+        let reg = DEVICE_REGISTRY.read();
+        if let Some(&idx) = reg.get(device_id) {
+            return idx;
+        }
+    }
+    let idx = NEXT_DEVICE_IDX.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    assert!(idx < 16, "Too many devices (max 16). Device: {}", device_id);
+    DEVICE_REGISTRY.write().insert(device_id.to_string(), idx);
+    idx
 }
 
 // ── Viewport range storage (Dart → pipeline communication) ──────────
@@ -154,6 +178,8 @@ const MAX_ENVELOPE_PTS_PER_CHANNEL: usize = 128000;
 pub struct RenderEnvelope {
     /// Total number of active channels
     pub num_channels: u32,
+    /// Sorted compound keys of channels present in this envelope
+    pub channel_ids: [u32; MAX_CHANNELS],
     /// Byte offset of each channel's data in `data`
     pub channel_offsets: [u32; MAX_CHANNELS],
     /// Number of f64 pairs (x,y) for each channel
@@ -174,6 +200,7 @@ lazy_static! {
     /// Global render envelope (updated by pipeline, read by Dart via C-ABI)
     pub static ref RENDER_ENVELOPE: Mutex<RenderEnvelope> = Mutex::new(RenderEnvelope {
         num_channels: 0,
+        channel_ids: [0u32; MAX_CHANNELS],
         channel_offsets: [0u32; MAX_CHANNELS],
         channel_counts: [0u32; MAX_CHANNELS],
         data: vec![0f64; MAX_CHANNELS * MAX_ENVELOPE_PTS_PER_CHANNEL],
@@ -221,7 +248,7 @@ pub fn stop_pipeline() {
 ///
 /// When pipeline is ON:  batch → pipeline_loop drains → pyramids + analog (no dual-write race).
 /// When pipeline is OFF: direct push to pyramids for per-channel query.
-pub fn push_sample(channel_id: u32, value: f64) {
+pub fn push_sample(device_idx: u8, channel_id: u32, value: f64) {
     // Demo mode: console data must NOT pollute any Rust data path.
     // PYRAMIDS_ACCEPT_CONSOLE=false means Demo is active — console data
     // (timestampMs) would corrupt Demo's AnalogSegment and pyramid (sample-index based).
@@ -229,15 +256,16 @@ pub fn push_sample(channel_id: u32, value: f64) {
         return;
     }
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
+    let key = dev_ch_key(device_idx, channel_id);
     if PIPELINE_RUNNING.load(Ordering::Acquire) {
-        PENDING_BATCHES.lock().push(BatchEntry { x, values: vec![value], channel_id: Some(channel_id) });
+        PENDING_BATCHES.lock().push(BatchEntry { x, device_idx, values: vec![value], channel_id: Some(channel_id) });
         DATA_READY.store(true, Ordering::Release);
     } else {
         let analog_map = FFI_CH_ANALOG.read();
         let mut pyramids = FFI_CH_PYRAMIDS.lock();
-        let pyramid = pyramids.entry(channel_id).or_default();
+        let pyramid = pyramids.entry(key).or_default();
         pyramid.push(x, value);
-        if let Some(analog) = analog_map.get(&channel_id) {
+        if let Some(analog) = analog_map.get(&key) {
             analog.push_sample(value as f32);
         }
         // P0 fix: signal Dart Ticker that new data is available.
@@ -249,23 +277,23 @@ pub fn push_sample(channel_id: u32, value: f64) {
 
 /// Push a multi-channel sample (one CSV line → multiple channels).
 /// Channel index = position in values array.
-pub fn push_sample_batch(values: &[f64]) {
+pub fn push_sample_batch(device_idx: u8, values: &[f64]) {
     // Demo mode guard: same rationale as push_sample.
     if !*PYRAMIDS_ACCEPT_CONSOLE.read() {
         return;
     }
     let x = GLOBAL_SAMPLE_IDX.fetch_add(1, Ordering::Relaxed) as f64;
     if PIPELINE_RUNNING.load(Ordering::Acquire) {
-        PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
+        PENDING_BATCHES.lock().push(BatchEntry { x, device_idx, values: values.to_vec(), channel_id: None });
         DATA_READY.store(true, Ordering::Release);
     } else {
         let analog_map = FFI_CH_ANALOG.read();
         let mut pyramids = FFI_CH_PYRAMIDS.lock();
         for (ci, value) in values.iter().enumerate() {
-            let channel_id = ci as u32;
-            let pyramid = pyramids.entry(channel_id).or_default();
+            let key = dev_ch_key(device_idx, ci as u32);
+            let pyramid = pyramids.entry(key).or_default();
             pyramid.push(x, *value);
-            if let Some(analog) = analog_map.get(&channel_id) {
+            if let Some(analog) = analog_map.get(&key) {
                 analog.push_sample(*value as f32);
             }
         }
@@ -282,22 +310,22 @@ pub fn push_sample_batch(values: &[f64]) {
 ///
 /// This eliminates the previous dual-write race: when the pipeline thread holds
 /// FFI_CH_PYRAMIDS lock during Step 1 drain, this function no longer contends on it.
-pub fn push_sample_batch_with_x(x: f64, values: &[f64]) {
+pub fn push_sample_batch_with_x(device_idx: u8, x: f64, values: &[f64]) {
     // Demo mode guard: same rationale as push_sample.
     if !*PYRAMIDS_ACCEPT_CONSOLE.read() {
         return;
     }
     if PIPELINE_RUNNING.load(Ordering::Acquire) {
-        PENDING_BATCHES.lock().push(BatchEntry { x, values: values.to_vec(), channel_id: None });
+        PENDING_BATCHES.lock().push(BatchEntry { x, device_idx, values: values.to_vec(), channel_id: None });
         DATA_READY.store(true, Ordering::Release);
     } else {
         let analog_map = FFI_CH_ANALOG.read();
         let mut pyramids = FFI_CH_PYRAMIDS.lock();
         for (ci, value) in values.iter().enumerate() {
-            let channel_id = ci as u32;
-            let pyramid = pyramids.entry(channel_id).or_default();
+            let key = dev_ch_key(device_idx, ci as u32);
+            let pyramid = pyramids.entry(key).or_default();
             pyramid.push(x, *value);
-            if let Some(analog) = analog_map.get(&channel_id) {
+            if let Some(analog) = analog_map.get(&key) {
                 analog.push_sample(*value as f32);
             }
         }
@@ -343,6 +371,7 @@ fn update_render_envelope_from_pyramids(t_min: f64, t_max: f64, target_points: u
     let mut byte_offset: u32 = 0;
 
     for (i, &ch_id) in channel_ids.iter().enumerate() {
+        envelope.channel_ids[i] = ch_id;
         envelope.channel_offsets[i] = byte_offset;
 
         if let Some(pyramid) = pyramids.get(&ch_id) {
@@ -426,6 +455,7 @@ fn update_render_envelope_from_analog(t_min: f64, t_max: f64, target_points: u32
     let mut byte_offset: u32 = 0;
 
     for (i, &ch_id) in channel_ids.iter().enumerate() {
+        envelope.channel_ids[i] = ch_id;
         envelope.channel_offsets[i] = byte_offset;
 
         if let Some(analog) = analog_map.get(&ch_id) {
@@ -509,22 +539,24 @@ fn pipeline_loop() {
             let mut pyramids = FFI_CH_PYRAMIDS.lock();
             let analog_map = FFI_CH_ANALOG.read();
             for entry in batches {
+                let di = entry.device_idx;
                 if let Some(ch_id) = entry.channel_id {
                     // Single-channel push with explicit channel_id
-                    let pyramid = pyramids.entry(ch_id).or_default();
+                    let key = dev_ch_key(di, ch_id);
+                    let pyramid = pyramids.entry(key).or_default();
                     pyramid.push(entry.x, entry.values[0]);
                     // Also push to AnalogSegment (f32 precision)
-                    if let Some(analog) = analog_map.get(&ch_id) {
+                    if let Some(analog) = analog_map.get(&key) {
                         analog.push_sample(entry.values[0] as f32);
                     }
                 } else {
                     // Multi-channel push: channel_id = array index
                     for (ci, value) in entry.values.iter().enumerate() {
-                        let channel_id = ci as u32;
-                        let pyramid = pyramids.entry(channel_id).or_default();
+                        let key = dev_ch_key(di, ci as u32);
+                        let pyramid = pyramids.entry(key).or_default();
                         pyramid.push(entry.x, *value);
                         // Also push to AnalogSegment (f32 precision)
-                        if let Some(analog) = analog_map.get(&channel_id) {
+                        if let Some(analog) = analog_map.get(&key) {
                             analog.push_sample(*value as f32);
                         }
                     }
@@ -571,6 +603,7 @@ pub fn reset_pipeline() {
     envelope.num_channels = 0;
     envelope.generation = 0;
     for i in 0..MAX_CHANNELS {
+        envelope.channel_ids[i] = 0;
         envelope.channel_offsets[i] = 0;
         envelope.channel_counts[i] = 0;
     }

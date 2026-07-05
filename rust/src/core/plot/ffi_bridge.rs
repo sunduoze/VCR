@@ -29,6 +29,16 @@ lazy_static! {
     static ref FFI_READY: AtomicBool = AtomicBool::new(false);
 }
 
+// ── Multi-device key encoding ─────────────────────────────────────
+
+/// Encode (device_idx, channel_id) into a single u32 compound key.
+/// device_idx: 0..15 (4 bits high), channel_id: 0..255 (8 bits low).
+/// When device_idx=0, dev_ch_key(0, x) = x — backward compatible.
+#[inline]
+pub fn dev_ch_key(device_idx: u8, channel_id: u32) -> u32 {
+    ((device_idx as u32) << 8) | (channel_id & 0xFF)
+}
+
 // ── C-ABI types ─────────────────────────────────────────────────────
 
 /// C-compatible data point (matches Dart Struct layout exactly)
@@ -72,16 +82,17 @@ pub extern "C" fn vcr_ffi_is_ready() -> bool {
 /// Push a data point into a specific channel's pyramid.
 /// Creates the channel pyramid on first push (lazy init).
 #[no_mangle]
-pub extern "C" fn vcr_pyramid_ch_push(channel_id: u32, timestamp_ms: f64, value: f64) {
+pub extern "C" fn vcr_pyramid_ch_push(device_idx: u8, channel_id: u32, timestamp_ms: f64, value: f64) {
+    let key = dev_ch_key(device_idx, channel_id);
     let mut pyramids = FFI_CH_PYRAMIDS.lock();
-    let pyramid = pyramids.entry(channel_id).or_default();
+    let pyramid = pyramids.entry(key).or_default();
     pyramid.push(timestamp_ms, value);
 }
 
 /// Push batch into a specific channel's pyramid.
 #[no_mangle]
 pub extern "C" fn vcr_pyramid_ch_push_batch(
-    channel_id: u32,
+    device_idx: u8, channel_id: u32,
     data: *const CDataPoint,
     count: u32,
 ) -> bool {
@@ -89,8 +100,9 @@ pub extern "C" fn vcr_pyramid_ch_push_batch(
         return false;
     }
     let slice = unsafe { std::slice::from_raw_parts(data, count as usize) };
+    let key = dev_ch_key(device_idx, channel_id);
     let mut pyramids = FFI_CH_PYRAMIDS.lock();
-    let pyramid = pyramids.entry(channel_id).or_default();
+    let pyramid = pyramids.entry(key).or_default();
     for dp in slice {
         pyramid.push(dp.timestamp_ms, dp.value);
     }
@@ -106,6 +118,7 @@ pub extern "C" fn vcr_pyramid_ch_push_batch(
 /// Zero-alloc: writes directly into `out` buffer, no intermediate Vec.
 #[no_mangle]
 pub extern "C" fn vcr_pyramid_ch_query_points(
+    device_idx: u8,
     channel_id: u32,
     t_min: f64,
     t_max: f64,
@@ -116,8 +129,9 @@ pub extern "C" fn vcr_pyramid_ch_query_points(
     if out.is_null() || max_points == 0 {
         return 0;
     }
+    let key = dev_ch_key(device_idx, channel_id);
     let pyramids = FFI_CH_PYRAMIDS.lock();
-    let pyramid = match pyramids.get(&channel_id) {
+    let pyramid = match pyramids.get(&key) {
         Some(p) => p,
         None => return 0,
     };
@@ -145,6 +159,7 @@ pub extern "C" fn vcr_pyramid_ch_query_points(
 /// Query a channel's pyramid for CBucketStats (min/max/avg/count per bucket).
 #[no_mangle]
 pub extern "C" fn vcr_pyramid_ch_query(
+    device_idx: u8,
     channel_id: u32,
     t_min: f64,
     t_max: f64,
@@ -155,8 +170,9 @@ pub extern "C" fn vcr_pyramid_ch_query(
     if out.is_null() || max_buckets == 0 {
         return 0;
     }
+    let key = dev_ch_key(device_idx, channel_id);
     let pyramids = FFI_CH_PYRAMIDS.lock();
-    let pyramid = match pyramids.get(&channel_id) {
+    let pyramid = match pyramids.get(&key) {
         Some(p) => p,
         None => return 0,
     };
@@ -178,9 +194,10 @@ pub extern "C" fn vcr_pyramid_ch_query(
 
 /// Clear a specific channel's pyramid (e.g., on device disconnect).
 #[no_mangle]
-pub extern "C" fn vcr_pyramid_ch_clear(channel_id: u32) {
+pub extern "C" fn vcr_pyramid_ch_clear(device_idx: u8, channel_id: u32) {
+    let key = dev_ch_key(device_idx, channel_id);
     let mut pyramids = FFI_CH_PYRAMIDS.lock();
-    pyramids.remove(&channel_id);
+    pyramids.remove(&key);
 }
 
 /// Clear all per-channel pyramids.
@@ -220,20 +237,17 @@ pub extern "C" fn vcr_envelope_set_viewport(t_min: f64, t_max: f64, max_points: 
 }
 
 /// Get the current envelope for a specific channel (zero-copy pointer).
-/// Returns: byte offset of channel's data in the shared envelope buffer, or u32::MAX if not found.
+/// Searches envelope channel_ids for matching compound key.
 /// Dart reads: ((envelope + offset) as Pointer<Double>).asTypedList(count * 2)
 #[no_mangle]
-pub extern "C" fn vcr_envelope_get_channel_offset(channel_id: u32) -> u32 {
+pub extern "C" fn vcr_envelope_get_channel_offset(device_idx: u8, channel_id: u32) -> u32 {
+    let key = dev_ch_key(device_idx, channel_id);
     let env = RENDER_ENVELOPE.lock();
     for i in 0..env.num_channels as usize {
         if i >= pipeline::MAX_CHANNELS {
             break;
         }
-        // We need to match channel_id. The channel ordering in envelope matches
-        // the sorted order in update_render_envelope. We compute offset from the
-        // channel's stored offset.
-        // For simplicity, return offset for channel index = channel_id.
-        if i == channel_id as usize {
+        if env.channel_ids[i] == key {
             return env.channel_offsets[i];
         }
     }
@@ -242,13 +256,14 @@ pub extern "C" fn vcr_envelope_get_channel_offset(channel_id: u32) -> u32 {
 
 /// Get the count of data points for a specific channel in the envelope.
 #[no_mangle]
-pub extern "C" fn vcr_envelope_get_channel_count(channel_id: u32) -> u32 {
+pub extern "C" fn vcr_envelope_get_channel_count(device_idx: u8, channel_id: u32) -> u32 {
+    let key = dev_ch_key(device_idx, channel_id);
     let env = RENDER_ENVELOPE.lock();
     for i in 0..env.num_channels as usize {
         if i >= pipeline::MAX_CHANNELS {
             break;
         }
-        if i == channel_id as usize {
+        if env.channel_ids[i] == key {
             return env.channel_counts[i];
         }
     }
@@ -302,24 +317,26 @@ pub extern "C" fn vcr_envelope_get_num_channels() -> u32 {
 /// Creates one on first call (with default samplerate 1000 Hz).
 /// Returns true if segment was newly created.
 #[no_mangle]
-pub extern "C" fn vcr_analog_ensure(channel_id: u32) -> bool {
+pub extern "C" fn vcr_analog_ensure(device_idx: u8, channel_id: u32) -> bool {
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
     use crate::core::plot::pipeline::ANALOG_LEVEL_COUNT;
+    let key = dev_ch_key(device_idx, channel_id);
     let mut map = FFI_CH_ANALOG.write();
-    if map.contains_key(&channel_id) {
+    if map.contains_key(&key) {
         return false;
     }
     let level_count = *ANALOG_LEVEL_COUNT.read();
-    map.insert(channel_id, AnalogSegment::new(1000.0, level_count));
+    map.insert(key, AnalogSegment::new(1000.0, level_count));
     true
 }
 
 /// Push a single sample into a channel's AnalogSegment.
 #[no_mangle]
-pub extern "C" fn vcr_analog_push_sample(channel_id: u32, value: f32) {
+pub extern "C" fn vcr_analog_push_sample(device_idx: u8, channel_id: u32, value: f32) {
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    if let Some(analog) = map.get(&channel_id) {
+    if let Some(analog) = map.get(&key) {
         analog.push_sample(value);
         // Signal pipeline that new analog data is available.
         // Without this, Pipeline=ON + Demo mode (which calls analogPushSample directly
@@ -330,23 +347,25 @@ pub extern "C" fn vcr_analog_push_sample(channel_id: u32, value: f32) {
 
 /// Get the total sample count for a channel's AnalogSegment.
 #[no_mangle]
-pub extern "C" fn vcr_analog_sample_count(channel_id: u32) -> u64 {
+pub extern "C" fn vcr_analog_sample_count(device_idx: u8, channel_id: u32) -> u64 {
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    map.get(&channel_id).map(|a| a.sample_count()).unwrap_or(0)
+    map.get(&key).map(|a| a.sample_count()).unwrap_or(0)
 }
 
 /// Get global min/max for a channel's AnalogSegment.
 /// Writes min_value, max_value into the first 2 elements of `out` (f32).
 #[no_mangle]
-pub extern "C" fn vcr_analog_get_min_max(channel_id: u32, out: *mut f32) {
+pub extern "C" fn vcr_analog_get_min_max(device_idx: u8, channel_id: u32, out: *mut f32) {
     if out.is_null() {
         return;
     }
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
     let dest = unsafe { std::slice::from_raw_parts_mut(out, 2) };
-    if let Some(analog) = map.get(&channel_id) {
+    if let Some(analog) = map.get(&key) {
         dest[0] = analog.global_min();
         dest[1] = analog.global_max();
     } else {
@@ -360,6 +379,7 @@ pub extern "C" fn vcr_analog_get_min_max(channel_id: u32, out: *mut f32) {
 /// Output format: [min0, max0, min1, max1, ...]
 #[no_mangle]
 pub extern "C" fn vcr_analog_get_envelope(
+    device_idx: u8,
     channel_id: u32,
     start_sample: u64,
     end_sample: u64,
@@ -373,8 +393,9 @@ pub extern "C" fn vcr_analog_get_envelope(
         return 0;
     }
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    let analog = match map.get(&channel_id) {
+    let analog = match map.get(&key) {
         Some(a) => a,
         None => return 0,
     };
@@ -396,6 +417,7 @@ pub extern "C" fn vcr_analog_get_envelope(
 /// Returns number of f32 values written.
 #[no_mangle]
 pub extern "C" fn vcr_analog_get_trace(
+    device_idx: u8,
     channel_id: u32,
     start: u64,
     end: u64,
@@ -406,8 +428,9 @@ pub extern "C" fn vcr_analog_get_trace(
         return 0;
     }
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    let analog = match map.get(&channel_id) {
+    let analog = match map.get(&key) {
         Some(a) => a,
         None => return 0,
     };
@@ -420,20 +443,22 @@ pub extern "C" fn vcr_analog_get_trace(
 
 /// Set the samplerate for a channel's AnalogSegment (Hz).
 #[no_mangle]
-pub extern "C" fn vcr_analog_set_samplerate(channel_id: u32, rate: f64) {
+pub extern "C" fn vcr_analog_set_samplerate(device_idx: u8, channel_id: u32, rate: f64) {
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    if let Some(analog) = map.get(&channel_id) {
+    if let Some(analog) = map.get(&key) {
         analog.set_samplerate(rate);
     }
 }
 
 /// Get the samplerate for a channel's AnalogSegment (Hz).
 #[no_mangle]
-pub extern "C" fn vcr_analog_get_samplerate(channel_id: u32) -> f64 {
+pub extern "C" fn vcr_analog_get_samplerate(device_idx: u8, channel_id: u32) -> f64 {
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    map.get(&channel_id).map(|a| a.get_samplerate()).unwrap_or(0.0)
+    map.get(&key).map(|a| a.get_samplerate()).unwrap_or(0.0)
 }
 
 /// Set the default pyramid level count for newly created AnalogSegments.
@@ -458,11 +483,12 @@ pub extern "C" fn vcr_analog_get_level_count() -> u32 {
 /// Returns number of bytes written (excluding null terminator).
 /// Buffer must be at least 4096 bytes.
 #[no_mangle]
-pub extern "C" fn vcr_analog_dump_debug(channel_id: u32, buf: *mut u8, buf_len: u32) -> u32 {
+pub extern "C" fn vcr_analog_dump_debug(device_idx: u8, channel_id: u32, buf: *mut u8, buf_len: u32) -> u32 {
     if buf.is_null() || buf_len == 0 { return 0; }
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    let analog = match map.get(&channel_id) {
+    let analog = match map.get(&key) {
         Some(a) => a,
         None => return 0,
     };
@@ -487,10 +513,11 @@ pub extern "C" fn vcr_pipeline_check_data_ready() -> bool {
 
 /// Reset a channel's AnalogSegment.
 #[no_mangle]
-pub extern "C" fn vcr_analog_reset(channel_id: u32) {
+pub extern "C" fn vcr_analog_reset(device_idx: u8, channel_id: u32) {
     use crate::core::plot::pipeline::FFI_CH_ANALOG;
+    let key = dev_ch_key(device_idx, channel_id);
     let map = FFI_CH_ANALOG.read();
-    if let Some(analog) = map.get(&channel_id) {
+    if let Some(analog) = map.get(&key) {
         analog.reset();
     }
 }

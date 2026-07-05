@@ -30,9 +30,173 @@ part 'plot_painter.dart';
 // ============================================================================
 
 class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateMixin {
-  // ── Data source ──
-  bool _useRealData = false; // false = demo, true = real device
-  Timer? _realDataTimer; // NOTE: 单定时器：合并 data fetch + UI update，消除竞态
+  // ── Multi-device support ──
+  List<DeviceContext> _devices = [];
+  int _activeDeviceIndex = 0;
+  static const int _maxDevices = 4;
+
+  /// Switch to device at index. Swaps timers, resets viewport, reloads channels.
+  void _switchDevice(int index) {
+    if (index < 0 || index >= _devices.length || index == _activeDeviceIndex) return;
+    setState(() {
+      _activeDeviceIndex = index;
+    });
+    _onDeviceSwitched();
+  }
+
+  /// Add a new device (demo mode by default).
+  void _addDevice() {
+    if (_devices.length >= _maxDevices) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Maximum 4 devices reached')),
+      );
+      return;
+    }
+    final newKey = _devices.isEmpty ? 0 : _devices.map((d) => d.deviceKey).reduce((a, b) => a > b ? a : b) + 1;
+    final dev = DeviceContext(
+      deviceKey: newKey,
+      label: 'Device ${newKey + 1}',
+      isRealData: false,
+      channels: [],
+      xMin: -1000, xMax: 0, yMin: -1, yMax: 1,
+      autoScaleX: true, autoScaleY: true,
+    );
+    setState(() {
+      _devices.add(dev);
+      _activeDeviceIndex = _devices.length - 1;
+    });
+    _onDeviceSwitched();
+  }
+
+  /// Remove the current device.
+  void _removeCurrentDevice() {
+    if (_devices.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot remove the last device')),
+      );
+      return;
+    }
+    final oldDevice = _devices[_activeDeviceIndex];
+    oldDevice.demoTimer?.cancel();
+    oldDevice.realDataTimer?.cancel();
+    // Reset analog segments for removed device
+    for (int i = 0; i < oldDevice.channels.length; i++) {
+      try { FfiBridge.instance.analogReset(oldDevice.deviceKey, i); } catch (_) {}
+    }
+    setState(() {
+      _devices.removeAt(_activeDeviceIndex);
+      if (_activeDeviceIndex >= _devices.length) {
+        _activeDeviceIndex = _devices.length - 1;
+      }
+    });
+    _onDeviceSwitched();
+  }
+
+  /// Called after device switch: restart timers, ensure segments, load config.
+  void _onDeviceSwitched() {
+    // Cancel old timers
+    _demoTimer?.cancel();
+    _realDataTimer?.cancel();
+    // Load demo channels if empty
+    if (_channels.isEmpty) {
+      _initDemoChannels();
+    }
+    _maxPointsController.text = _maxPoints.toString();
+    _deltaTimeController.text = _deltaTime.toString();
+    _ensureAnalogSegments();
+    if (_useRealData) {
+      _startRealData();
+    } else {
+      _startDemoData();
+    }
+    _refreshViewportData();
+    _saveConfig();
+  }
+
+  /// Build device tab bar for AppBar bottom.
+  PreferredSizeWidget _buildDeviceTabs() {
+    return PreferredSize(
+      preferredSize: const Size.fromHeight(36),
+      child: Container(
+        color: Theme.of(context).appBarTheme.backgroundColor ?? const Color(0xFF1E1E1E),
+        child: Row(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: List.generate(_devices.length, (i) {
+                    final dev = _devices[i];
+                    final isSelected = i == _activeDeviceIndex;
+                    return GestureDetector(
+                      onTap: () => _switchDevice(i),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          border: Border(
+                            bottom: BorderSide(
+                              color: isSelected ? AppTheme.primary : Colors.transparent,
+                              width: 2,
+                            ),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              dev.isRealData ? Icons.cable : Icons.science,
+                              size: 12,
+                              color: isSelected ? AppTheme.primary : Colors.grey,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              dev.label.isEmpty ? 'D${i + 1}' : dev.label,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isSelected ? AppTheme.primary : AppTheme.textSecondary,
+                                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+            // Add device button
+            if (_devices.length < _maxDevices)
+              IconButton(
+                icon: const Icon(Icons.add, size: 18),
+                onPressed: _addDevice,
+                tooltip: 'Add Device',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+            // Remove device button
+            if (_devices.length > 1)
+              IconButton(
+                icon: const Icon(Icons.remove, size: 18),
+                onPressed: _removeCurrentDevice,
+                tooltip: 'Remove Device',
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  DeviceContext get _activeDevice => _devices.isNotEmpty ? _devices[_activeDeviceIndex.clamp(0, _devices.length - 1)] : DeviceContext(deviceKey: 0);
+
+  // ── Data source ── (delegated to _activeDevice)
+  bool get _useRealData => _activeDevice.isRealData;
+  set _useRealData(bool v) => _activeDevice.isRealData = v;
+  Timer? get _realDataTimer => _activeDevice.realDataTimer;
+  set _realDataTimer(Timer? v) => _activeDevice.realDataTimer = v;
   
   // ── Plot Groups ──
   List<PlotGroup> _plotGroups = [
@@ -40,30 +204,34 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   ];
 
   // ── Data ──
-  List<PlotChannel> _demoChannels = [];
-  List<PlotChannel> _realChannels = [];
-  /// Active channel list based on current mode
-  List<PlotChannel> get _channels => _useRealData ? _realChannels : _demoChannels;
-  set _channels(List<PlotChannel> value) {
-    if (_useRealData) { _realChannels = value; } else { _demoChannels = value; }
-  }
+  List<PlotChannel> get _channels => _activeDevice.channels;
+  set _channels(List<PlotChannel> value) { _activeDevice.channels = value; }
   int _maxPoints = 250000;  // Configurable max points (default 250000, range 1000-500000)
   double _deltaTime = 1.0;  // Time per sample in ms (default 1ms, connects sample index to time)
 
-  // ── Axis config ──
-  bool _autoScaleX = true;
-  bool _autoScaleY = true; // Global Y auto-scale (fallback)
-  double _xMin = -1000;
-  double _xMax = 0;
-  double _yMin = -1; // Global Y range (used when no per-channel axis)
-  double _yMax = 1;
+  // ── Axis config ── (delegated to _activeDevice)
+  bool get _autoScaleX => _activeDevice.autoScaleX;
+  set _autoScaleX(bool v) => _activeDevice.autoScaleX = v;
+  bool get _autoScaleY => _activeDevice.autoScaleY;
+  set _autoScaleY(bool v) => _activeDevice.autoScaleY = v;
+  double get _xMin => _activeDevice.xMin;
+  set _xMin(double v) => _activeDevice.xMin = v;
+  double get _xMax => _activeDevice.xMax;
+  set _xMax(double v) => _activeDevice.xMax = v;
+  double get _yMin => _activeDevice.yMin;
+  set _yMin(double v) => _activeDevice.yMin = v;
+  double get _yMax => _activeDevice.yMax;
+  set _yMax(double v) => _activeDevice.yMax = v;
   int _globalDecimals = 3; // Global decimal precision for axes
 
-  // ── Scroll (oscilloscope) mode ──
-  bool _scrollMode = false;         // true = oscilloscope sweep mode
-  double _scrollWindowWidth = 0.0;  // visible X range in samples; 0 means auto (= _maxPoints)
-  double get _effectiveScrollWindowWidth => _scrollWindowWidth > 0 ? _scrollWindowWidth : _maxPoints.toDouble();
-  double _scrollMinTime = 0.0;       // left edge of visible window
+  // ── Scroll (oscilloscope) mode ── (delegated to _activeDevice)
+  bool get _scrollMode => _activeDevice.scrollMode;
+  set _scrollMode(bool v) => _activeDevice.scrollMode = v;
+  double get _scrollWindowWidth => _activeDevice.scrollWindowWidth;
+  set _scrollWindowWidth(double v) => _activeDevice.scrollWindowWidth = v;
+  double get _effectiveScrollWindowWidth => _activeDevice.effectiveScrollWindowWidth;
+  double get _scrollMinTime => _activeDevice.scrollMinTime;
+  set _scrollMinTime(double v) => _activeDevice.scrollMinTime = v;
   double _screenWidth = 800.0;       // plot area width for ChartViewport decimation
 
   // ── Scrollbar drag state ──
@@ -83,22 +251,17 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   String _pyramidDebugText = '';
 
   // ── Pipeline thread toggle ──
-  // When true, RENDER_ENVELOPE zero-copy path is active.
-  // The pipeline thread pre-computes envelope data each frame (VP_DIRTY or DATA_READY trigger).
-  // Toggle via toolbar button; off by default to keep startup simple.
-  bool _pipelineEnabled = false;
+  // Delegated to _activeDevice
+  bool get _pipelineEnabled => _activeDevice.pipelineEnabled;
+  set _pipelineEnabled(bool v) => _activeDevice.pipelineEnabled = v;
 
-  // Flag: set to true when _clearData() is called, cleared after first _fetchRealData.
-  // Prevents _fetchRealData from calling plotGetAllChannels() with stale PLOT_DATA
-  // after _clearData() cleared ch.data — that would pull back 100K+ historical points
-  // and make _xMin jump to -100000, hiding the first few thousand new data points.
-  bool _justClearedData = false;
+  // Flag: delegated to _activeDevice
+  bool get _justClearedData => _activeDevice.justClearedData;
+  set _justClearedData(bool v) => _activeDevice.justClearedData = v;
 
   // ── AnalogSegment envelope toggle ──
-  // When true, the pipeline reads envelope from AnalogSegment (f32, 10-level 16^n pyramid)
-  // instead of TimeBucketPyramid (f64). Enables higher-precision decimation.
-  // Toggle via toolbar button; requires pipeline to be enabled.
-  bool _analogEnvelopeEnabled = true;
+  bool get _analogEnvelopeEnabled => _activeDevice.analogEnvelopeEnabled;
+  set _analogEnvelopeEnabled(bool v) => _activeDevice.analogEnvelopeEnabled = v;
   int _fps = 0;
   int _totalPoints = 0;
   DateTime _lastFpsTime = DateTime.now();
@@ -115,7 +278,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   BigInt _lastDataVersion = BigInt.zero;
 
   // NOTE: P3-B 优化：ChartViewport 刷新计数器（用于 shouldRepaint 优化）
-  int _viewportRefreshCount = 0;
+  int get _viewportRefreshCount => _activeDevice.viewportRefreshCount;
+  set _viewportRefreshCount(int v) => _activeDevice.viewportRefreshCount = v;
 
   // DIAG: Diagnostic: set true to enable verbose per-frame logging (DISABLE for production)
   static const bool _verbose = false;
@@ -209,6 +373,23 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    // Initialize default device (deviceKey=0, legacy single-device behavior)
+    _devices = [
+      DeviceContext(
+        deviceKey: 0,
+        label: 'Device 1',
+        isRealData: false,
+        channels: [],
+        xMin: -1000,
+        xMax: 0,
+        yMin: -1,
+        yMax: 1,
+        autoScaleX: true,
+        autoScaleY: true,
+      ),
+    ];
+    _activeDeviceIndex = 0;
+
     _ticker = createTicker(_onTick);
     _ticker.start();
     _initDemoChannels();
@@ -255,9 +436,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final bridge = FfiBridge.instance;
     bridge.analogSetEnvelopeEnabled(true);
     final samplerateHz = 1000.0 / _deltaTime; // deltaTime=1ms → 1000Hz
+    final dk = _activeDevice.deviceKey;
     for (int i = 0; i < _channels.length; i++) {
-      bridge.analogEnsure(i);
-      bridge.analogSetSamplerate(i, samplerateHz);
+      bridge.analogEnsure(dk, i);
+      bridge.analogSetSamplerate(dk, i, samplerateHz);
     }
   }
 
@@ -358,7 +540,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   
   void _startDemoData() {
     _debugLog('[START] _startDemoData called, _useRealData=$_useRealData, _isPlaying=$_isPlaying, _maxPoints=$_maxPoints');
-    _debugLog('[START] _demoChannels.length=${_demoChannels.length}, _realChannels.length=${_realChannels.length}');
+    _debugLog('[START] _channels.length=${_channels.length}');
     _demoTimer?.cancel();
     
     // 初始化每通道样本索引
@@ -394,9 +576,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
       // NOTE: Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
       final bridge = FfiBridge.instance;
+      final dk = _activeDevice.deviceKey;
       for (int i = 0; i < _channels.length; i++) {
         if (batchPerChannel[i].isNotEmpty) {
-          bridge.pushChannelBatch(i, batchPerChannel[i]);
+          bridge.pushChannelBatch(dk, i, batchPerChannel[i]);
         }
       }
       // Trim: only when data exceeds _maxPoints by a safe margin to avoid O(n) per tick.
@@ -524,6 +707,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final numCh = bridge.envelopeGetNumChannels();
     if (numCh == 0) return false;
 
+    final dk = _activeDevice.deviceKey;
+
     // P1: Zero-copy — map entire envelope buffer as a Dart Float64List.
     // Eliminates ~8000 individual FFI boundary crosses per frame.
     final totalSize = bridge.envelopeGetTotalSize();
@@ -538,8 +723,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
-      final offset = bridge.envelopeGetChannelOffset(ci);
-      final count = bridge.envelopeGetChannelCount(ci);
+      final offset = bridge.envelopeGetChannelOffset(dk, ci);
+      final count = bridge.envelopeGetChannelCount(dk, ci);
       if (count == 0) {
         ch.viewportData.clear();
         ch.envelopeData.clear();
@@ -623,6 +808,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       nativeBuf = _queryNative!;
     }
 
+    final dk = _activeDevice.deviceKey;
+
     for (int ci = 0; ci < _channels.length; ci++) {
       final ch = _channels[ci];
       if (!ch.visible || ch.data.isEmpty) {
@@ -636,7 +823,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final tMax = newestAbsX + _xMax;
 
       try {
-        final count = bridge.queryChannelPointsInto(ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
+        final count = bridge.queryChannelPointsInto(dk, ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
         if (count == 0) {
           ch.viewportData.clear();
           ch.envelopeData.clear();
@@ -686,8 +873,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// Iterates _channels directly (not RENDER_ENVELOPE, which only pipeline sets).
   bool _refreshViewportFromAnalogImpl() {
     final bridge = FfiBridge.instance;
-
-    // Dynamic batch size:
+    final dk = _activeDevice.deviceKey;
     // Each analogGetEnvelope call returns at most this many envelope samples.
     // Must be large enough to hold the entire viewport at the *finest* pyramid level.
     // Finest level = Level 0 (1 envelope per 16 raw samples).
@@ -712,7 +898,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
-      final sampleCount = bridge.analogSampleCount(ci);
+      final sampleCount = bridge.analogSampleCount(dk, ci);
       if (sampleCount == 0) {
         ch.viewportData.clear();
         ch.envelopeData.clear();
@@ -746,7 +932,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (useTrace) {
         traceBuf ??= calloc<Float>(maxSamples);
         final traceCount = bridge.analogGetTrace(
-          ci, startSample, clampedEnd, traceBuf, maxSamples,
+          dk, ci, startSample, clampedEnd, traceBuf, maxSamples,
         );
         if (traceCount > 0) {
           final relStart = startSample + xBase.toInt();
@@ -774,7 +960,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         if (remainingCapacity <= 0) break;
         
         final count = bridge.analogGetEnvelope(
-          ci, currentStart, clampedEnd, samplesPerPixelDouble, sampleBuf, remainingCapacity,
+          dk, ci, currentStart, clampedEnd, samplesPerPixelDouble, sampleBuf, remainingCapacity,
           sectionStartPtr, sectionScalePtr,
         );
         final sectionStart = sectionStartPtr.value;
@@ -870,8 +1056,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             ));
             if (_analogEnvelopeEnabled) {
               final newChId = _channels.length - 1;
-              FfiBridge.instance.analogEnsure(newChId);
-              FfiBridge.instance.analogSetSamplerate(newChId, 1000.0 / _deltaTime);
+              final dk = _activeDevice.deviceKey;
+              FfiBridge.instance.analogEnsure(dk, newChId);
+              FfiBridge.instance.analogSetSamplerate(dk, newChId, 1000.0 / _deltaTime);
             }
           }
           
@@ -997,13 +1184,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // switching modes reuses same indices with different channel lists.
       FfiBridge.instance.clearAllChannelPyramids();
 
-      // Clear per-channel data in BOTH channel lists, not just the active one.
-      // _channels getter switches when _useRealData changes, so we must iterate
-      // both lists explicitly to cover all channels.
-      final allChannels = [..._demoChannels, ..._realChannels];
+      // Clear per-channel data in the active device's channel list only.
+      final allChannels = _channels;
+      final dk = _activeDevice.deviceKey;
       for (int i = 0; i < allChannels.length; i++) {
         if (_analogEnvelopeEnabled) {
-          FfiBridge.instance.analogReset(i);
+          FfiBridge.instance.analogReset(dk, i);
         }
       }
       for (final ch in allChannels) {
@@ -1033,12 +1219,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         // Switch to real data: stop demo timer, start real data timer
         _demoTimer?.cancel();
         // Init real channels if empty
-        if (_realChannels.isEmpty) {
+        if (_channels.isEmpty) {
           _startRealData();
         } else {
           // Resume real data timer
           _realDataTimer?.cancel();
-          _realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
+          _activeDevice.realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
             _fetchRealData();
           });
         }
@@ -1046,7 +1232,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         // Switch to demo: stop real data timer, start demo timer
         _realDataTimer?.cancel();
         // Init demo channels if empty
-        if (_demoChannels.isEmpty) {
+        if (_channels.isEmpty) {
           _initDemoChannels();
         }
         _startDemoData();
@@ -1117,7 +1303,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // AnalogSegment 仍有样本（console 持续推送），_fitXAxis 必须
       // 根据 AnalogSegment 的 sampleCount 设置正确的视口范围。
       if (_analogEnvelopeEnabled) {
-        final asCount = FfiBridge.instance.analogSampleCount(0);
+        final asCount = FfiBridge.instance.analogSampleCount(_activeDevice.deviceKey, 0);
         if (asCount > 0) {
           _xMin = (-asCount).toDouble().clamp(bufMin, 0.0);
           _xMax = 0.0;
@@ -1827,8 +2013,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       });
       if (_analogEnvelopeEnabled) {
         final bridge = FfiBridge.instance;
+        final dk = _activeDevice.deviceKey;
         for (int ci = 0; ci < _channels.length; ci++) {
-          bridge.analogEnsure(ci);
+          bridge.analogEnsure(dk, ci);
         }
       }
     } catch (e) {
@@ -1854,7 +2041,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       ));
     });
     if (_analogEnvelopeEnabled) {
-      FfiBridge.instance.analogEnsure(idx);
+      FfiBridge.instance.analogEnsure(_activeDevice.deviceKey, idx);
     }
     _saveConfig();
   }
@@ -2018,7 +2205,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_analogEnvelopeEnabled) {
       final buf = StringBuffer();
       for (var i = 0; i < _channels.length; i++) {
-        final info = FfiBridge.instance.analogDumpDebug(i);
+        final info = FfiBridge.instance.analogDumpDebug(_activeDevice.deviceKey, i);
         buf.writeln('═══ Channel $i ═══');
         buf.writeln(info);
         buf.writeln();
@@ -2380,6 +2567,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
             }).toList(),
           ),
         ],
+        bottom: _buildDeviceTabs(),
       ),
       body: Row(
         children: [

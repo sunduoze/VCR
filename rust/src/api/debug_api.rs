@@ -242,11 +242,12 @@ fn spawn_receive_loop(device_id: String) {
                     for result in results {
                         if result.success && !result.channels.is_empty() {
                             let counter = PLOT_DATA.next_counter() as f64;
+                            let device_idx = pipeline::get_or_assign_device_idx(&id);
                             let prefix = result.metadata.get("prefix").map(|s| s.as_str());
                             PLOT_DATA.push_batch_with_names(&id, counter, prefix, &result.channels);
                             // 🚀 P0-1: Push directly to per-channel pyramids (eliminates Dart round-trip)
                             // Uses same counter as PLOT_DATA for X-value sync with Dart ch.data
-                            pipeline::push_sample_batch_with_x(counter, &result.channels);
+                            pipeline::push_sample_batch_with_x(device_idx, counter, &result.channels);
                         }
                     }
                 }))

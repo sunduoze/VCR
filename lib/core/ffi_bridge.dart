@@ -1,4 +1,4 @@
-﻿// FFI Bridge — dart:ffi zero-copy bindings to Rust C-ABI
+// FFI Bridge — dart:ffi zero-copy bindings to Rust C-ABI
 // 
 // Active data path:
 //   Serial → Rust pipeline::push_sample_batch_with_x → FFI_CH_PYRAMIDS → Ticker query → paint
@@ -67,52 +67,52 @@ typedef _ShutdownNative = Void Function();
 typedef _ShutdownDart = void Function();
 
 // Per-channel pyramid
-typedef _PyramidChPushNative = Void Function(Uint32 channelId, Double timestampMs, Double value);
-typedef _PyramidChPushDart = void Function(int channelId, double timestampMs, double value);
-typedef _PyramidChPushBatchNative = Bool Function(Uint32 channelId, Pointer<CDataPoint> data, Uint32 count);
-typedef _PyramidChPushBatchDart = bool Function(int channelId, Pointer<CDataPoint> data, int count);
-typedef _PyramidChQueryNative = Uint32 Function(Uint32 channelId, Double tMin, Double tMax, Uint32 targetPoints, Pointer<CBucketStats> out, Uint32 maxBuckets);
-typedef _PyramidChQueryDart = int Function(int channelId, double tMin, double tMax, int targetPoints, Pointer<CBucketStats> out, int maxBuckets);
-typedef _PyramidChQueryPointsNative = Uint32 Function(Uint32 channelId, Double tMin, Double tMax, Uint32 targetPoints, Pointer<CDataPoint> out, Uint32 maxPoints);
-typedef _PyramidChQueryPointsDart = int Function(int channelId, double tMin, double tMax, int targetPoints, Pointer<CDataPoint> out, int maxPoints);
-typedef _PyramidChClearNative = Void Function(Uint32 channelId);
-typedef _PyramidChClearDart = void Function(int channelId);
+typedef _PyramidChPushNative = Void Function(Uint8 deviceKey, Uint32 channelId, Double timestampMs, Double value);
+typedef _PyramidChPushDart = void Function(int deviceKey, int channelId, double timestampMs, double value);
+typedef _PyramidChPushBatchNative = Bool Function(Uint8 deviceKey, Uint32 channelId, Pointer<CDataPoint> data, Uint32 count);
+typedef _PyramidChPushBatchDart = bool Function(int deviceKey, int channelId, Pointer<CDataPoint> data, int count);
+typedef _PyramidChQueryNative = Uint32 Function(Uint8 deviceKey, Uint32 channelId, Double tMin, Double tMax, Uint32 targetPoints, Pointer<CBucketStats> out, Uint32 maxBuckets);
+typedef _PyramidChQueryDart = int Function(int deviceKey, int channelId, double tMin, double tMax, int targetPoints, Pointer<CBucketStats> out, int maxBuckets);
+typedef _PyramidChQueryPointsNative = Uint32 Function(Uint8 deviceKey, Uint32 channelId, Double tMin, Double tMax, Uint32 targetPoints, Pointer<CDataPoint> out, Uint32 maxPoints);
+typedef _PyramidChQueryPointsDart = int Function(int deviceKey, int channelId, double tMin, double tMax, int targetPoints, Pointer<CDataPoint> out, int maxPoints);
+typedef _PyramidChClearNative = Void Function(Uint8 deviceKey, Uint32 channelId);
+typedef _PyramidChClearDart = void Function(int deviceKey, int channelId);
 typedef _PyramidChClearAllNative = Void Function();
 typedef _PyramidChClearAllDart = void Function();
 
 // AnalogSegment API
-typedef _AnalogEnsureNative = Bool Function(Uint32 channelId);
-typedef _AnalogEnsureDart = bool Function(int channelId);
-typedef _AnalogPushSampleNative = Void Function(Uint32 channelId, Float value);
-typedef _AnalogPushSampleDart = void Function(int channelId, double value);
-typedef _AnalogSampleCountNative = Uint64 Function(Uint32 channelId);
-typedef _AnalogSampleCountDart = int Function(int channelId);
-typedef _AnalogGetMinMaxNative = Void Function(Uint32 channelId, Pointer<Float> out);
-typedef _AnalogGetMinMaxDart = void Function(int channelId, Pointer<Float> out);
-typedef _AnalogGetEnvelopeNative = Uint32 Function(Uint32 channelId, Uint64 startSample, Uint64 endSample, Float samplesPerPixel, Pointer<CEnvelopeSample> out, Uint32 maxSamples, Pointer<Uint64> outSectionStart, Pointer<Uint32> outSectionScale);
-typedef _AnalogGetEnvelopeDart = int Function(int channelId, int startSample, int endSample, double samplesPerPixel, Pointer<CEnvelopeSample> out, int maxSamples, Pointer<Uint64> outSectionStart, Pointer<Uint32> outSectionScale);
+typedef _AnalogEnsureNative = Bool Function(Uint8 deviceKey, Uint32 channelId);
+typedef _AnalogEnsureDart = bool Function(int deviceKey, int channelId);
+typedef _AnalogPushSampleNative = Void Function(Uint8 deviceKey, Uint32 channelId, Float value);
+typedef _AnalogPushSampleDart = void Function(int deviceKey, int channelId, double value);
+typedef _AnalogSampleCountNative = Uint64 Function(Uint8 deviceKey, Uint32 channelId);
+typedef _AnalogSampleCountDart = int Function(int deviceKey, int channelId);
+typedef _AnalogGetMinMaxNative = Void Function(Uint8 deviceKey, Uint32 channelId, Pointer<Float> out);
+typedef _AnalogGetMinMaxDart = void Function(int deviceKey, int channelId, Pointer<Float> out);
+typedef _AnalogGetEnvelopeNative = Uint32 Function(Uint8 deviceKey, Uint32 channelId, Uint64 startSample, Uint64 endSample, Float samplesPerPixel, Pointer<CEnvelopeSample> out, Uint32 maxSamples, Pointer<Uint64> outSectionStart, Pointer<Uint32> outSectionScale);
+typedef _AnalogGetEnvelopeDart = int Function(int deviceKey, int channelId, int startSample, int endSample, double samplesPerPixel, Pointer<CEnvelopeSample> out, int maxSamples, Pointer<Uint64> outSectionStart, Pointer<Uint32> outSectionScale);
 // AnalogSegment trace query
-typedef _AnalogGetTraceNative = Uint32 Function(Uint32 channelId, Uint64 start, Uint64 end, Pointer<Float> out, Uint32 maxSamples);
-typedef _AnalogGetTraceDart = int Function(int channelId, int start, int end, Pointer<Float> out, int maxSamples);
+typedef _AnalogGetTraceNative = Uint32 Function(Uint8 deviceKey, Uint32 channelId, Uint64 start, Uint64 end, Pointer<Float> out, Uint32 maxSamples);
+typedef _AnalogGetTraceDart = int Function(int deviceKey, int channelId, int start, int end, Pointer<Float> out, int maxSamples);
 // AnalogSegment samplerate
-typedef _AnalogSetSamplerateNative = Void Function(Uint32 channelId, Double rate);
-typedef _AnalogSetSamplerateDart = void Function(int channelId, double rate);
-typedef _AnalogGetSamplerateNative = Double Function(Uint32 channelId);
-typedef _AnalogGetSamplerateDart = double Function(int channelId);
+typedef _AnalogSetSamplerateNative = Void Function(Uint8 deviceKey, Uint32 channelId, Double rate);
+typedef _AnalogSetSamplerateDart = void Function(int deviceKey, int channelId, double rate);
+typedef _AnalogGetSamplerateNative = Double Function(Uint8 deviceKey, Uint32 channelId);
+typedef _AnalogGetSamplerateDart = double Function(int deviceKey, int channelId);
 typedef _AnalogSetLevelCountNative = Void Function(Uint32 levelCount);
 typedef _AnalogSetLevelCountDart = void Function(int levelCount);
 typedef _AnalogGetLevelCountNative = Uint32 Function();
 typedef _AnalogGetLevelCountDart = int Function();
-typedef _AnalogResetNative = Void Function(Uint32 channelId);
-typedef _AnalogResetDart = void Function(int channelId);
+typedef _AnalogResetNative = Void Function(Uint8 deviceKey, Uint32 channelId);
+typedef _AnalogResetDart = void Function(int deviceKey, int channelId);
 typedef _AnalogResetAllNative = Void Function();
 typedef _AnalogResetAllDart = void Function();
 typedef _AnalogSetEnvelopeEnabledNative = Void Function(Bool enabled);
 typedef _AnalogSetEnvelopeEnabledDart = void Function(bool enabled);
 typedef _AnalogIsEnvelopeEnabledNative = Bool Function();
 typedef _AnalogIsEnvelopeEnabledDart = bool Function();
-typedef _AnalogDumpDebugNative = Uint32 Function(Uint32 channelId, Pointer<Uint8> buf, Uint32 bufLen);
-typedef _AnalogDumpDebugDart = int Function(int channelId, Pointer<Uint8> buf, int bufLen);
+typedef _AnalogDumpDebugNative = Uint32 Function(Uint8 deviceKey, Uint32 channelId, Pointer<Uint8> buf, Uint32 bufLen);
+typedef _AnalogDumpDebugDart = int Function(int deviceKey, int channelId, Pointer<Uint8> buf, int bufLen);
 
 // Console pyramid guard (prevents console data from polluting Demo pyramids)
 typedef _PyramidsSetAcceptConsoleNative = Void Function(Bool accept);
@@ -131,10 +131,10 @@ typedef _PipelineCheckDataReadyDart = bool Function();
 // Render envelope (pipeline pre-computation)
 typedef _EnvelopeSetViewportNative = Void Function(Double tMin, Double tMax, Uint32 maxPoints, Double anchor);
 typedef _EnvelopeSetViewportDart = void Function(double tMin, double tMax, int maxPoints, double anchor);
-typedef _EnvelopeGetChannelOffsetNative = Uint32 Function(Uint32 channelId);
-typedef _EnvelopeGetChannelOffsetDart = int Function(int channelId);
-typedef _EnvelopeGetChannelCountNative = Uint32 Function(Uint32 channelId);
-typedef _EnvelopeGetChannelCountDart = int Function(int channelId);
+typedef _EnvelopeGetChannelOffsetNative = Uint32 Function(Uint8 deviceKey, Uint32 channelId);
+typedef _EnvelopeGetChannelOffsetDart = int Function(int deviceKey, int channelId);
+typedef _EnvelopeGetChannelCountNative = Uint32 Function(Uint8 deviceKey, Uint32 channelId);
+typedef _EnvelopeGetChannelCountDart = int Function(int deviceKey, int channelId);
 typedef _EnvelopeGetDataPtrNative = Pointer<Double> Function();
 typedef _EnvelopeGetDataPtrDart = Pointer<Double> Function();
 typedef _EnvelopeGetTotalSizeNative = Uint32 Function();
@@ -292,7 +292,7 @@ class FfiBridge {
   // ══════════════════════════════════════════════════════════════════
 
   /// Push a batch of points into channel's pyramid.
-  void pushChannelBatch(int channelId, List<(double, double)> points) {
+  void pushChannelBatch(int deviceKey, int channelId, List<(double, double)> points) {
     if (points.isEmpty) return;
     final ptr = calloc<CDataPoint>(points.length);
     try {
@@ -301,12 +301,12 @@ class FfiBridge {
           ..timestampMs = points[i].$1
           ..value = points[i].$2;
       }
-      pyramidChPushBatch(channelId, ptr, points.length);
+      pyramidChPushBatch(deviceKey, channelId, ptr, points.length);
       // Also push to AnalogSegment for envelope rendering.
       // TimeBucketPyramid gets data via pyramidChPushBatch above;
       // AnalogSegment needs explicit push_sample calls.
       for (var i = 0; i < points.length; i++) {
-        analogPushSample(channelId, points[i].$2);
+        analogPushSample(deviceKey, channelId, points[i].$2);
       }
     } finally {
       calloc.free(ptr);
@@ -316,6 +316,7 @@ class FfiBridge {
   /// Query channel pyramid into Float64List as [ts, val, ts, val, ...] pairs.
   /// Format: min+max interleaved per bucket — always even count.
   int queryChannelPoints(
+    int deviceKey,
     int channelId,
     double tMin,
     double tMax,
@@ -325,7 +326,7 @@ class FfiBridge {
     final maxPoints = buffer.length ~/ 2;
     final nativePtr = calloc<CDataPoint>(maxPoints);
     try {
-      return queryChannelPointsInto(channelId, tMin, tMax, targetPoints, nativePtr, maxPoints, buffer);
+      return queryChannelPointsInto(deviceKey, channelId, tMin, tMax, targetPoints, nativePtr, maxPoints, buffer);
     } finally {
       calloc.free(nativePtr);
     }
@@ -333,6 +334,7 @@ class FfiBridge {
 
   /// Query per-channel pyramid with pre-allocated native buffer (zero alloc).
   int queryChannelPointsInto(
+    int deviceKey,
     int channelId,
     double tMin,
     double tMax,
@@ -341,7 +343,7 @@ class FfiBridge {
     int maxPoints,
     Float64List buffer,
   ) {
-    final count = pyramidChQueryPoints(channelId, tMin, tMax, targetPoints, nativeBuf, maxPoints);
+    final count = pyramidChQueryPoints(deviceKey, channelId, tMin, tMax, targetPoints, nativeBuf, maxPoints);
     for (var i = 0; i < count; i++) {
       final pt = nativeBuf[i];
       buffer[i * 2] = pt.timestampMs;
@@ -351,8 +353,8 @@ class FfiBridge {
   }
 
   /// Clear a channel's pyramid (on device disconnect).
-  void clearChannelPyramid(int channelId) {
-    pyramidChClear(channelId);
+  void clearChannelPyramid(int deviceKey, int channelId) {
+    pyramidChClear(deviceKey, channelId);
   }
 
   /// Clear all per-channel pyramids.
@@ -372,10 +374,10 @@ class FfiBridge {
   void resetPipeline() => pipelineReset();
 
   /// Dump AnalogSegment debug info for a channel as a String.
-  String analogDumpDebug(int channelId) {
+  String analogDumpDebug(int deviceKey, int channelId) {
     final buf = calloc<Uint8>(8192);
     try {
-      final len = analogDumpDebugRaw(channelId, buf, 8192);
+      final len = analogDumpDebugRaw(deviceKey, channelId, buf, 8192);
       if (len == 0) return 'Channel $channelId: no data';
       return String.fromCharCodes(buf.asTypedList(len));
     } finally {

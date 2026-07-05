@@ -137,8 +137,12 @@ lazy_static! {
 /// Maximum channels supported
 pub const MAX_CHANNELS: usize = 64;
 
-/// Maximum envelope points per channel (2 floats each: x + y)
-const MAX_ENVELOPE_PTS_PER_CHANNEL: usize = 4000 * 2; // 4000 px × 2 pts (min+max) × 2 floats
+/// Maximum envelope f64 entries per channel.
+/// Worst case: 500K raw samples at Level 0 (scale=16) → 31250 envelope samples.
+/// Each envelope sample produces 4 f64 entries (x_min, y_min, x_max, y_max).
+/// So 31250 × 4 = 125000 f64 entries per channel. Round to 128000.
+/// At 64 ch × 128000 × 8B = 64 MB heap — acceptable for desktop.
+const MAX_ENVELOPE_PTS_PER_CHANNEL: usize = 128000;
 
 /// Pre-computed render envelope for zero-copy Dart consumption.
 /// Layout: [ch0_min_pts..., ch0_max_pts..., ch1_min_pts..., ch1_max_pts..., ...]
@@ -236,6 +240,10 @@ pub fn push_sample(channel_id: u32, value: f64) {
         if let Some(analog) = analog_map.get(&channel_id) {
             analog.push_sample(value as f32);
         }
+        // P0 fix: signal Dart Ticker that new data is available.
+        // Without this, _onTick idle-skip permanently blocks _refreshViewportData()
+        // when Pipeline is OFF (generation counter never changes).
+        DATA_READY.store(true, Ordering::Release);
     }
 }
 
@@ -261,6 +269,7 @@ pub fn push_sample_batch(values: &[f64]) {
                 analog.push_sample(*value as f32);
             }
         }
+        DATA_READY.store(true, Ordering::Release);
     }
 }
 
@@ -292,6 +301,7 @@ pub fn push_sample_batch_with_x(x: f64, values: &[f64]) {
                 analog.push_sample(*value as f32);
             }
         }
+        DATA_READY.store(true, Ordering::Release);
     }
 }
 

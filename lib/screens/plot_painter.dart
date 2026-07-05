@@ -450,6 +450,8 @@ class _PlotPainter extends CustomPainter {
     canvas.save();
     canvas.clipRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH));
 
+    final totalVisible = channels.where((c) => c.visible && c.data.isNotEmpty).length;
+    var chDrawIdx = 0;
     for (final ch in channels) {
       if (!ch.visible || ch.data.isEmpty) continue;
 
@@ -463,7 +465,9 @@ class _PlotPainter extends CustomPainter {
         chYMax = ch.autoScaleY ? ch.yMax : ch.yMaxManual;
       }
 
-      _drawChannel(canvas, ch, plotLeft, plotTop, plotW, plotH, chYMin, chYMax, scale);
+      _drawChannel(canvas, ch, plotLeft, plotTop, plotW, plotH, chYMin, chYMax, scale,
+        channelIndex: chDrawIdx, totalChannels: totalVisible);
+      chDrawIdx++;
     }
 
     canvas.restore();
@@ -659,7 +663,9 @@ class _PlotPainter extends CustomPainter {
     canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), borderPaint);
 
   }
-  void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h, double chYMin, double chYMax, double scale) {
+  void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h,
+      double chYMin, double chYMax, double scale,
+      {int channelIndex = 0, int totalChannels = 1}) {
     // P0-2: Use GC-free _DataBuf (viewportData is always populated by envelope read)
     final data = ch.viewportData;
     if (data.isEmpty) return;
@@ -670,22 +676,53 @@ class _PlotPainter extends CustomPainter {
       return h - (y - chYMin) / (chYMax - chYMin) * h;
     }
 
-    // ── Trace mode: raw polyline, no envelope ──
-    // When zoomed in deeply (few samples covering many pixels), envelope bands
-    // produce ugly wide vertical bars. A simple polyline is cleaner.
+    // ── 调优③: trace→envelope 平滑过渡 ──
+    // 在 spp ∈ [1.5, 3.0] 区间内同时渲染 trace 和 envelope，
+    // trace alpha 从 1.0 → 0.0，envelope alpha 从 0.0 → 1.0。
+    // 避免离散切换时的视觉跳变。
     final samplesPerPixel = data.length / w;
-    final useTrace = renderMode == _RenderMode.trace ||
-        (renderMode == _RenderMode.auto && samplesPerPixel < envelopeThreshold);
-    if (useTrace) {
+    final pureTrace = samplesPerPixel < 1.5;
+    final pureEnvelope = samplesPerPixel >= 3.0;
+    final inBlend = !pureTrace && !pureEnvelope;
+
+    if (renderMode == _RenderMode.trace) {
+      _drawTrace(canvas, ch, data, ox, oy, w, h, yTransform);
+      return;
+    }
+    if (renderMode == _RenderMode.auto && pureTrace) {
       _drawTrace(canvas, ch, data, ox, oy, w, h, yTransform);
       return;
     }
 
-    // NOTE: Phase B: Render envelope fill (semi-transparent min-max band) before foreground line
+    // ── 调优②: 多通道半透明叠加 — 上方的通道用更低的 alpha，
+    // 避免下方通道的填充带叠加后完全遮蔽上方通道。
+    final baseFillAlpha = 0.40;
+    final baseLineAlpha = 0.80;
+    double fillAlpha = baseFillAlpha;
+    double lineAlpha = baseLineAlpha;
+    if (totalChannels > 1) {
+      final zFactor = 1.0 - (channelIndex / totalChannels) * 0.35;
+      fillAlpha = (baseFillAlpha * zFactor).clamp(0.12, baseFillAlpha);
+      lineAlpha = (baseLineAlpha * zFactor).clamp(0.35, baseLineAlpha);
+    }
+
+    // 调优③: blend zone — envelope alpha 从 0→1，trace alpha 从 1→0
+    if (inBlend) {
+      final t = ((samplesPerPixel - 1.5) / 1.5).clamp(0.0, 1.0);
+      fillAlpha *= t;
+      lineAlpha *= t;
+      // Draw trace with fading alpha first
+      final traceAlpha = (1.0 - t).clamp(0.0, 1.0);
+      if (traceAlpha > 0.02) {
+        _drawTraceFading(canvas, ch, data, ox, oy, w, h, yTransform, traceAlpha);
+      }
+    }
+
     final envData = ch.envelopeData;
-    if (envData.isNotEmpty && envData.length >= 2) {
-      _drawEnvelope(canvas, ch, envData, ox, oy, w, h, yTransform);
-      _drawMinMaxLines(canvas, ch, envData, ox, oy, w, h, yTransform);
+    if (envData.isNotEmpty && envData.length >= 2 && fillAlpha > 0.02) {
+      _drawEnvelope(canvas, ch, envData, ox, oy, w, h, yTransform, alpha: fillAlpha);
+      _drawMinMaxLines(canvas, ch, envData, ox, oy, w, h, yTransform, alpha: lineAlpha,
+        maxLinesPerPixel: 1.0);
     }
 
     // P4: Gap markers — shaded regions at temporal discontinuities
@@ -734,57 +771,79 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
   }
 
   // NOTE: Phase B: Render envelope fill background (semi-transparent min-max band)
-  void _drawEnvelope(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
+  // ── 调优④: 渐变填充边界 — 上下边界 alpha 渐变到 0，中间保持 full alpha。
+  // 避免硬切的矩形边缘，让波形看起来更自然（模拟 CRT 示波器辉光衰减）。
+  void _drawEnvelope(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h,
+      double Function(double) yTransform, {double alpha = 0.40}) {
     if (data.length < 4) return; // need ≥2 buckets (4 points: min0,max0,min1,max1)
 
     // Envelope data format: [x0,ymin0], [x0,ymax0], [x1,ymin1], [x1,ymax1], ...
-    // Build polygon: top edge (ymax) forward, bottom edge (ymin) reverse
-    // drawRawPoints(PointMode.polygon) auto-closes → no explicit close needed
     final n = data.length;
-    if (_envBuf == null || _envBuf!.length < n * 2) {
-      _envBuf = Float32List(n * 2);
-    }
-    final buf = _envBuf!;
-    int pi = 0;
-    // Top edge: yMax values (odd indices: 1, 3, 5, ...)
-    for (int i = 1; i < n; i += 2) {
-      buf[pi++] = _xToScreen(data.x(i), w) + ox;
-      buf[pi++] = yTransform(data.y(i)) + oy;
-    }
-    // Bottom edge reverse: yMin values (even indices: ..., 4, 2, 0)
-    for (int i = n - 2; i >= 0; i -= 2) {
-      buf[pi++] = _xToScreen(data.x(i), w) + ox;
-      buf[pi++] = yTransform(data.y(i)) + oy;
-    }
 
-    _envelopeFillPaint.color = ch.color.withValues(alpha: 0.25);
-    final envView = Float32List.sublistView(buf, 0, pi);
-    canvas.drawRawPoints(ui.PointMode.polygon, envView, _envelopeFillPaint);
+    // ── Gradient fill: top edge + bottom edge → separate polygons with gradient alpha ──
+    // Strategy: draw 4 thin horizontal strips, inner strips = full alpha, outer strips fade.
+    // This approximates a smooth vertical fade without complex shader per polygon.
+    final strips = 3;
+    for (int s = 0; s < strips; s++) {
+      // s=0 → bottom edge (fade in), s=1 → middle (full), s=2 → top edge (fade out)
+      final t = strips > 1 ? s / (strips - 1) : 0.5;
+      // Parabolic blend: edges at 0, centre at 1.0
+      final stripAlpha = alpha * (1.0 - (t - 0.5).abs() * 2.0).clamp(0.0, 1.0);
+      if (stripAlpha < 0.02) continue;
+
+      // Each strip samples a fraction of the envelope height:
+      // bottom strip: yMin → yMin+frac, mid: lerp, top: yMax-frac → yMax
+      final stripFrac = 1.0 / strips;
+      final loFrac = s * stripFrac;
+      final hiFrac = (s + 1) * stripFrac;
+
+      if (_envBuf == null || _envBuf!.length < n * 2) {
+        _envBuf = Float32List(n * 2);
+      }
+      final buf = _envBuf!;
+      int pi = 0;
+      // Top edge (forward): lerp between yMin and yMax by hiFrac
+      for (int i = 1; i < n; i += 2) {
+        final yLo = data.y(i - 1);
+        final yHi = data.y(i);
+        buf[pi++] = _xToScreen(data.x(i), w) + ox;
+        buf[pi++] = yTransform(yLo + (yHi - yLo) * hiFrac) + oy;
+      }
+      // Bottom edge (reverse): lerp by loFrac
+      for (int i = n - 2; i >= 0; i -= 2) {
+        final yLo = data.y(i);
+        final yHi = data.y(i + 1);
+        buf[pi++] = _xToScreen(data.x(i), w) + ox;
+        buf[pi++] = yTransform(yLo + (yHi - yLo) * loFrac) + oy;
+      }
+
+      _envelopeFillPaint.color = ch.color.withValues(alpha: stripAlpha);
+      final envView = Float32List.sublistView(buf, 0, pi);
+      canvas.drawRawPoints(ui.PointMode.polygon, envView, _envelopeFillPaint);
+    }
   }
 
-  // FIXED(P1)-2: Oscilloscope-style min-max vertical lines per bucket.
-  // Draws a thin vertical line from yMin to yMax for each downsampled time bucket.
-  // Combined with envelope fill, this gives the classic oscilloscope density view:
-  //   envelope fill → wide band (25% alpha)
-  //   min-max lines → sharp vertical bars (40% alpha, provides structure)
-  //   avg line     → foreground trace (100% alpha, signal path)
-  void _drawMinMaxLines(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy, double w, double h, double Function(double) yTransform) {
+  // ── 调优①: 竖线密度自适应 — 目标每像素 ≤1 条竖线，bucket 太多时降采样。
+  void _drawMinMaxLines(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy,
+      double w, double h, double Function(double) yTransform,
+      {double alpha = 0.80, double maxLinesPerPixel = 1.0}) {
     if (data.length < 2) return;
 
-    // PointMode.lines: each 2 points = 1 line segment
-    // data format: [x0,ymin0, x0,ymax0, x1,ymin1, x1,ymax1, ...]
-    // For each bucket (even i = min, odd i+1 = max, same x):
-    //   draw line (x, yMin) → (x, yMax)
-    final nSegs = data.length ~/ 2;  // one segment per bucket
-    final reqLen = nSegs * 4;        // 4 floats per segment (start.xy + end.xy)
+    final nBuckets = data.length ~/ 2;
+    // Decimation step: ceil(buckets / (w * maxLinesPerPixel))
+    final targetLines = (w * maxLinesPerPixel).round().clamp(1, nBuckets);
+    final step = (nBuckets / targetLines).ceil().clamp(1, nBuckets);
+
+    final reqLen = targetLines * 4;
     if (_minMaxBuf == null || _minMaxBuf!.length < reqLen) {
       _minMaxBuf = Float32List(reqLen);
     }
     final buf = _minMaxBuf!;
     int pi = 0;
-    for (int i = 0; i < data.length; i += 2) {
+    for (int k = 0; k < nBuckets && pi < targetLines * 4; k += step) {
+      final i = k * 2; // data index for this bucket's min
       if (i + 1 >= data.length) break;
-      final sx = _xToScreen(data.x(i), w) + ox;  // x same for min and max
+      final sx = _xToScreen(data.x(i), w) + ox;
       final syMin = yTransform(data.y(i)) + oy;
       final syMax = yTransform(data.y(i + 1)) + oy;
       buf[pi++] = sx;
@@ -793,7 +852,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
       buf[pi++] = syMax;
     }
 
-    _minMaxLinePaint.color = ch.color.withValues(alpha: 0.65);
+    _minMaxLinePaint.color = ch.color.withValues(alpha: alpha);
     final mmView = Float32List.sublistView(buf, 0, pi);
     canvas.drawRawPoints(ui.PointMode.lines, mmView, _minMaxLinePaint);
   }
@@ -810,7 +869,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     final gapThreshold = expectedInterval * 3.0;
 
     // Reuse static paint, update color per channel
-    _gapMarkerPaint.color = ch.color.withValues(alpha: 0.18);
+    _gapMarkerPaint.color = ch.color.withValues(alpha: 0.33);
     _gapMarkerPaint.strokeWidth = 2.5;
 
     for (int i = 1; i < data.length; i++) {
@@ -828,7 +887,7 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
 
         // Draw vertical dashed edges at gap boundaries
         final edgeW = 1.0;
-        _gapEdgePaint.color = ch.color.withValues(alpha: 0.35);
+        _gapEdgePaint.color = ch.color.withValues(alpha: 0.50);
         _gapEdgePaint.strokeWidth = edgeW;
         canvas.drawLine(Offset(x1, oy), Offset(x1, oy + h), _gapEdgePaint);
         canvas.drawLine(Offset(x2, oy), Offset(x2, oy + h), _gapEdgePaint);
@@ -890,6 +949,23 @@ void _drawDots(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double o
     for (int i = 1; i < data.length; i++) {
       _polylinePath.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
     }
+    canvas.drawPath(_polylinePath, _linePaint);
+  }
+
+  /// Variant of _drawLine with explicit alpha, used for trace→envelope blend transitions.
+  void _drawTraceFading(Canvas canvas, PlotChannel ch, _DataBuf data, double ox, double oy,
+      double w, double h, double Function(double) yTransform, double alpha) {
+    if (data.isEmpty || alpha < 0.02) return;
+
+    _polylinePath.reset();
+    final sx = _xToScreen(data.x(0), w) + ox;
+    final sy = yTransform(data.y(0)) + oy;
+    _polylinePath.moveTo(sx, sy);
+    for (int i = 1; i < data.length; i++) {
+      _polylinePath.lineTo(_xToScreen(data.x(i), w) + ox, yTransform(data.y(i)) + oy);
+    }
+    _linePaint.color = ch.color.withValues(alpha: alpha);
+    _linePaint.strokeWidth = ch.lineWidth;
     canvas.drawPath(_polylinePath, _linePaint);
   }
 

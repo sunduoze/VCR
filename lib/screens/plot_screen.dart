@@ -1700,13 +1700,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
         sink.writeln();
 
-        // Use first channel as time source (all channels share same X axis)
+        // Use min length across all channels to ensure alignment.
+        // (All channels share the same X axis; if a channel is shorter,
+        // we truncate rather than emit rows with missing time values.)
         final timeCh = visibleChannels.first;
-        int maxLen = visibleChannels.fold(0, (m, ch) => max(m, ch.data.length));
-        for (int i = 0; i < maxLen; i++) {
-          if (i < timeCh.data.length) {
-            sink.write(timeCh.data[i].x.toStringAsFixed(6));
-          }
+        final minLen = visibleChannels.fold(timeCh.data.length, (m, ch) => min(m, ch.data.length));
+        for (int i = 0; i < minLen; i++) {
+          sink.write(timeCh.data[i].x.toStringAsFixed(6));
           for (int c = 0; c < visibleChannels.length; c++) {
             final ch = visibleChannels[c];
             if (i < ch.data.length) {

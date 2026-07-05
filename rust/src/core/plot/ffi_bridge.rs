@@ -278,6 +278,17 @@ pub extern "C" fn vcr_envelope_get_generation() -> u64 {
     env.generation
 }
 
+/// Get the viewport range used to compute the current envelope.
+/// Returns (x_min, x_max) as two f64 values packed into [out_min, out_max].
+#[no_mangle]
+pub extern "C" fn vcr_envelope_get_viewport(out_min: *mut f64, out_max: *mut f64) {
+    let env = RENDER_ENVELOPE.lock();
+    unsafe {
+        *out_min = env.viewport_x_min;
+        *out_max = env.viewport_x_max;
+    }
+}
+
 /// Get the number of channels in the current envelope.
 #[no_mangle]
 pub extern "C" fn vcr_envelope_get_num_channels() -> u32 {

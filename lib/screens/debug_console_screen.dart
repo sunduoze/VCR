@@ -287,6 +287,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   int _fullSyncCounter = 0; // P1: periodic full sync to correct drift after Rust trim
   static const int _fullSyncInterval = 30; // full sync every 30 ticks (~1.5s)
 
+  // ── Cached filtered log: avoid O(N) where().toList() in build() every frame ──
+  List<DebugLogEntry> _cachedFilteredLog = [];
+
   // ── TextSpan cache: avoid rebuilding RichText trees on every setState ──
   List<TextSpan> _cachedLineSpans = [];
   int _cachedSpanHash = 0;
@@ -847,6 +850,9 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       }
     }
 
+    // Rebuild filtered cache when log changes (avoid O(N) where().toList() in build())
+    _cachedFilteredLog = _buildFilteredLog(_cachedLog);
+
     if (hasNewData && mounted) setState(() {});
     // Smart auto-scroll via post-frame callback: wait until layout finishes
     // before jumping, so maxScrollExtent reflects the new content height.
@@ -924,6 +930,17 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     if (mounted) setState(() {});
   }
 
+  /// Pre-built filtered log cache — avoids O(N) where().toList() in build() every frame.
+  /// Rebuilt by _refreshLog() whenever _cachedLog changes.
+  List<DebugLogEntry> _buildFilteredLog(List<DebugLogEntry> log) {
+    if (_selectedDeviceId == null || !_connected) return [];
+    return log.where((e) {
+      if (e.direction == 'TX' && !_cs.showTx) return false;
+      if (e.direction == 'RX' && !_cs.showRx) return false;
+      return true;
+    }).toList();
+  }
+
   // ── Copy / Export ──
   String _buildLogText(List<DebugLogEntry> log) {
     final filtered = log.where((e) {
@@ -965,9 +982,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
   }
 
   Future<void> _exportLog() async {
-    if (_selectedDeviceId == null) return;
-    final log = debugGetLog(deviceId: _selectedDeviceId!);
-    if (log.isEmpty) return;
+    if (_cachedFilteredLog.isEmpty) return;
     try {
       final ts = DateTime.now()
           .toIso8601String()
@@ -980,7 +995,7 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
       );
       if (outputPath == null || outputPath.isEmpty) return;
       final file = File(outputPath);
-      await file.writeAsString(_buildLogText(log));
+      await file.writeAsString(_buildLogText(_cachedFilteredLog));
       _lastExportDir = file.parent.path;
       await _saveGlobalConfig();
       if (mounted) {
@@ -1500,18 +1515,11 @@ class _DebugConsoleScreenState extends State<DebugConsoleScreen>
     // called from _refreshLog() and _initializeAsync(). Do NOT mutate
     // _deviceStates inside build() — it causes AXTree errors.
 
-    // Use cached log from _refreshLog() (50ms polling).
-    // Previously build() called debugGetLogWithLimit again —
-    // a second 200KB FRB serialization on every setState trigger.
-    final rawLog = _selectedDeviceId != null && _connected
-        ? _cachedLog
+    // Filtering is done in _refreshLog() → _buildFilteredLog().
+    // build() reads the pre-built _cachedFilteredLog directly.
+    final filteredLog = _selectedDeviceId != null && _connected
+        ? _cachedFilteredLog
         : const <DebugLogEntry>[];
-
-    final filteredLog = rawLog.where((e) {
-      if (e.direction == 'TX' && !_cs.showTx) return false;
-      if (e.direction == 'RX' && !_cs.showRx) return false;
-      return true;
-    }).toList();
 
     return Scaffold(
 

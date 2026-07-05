@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -25,19 +26,21 @@ pub struct DebugLogEntry {
 
 /// 调试会话内部状态
 struct DebugSessionInner {
-    log: Vec<DebugLogEntry>,
+    log: VecDeque<DebugLogEntry>,
     connected: bool,
     max_size: usize, // 最大缓冲区大小（字节）
     entry_index: u64, // 全局递增的条目索引，支持增量查询
+    total_data_size: usize, // 运行中累计，避免 O(N) sum() 每次 push
 }
 
 impl Default for DebugSessionInner {
     fn default() -> Self {
         Self {
-            log: Vec::new(),
+            log: VecDeque::new(),
             connected: false,
             max_size: 200 * 1024, // 默认 200KB
             entry_index: 0,
+            total_data_size: 0,
         }
     }
 }
@@ -60,7 +63,7 @@ impl DebugSessionManager {
         entry.connected = true;
         let idx = entry.entry_index;
         entry.entry_index += 1;
-        entry.log.push(DebugLogEntry {
+        entry.log.push_back(DebugLogEntry {
             timestamp: now_ms(),
             direction: "SYS".into(),
             data: vec![],
@@ -75,7 +78,7 @@ impl DebugSessionManager {
             s.connected = false;
             let idx = s.entry_index;
             s.entry_index += 1;
-            s.log.push(DebugLogEntry {
+            s.log.push_back(DebugLogEntry {
                 timestamp: now_ms(),
                 direction: "SYS".into(),
                 data: vec![],
@@ -119,7 +122,7 @@ impl DebugSessionManager {
             .lock()
             .unwrap()
             .get(device_id)
-            .map(|s| s.log.clone())
+            .map(|s| s.log.iter().cloned().collect())
             .unwrap_or_default()
     }
 
@@ -128,15 +131,17 @@ impl DebugSessionManager {
     /// 接收线程 log_rx/push_entry 不再被此函数阻塞。
     pub fn get_log_with_limit(&self, device_id: &str, max_size: usize) -> Vec<DebugLogEntry> {
         // Phase 1: extract log under lock (pointer swap, O(1) real work)
-        let mut log = {
+        let mut log: Vec<DebugLogEntry>;
+        {
             let mut sessions = lock_mutex(&self.sessions);
             if let Some(s) = sessions.get_mut(device_id) {
                 s.max_size = max_size;
-                std::mem::take(&mut s.log) // swap with empty Vec — <1µs
+                log = std::mem::take(&mut s.log).into_iter().collect(); // VecDeque → Vec
+                s.total_data_size = 0; // recalculated in Phase 3
             } else {
                 return Vec::new();
             }
-        }; // lock released — receiver thread can now push new entries to the empty log
+        } // lock released — receiver can push to empty VecDeque
 
         // Phase 2: trim to max_size (lock-free)
         let total_size: usize = log.iter().map(|e| e.data.len()).sum();
@@ -161,7 +166,8 @@ impl DebugSessionManager {
             if let Some(s) = sessions.get_mut(device_id) {
                 let new_entries = std::mem::take(&mut s.log); // entries added during Phase 2
                 log.extend(new_entries); // trimmed log + new entries
-                s.log = log.clone();
+                s.total_data_size = log.iter().map(|e| e.data.len()).sum();
+                s.log = log.iter().cloned().collect(); // Vec → VecDeque
             }
         }
 
@@ -195,6 +201,7 @@ impl DebugSessionManager {
         if let Some(s) = lock_mutex(&self.sessions).get_mut(device_id) {
             s.log.clear();
             s.entry_index = 0; // 重置索引，增量查询从 0 重新开始
+            s.total_data_size = 0;
             true
         } else {
             false
@@ -221,6 +228,7 @@ impl DebugSessionManager {
     }
 
     fn push_entry(&self, device_id: &str, direction: &str, data: &[u8], display: String) {
+        let data_len = data.len();
         let mut sessions = lock_mutex(&self.sessions);
         let entry = sessions.entry(device_id.to_string()).or_default();
 
@@ -228,22 +236,19 @@ impl DebugSessionManager {
         entry.entry_index += 1;
 
         // 添加新条目
-        entry.log.push(DebugLogEntry {
+        entry.log.push_back(DebugLogEntry {
             timestamp: now_ms(),
             direction: direction.to_string(),
             data: data.to_vec(),
             display,
             index: idx,
         });
+        entry.total_data_size += data_len;
 
-        // 检查是否超过缓冲区限制
-        let total_size: usize = entry.log.iter().map(|e| e.data.len()).sum();
-        if total_size > entry.max_size {
-            // 从前面删除旧条目
-            let mut current_size = total_size;
-            while current_size > entry.max_size && !entry.log.is_empty() {
-                let removed = entry.log.remove(0);
-                current_size -= removed.data.len();
+        // O(1) trim from front (VecDeque pop_front is cheap)
+        while entry.total_data_size > entry.max_size && !entry.log.is_empty() {
+            if let Some(removed) = entry.log.pop_front() {
+                entry.total_data_size -= removed.data.len();
             }
         }
     }

@@ -158,6 +158,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   late Ticker _ticker;
   bool _tickBusy = false; // P0-2: frame budget guard — skip tick if previous frame still rendering
   int _lastVpGen = -1; // Idle skip: track last viewport generation to skip expensive refresh when idle
+  double _lastIdleXMin = 0; // Idle skip: prevent stale viewport rendering after scrollbar drag
+  double _lastIdleXMax = 0; // Idle skip: prevent stale viewport rendering after scrollbar drag
 
   // ── Demo ──
   double _demoPhase = 0;  // Demo phase for waveform generation (time in seconds)
@@ -489,6 +491,32 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // Check generation — odd means pipeline is currently updating the envelope
     final gen1 = bridge.envelopeGetGeneration();
     if (gen1 & 1 != 0) return false;
+
+    // ── Validate viewport matches current _xMin/_xMax ──
+    // Pipeline is async (16ms cycle). Envelope may still be from a previous
+    // viewport if the user just dragged/zoomed. Using stale envelope coords
+    // in a new viewport gaps or compresses the waveform.
+    final vpMinPtr = calloc<Double>();
+    final vpMaxPtr = calloc<Double>();
+    bridge.envelopeGetViewport(vpMinPtr, vpMaxPtr);
+    final envXMin = vpMinPtr.value;
+    final envXMax = vpMaxPtr.value;
+    calloc.free(vpMinPtr);
+    calloc.free(vpMaxPtr);
+
+    // Compute expected absolute range from relative _xMin/_xMax + anchor
+    double anchorX = 0;
+    for (final ch in _channels) {
+      if (ch.data.isNotEmpty) { anchorX = ch.data.last.x; break; }
+    }
+    final expectedMin = anchorX + _xMin;
+    final expectedMax = anchorX + _xMax;
+    // Allow 2% tolerance (async pipeline may have slightly stale viewport)
+    final tolerance = (expectedMax - expectedMin).abs() * 0.02;
+    if ((envXMin - expectedMin).abs() > tolerance + 0.5 ||
+        (envXMax - expectedMax).abs() > tolerance + 0.5) {
+      return false; // Viewport changed — fall through to synchronous refresh
+    }
 
     final dataPtr = bridge.envelopeGetDataPtr();
     if (dataPtr.address == 0) return false;
@@ -1266,11 +1294,17 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       try {
         final vpGen = FfiBridge.instance.envelopeGetGeneration();
         final hasNewData = FfiBridge.instance.checkDataReady();
-        if (!hasNewData && vpGen == _lastVpGen && _lastVpGen >= 0) {
+        // Also skip idle if _xMin/_xMax changed (scrollbar drag / zoom without refresh).
+        // Otherwise shouldRepaint renders stale viewportData at new coordinates →
+        // data points appear outside the slider's visual bounds.
+        final vpChanged = _xMin != _lastIdleXMin || _xMax != _lastIdleXMax;
+        if (!hasNewData && vpGen == _lastVpGen && _lastVpGen >= 0 && !vpChanged) {
           _lastVpGen = vpGen;
           idleSkip = true;
         } else {
           _lastVpGen = vpGen;
+          _lastIdleXMin = _xMin;
+          _lastIdleXMax = _xMax;
         }
       } catch (_) {
         // checkDataReady or envelopeGetGeneration not available — fall through to normal refresh
@@ -1418,7 +1452,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _autoAddChannels = json['autoAddChannels'] as bool? ?? true;
         _useRealData = json['useRealData'] as bool? ?? false;
         _pipelineEnabled = json['pipelineEnabled'] as bool? ?? false;
-        _analogEnvelopeEnabled = json['analogEnvelopeEnabled'] as bool? ?? false;
+        _analogEnvelopeEnabled = json['analogEnvelopeEnabled'] as bool? ?? true;
+        // NOTE: Force true — _ensureAnalogSegments() runs before _loadConfig
+        // callback fires (async). If saved config has false, the callback would
+        // silently disable AnalogSegment, causing TimeBucketPyramid fallback.
+        if (!_analogEnvelopeEnabled) {
+          _analogEnvelopeEnabled = true;
+        }
         _maxPointsController.text = _maxPoints.toString();
         _deltaTimeController.text = _deltaTime.toString();
         // Load Flutter log settings from app_config.json

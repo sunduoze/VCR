@@ -141,6 +141,8 @@ typedef _EnvelopeGetTotalSizeNative = Uint32 Function();
 typedef _EnvelopeGetTotalSizeDart = int Function();
 typedef _EnvelopeGetGenerationNative = Uint64 Function();
 typedef _EnvelopeGetGenerationDart = int Function();
+typedef _EnvelopeGetViewportNative = Void Function(Pointer<Double> outMin, Pointer<Double> outMax);
+typedef _EnvelopeGetViewportDart = void Function(Pointer<Double> outMin, Pointer<Double> outMax);
 typedef _EnvelopeGetNumChannelsNative = Uint32 Function();
 typedef _EnvelopeGetNumChannelsDart = int Function();
 
@@ -192,6 +194,7 @@ class FfiBridge {
   late final _EnvelopeGetDataPtrDart envelopeGetDataPtr;
   late final _EnvelopeGetTotalSizeDart envelopeGetTotalSize;
   late final _EnvelopeGetGenerationDart envelopeGetGeneration;
+  late final _EnvelopeGetViewportDart envelopeGetViewport;
   late final _EnvelopeGetNumChannelsDart envelopeGetNumChannels;
 
   FfiBridge._() {
@@ -278,6 +281,7 @@ class FfiBridge {
       envelopeGetTotalSize = _lib.lookupFunction<_EnvelopeGetTotalSizeNative, _EnvelopeGetTotalSizeDart>('vcr_envelope_get_total_size');
       envelopeGetGeneration = _lib.lookupFunction<_EnvelopeGetGenerationNative, _EnvelopeGetGenerationDart>('vcr_envelope_get_generation');
       envelopeGetNumChannels = _lib.lookupFunction<_EnvelopeGetNumChannelsNative, _EnvelopeGetNumChannelsDart>('vcr_envelope_get_num_channels');
+      envelopeGetViewport = _lib.lookupFunction<_EnvelopeGetViewportNative, _EnvelopeGetViewportDart>('vcr_envelope_get_viewport');
     } catch (e) {
       print('[FfiBridge] Envelope bindings unavailable (DLL may be outdated), degrade gracefully: $e');
     }

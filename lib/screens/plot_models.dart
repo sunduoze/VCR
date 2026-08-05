@@ -264,22 +264,6 @@ class _DataBuf {
 
   void clear() => _len = 0;
 
-  /// Create from raw f32 trace values (each value = one sample, y only).
-  /// x values are sequential starting from startSample.
-  /// Direct write — avoids add() resize loop for known-size batches.
-  factory _DataBuf.fromTrace(List<double> values, int startSample) {
-    final n = values.length;
-    final buf = Float64List(n * 2);
-    for (int i = 0; i < n; i++) {
-      buf[i * 2] = startSample + i.toDouble();
-      buf[i * 2 + 1] = values[i];
-    }
-    final result = _DataBuf._fromBuffer(buf, n);
-    return result;
-  }
-
-  _DataBuf._fromBuffer(this._buf, this._len);
-
   /// Copy of the underlying data buffer (safe — caller cannot mutate internal state).
   Float64List get rawBuf => Float64List.fromList(_buf.sublist(0, _len * 2));
 }
@@ -367,5 +351,6 @@ class PlotScreen extends StatefulWidget {
   State<PlotScreen> createState() => _PlotScreenState();
 }
 
-// Render mode: auto (threshold-based), trace (always raw polyline), envelope (always min-max band)
-enum _RenderMode { auto, trace, envelope }
+// Render mode: auto (threshold-based), trace (always raw polyline)
+// NOTE: envelope removed — Min-Max pixel decimation always produces both
+enum _RenderMode { auto, trace }

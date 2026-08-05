@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'dart:async';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
-import 'dart:ffi' hide Size; // NOTE: Phase C: Pointer for native buffer reuse (hide Size to avoid dart:ui conflict)
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/gestures.dart';
@@ -15,7 +14,6 @@ import '../src/rust/api/debug_api.dart';
 import '../src/rust/api/plot_api.dart';
 import '../src/rust/frb_generated.dart';
 import '../core/ffi_bridge.dart';
-import 'package:ffi/ffi.dart' show calloc;
 
 // ============================================================================
 // Plot Screen — Oscilloscope-style waveform viewer
@@ -260,8 +258,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // Render mode: auto (threshold-based), trace (always raw polyline), envelope (always min-max band)
   _RenderMode _renderMode = _RenderMode.auto;
-  String _pyramidDebugText = '';
-
   // ── Pipeline thread toggle ──
   // Delegated to _activeDevice
   bool get _pipelineEnabled => _activeDevice.pipelineEnabled;
@@ -672,8 +668,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     } catch (_) {}
   }
 
-  /// Read pre-computed envelope from Rust pipeline (P1: zero-copy via Pointer.asTypedList).
-  /// Instead of O(N) individual dataPtr[index] FFI boundary crosses, we create a single
   void _refreshViewportData() {
     /// Min-Max pixel decimation: each screen pixel column gets the min+max
     /// of all data points in that column. Preserves peak detail (no spike loss)
@@ -952,46 +946,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         }
         _startDemoData();
       }
-    });
-  }
-
-  void _togglePipeline() {
-    setState(() {
-      _pipelineEnabled = !_pipelineEnabled;
-      if (_pipelineEnabled) {
-        FfiBridge.instance.startPipeline();
-        // If analog envelope is enabled, ensure segments exist after pipeline start
-        if (_analogEnvelopeEnabled) {
-          _ensureAnalogSegments();
-        }
-      } else {
-        FfiBridge.instance.stopPipeline();
-      }
-    });
-  }
-
-  /// Toggle AnalogSegment envelope rendering.
-  /// When enabled, the pipeline reads envelope data from AnalogSegment (f32, 10-level
-  /// 16^n pyramid) instead of TimeBucketPyramid (f64). This provides higher-precision
-  /// decimation at the cost of additional memory (f32 per level).
-  /// Requires pipeline to be enabled; auto-starts pipeline if needed.
-  void _toggleAnalogEnvelope() {
-    setState(() {
-      _analogEnvelopeEnabled = !_analogEnvelopeEnabled;
-      if (_analogEnvelopeEnabled) {
-        // Auto-start pipeline if not already running
-        if (!_pipelineEnabled) {
-          _pipelineEnabled = true;
-          FfiBridge.instance.startPipeline();
-        }
-        // Enable AnalogSegment as envelope source
-        FfiBridge.instance.analogSetEnvelopeEnabled(true);
-        _ensureAnalogSegments();
-      } else {
-        // Disable AnalogSegment envelope source (fall back to TimeBucketPyramid)
-        FfiBridge.instance.analogSetEnvelopeEnabled(false);
-      }
-      _saveConfig();
     });
   }
 
@@ -1285,12 +1239,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     // Release static GPU Picture cache (prevents long-running memory leak)
     _PlotPainter.disposeStaticCache();
-    // NOTE: Phase C: Free reusable native query buffer
-    if (_queryNative != null) {
-      calloc.free(_queryNative!);
-      _queryNative = null;
-    }
-    _queryBuffer = null;
+    // NOTE: Phase C query buffers removed (Min-Max pixel decimation)
     super.dispose();
   }
 
@@ -1931,62 +1880,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     );
   }
 
-  void _showPyramidDebug() {
-    if (_analogEnvelopeEnabled) {
-      final buf = StringBuffer();
-      for (var i = 0; i < _channels.length; i++) {
-        final info = FfiBridge.instance.analogDumpDebug(_activeDevice.deviceKey, i);
-        buf.writeln('═══ Channel $i ═══');
-        buf.writeln(info);
-        buf.writeln();
-      }
-      _pyramidDebugText = buf.toString();
-    } else {
-      _pyramidDebugText = 'AnalogSegment envelope is DISABLED.\nEnable "Analog Envelope" in toolbar to view pyramid state.';
-    }
-
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Row(
-          children: [
-            const Icon(Icons.bug_report, size: 20),
-            const SizedBox(width: 8),
-            const Text('Pyramid Debug', style: TextStyle(fontSize: 16)),
-            const Spacer(),
-            IconButton(
-              icon: const Icon(Icons.refresh, size: 18),
-              onPressed: () {
-                Navigator.of(ctx).pop();
-                _showPyramidDebug(); // Refresh
-              },
-            ),
-          ],
-        ),
-        content: SizedBox(
-          width: 600,
-          height: 500,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              _pyramidDebugText,
-              style: const TextStyle(
-                fontFamily: 'Consolas',
-                fontSize: 12,
-                height: 1.4,
-              ),
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
-    );
-  }
-
   // ══════════════════════════════════════════════════════════════
   // SECTION [6/6] UI: BUILD & DIALOGS
   //   build() → channel config → plot group manager → chart painter
@@ -2091,78 +1984,6 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               _saveConfig();
             },
             tooltip: _shareYAxis ? 'Share Y Axis (ON)' : 'Share Y Axis (OFF)',
-          ),
-          // Render mode toggle (Auto → Trace → Envelope)
-          IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: _renderMode != _RenderMode.auto
-                    ? (_renderMode == _RenderMode.trace
-                        ? Colors.blue.withValues(alpha: 0.2)
-                        : Colors.purple.withValues(alpha: 0.2))
-                    : Colors.transparent,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Icon(
-                _renderMode == _RenderMode.trace
-                    ? Icons.show_chart
-                    : _renderMode == _RenderMode.envelope
-                        ? Icons.area_chart
-                        : Icons.auto_graph,
-                color: _renderMode != _RenderMode.auto
-                    ? (_renderMode == _RenderMode.trace ? Colors.blue : Colors.purple)
-                    : AppTheme.textSecondary,
-                size: 20,
-              ),
-            ),
-            onPressed: () {
-              setState(() {
-                _renderMode = _RenderMode.values[
-                    (_renderMode.index + 1) % _RenderMode.values.length];
-              });
-            },
-            tooltip: 'Render Mode: ${_renderMode.name.toUpperCase()}',
-          ),
-          // Pipeline toggle (pre-computed envelope)
-          IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: _pipelineEnabled ? AppTheme.primary.withValues(alpha: 0.2) : AppTheme.surfaceVariant,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Icon(
-                _pipelineEnabled ? Icons.memory : Icons.memory_outlined,
-                color: _pipelineEnabled ? AppTheme.primary : AppTheme.textSecondary,
-                size: 20,
-              ),
-            ),
-            onPressed: _togglePipeline,
-            tooltip: _pipelineEnabled ? 'Pipeline ON (zero-copy envelope)' : 'Pipeline OFF (per-channel query)',
-          ),
-          // AnalogSegment envelope toggle (f32 10-level 16^n pyramid)
-          IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: _analogEnvelopeEnabled ? Colors.purple.withValues(alpha: 0.2) : AppTheme.surfaceVariant,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Icon(
-                _analogEnvelopeEnabled ? Icons.stacked_bar_chart : Icons.stacked_bar_chart_outlined,
-                color: _analogEnvelopeEnabled ? Colors.purple : AppTheme.textSecondary,
-                size: 20,
-              ),
-            ),
-            onPressed: _toggleAnalogEnvelope,
-            tooltip: _analogEnvelopeEnabled ? 'Analog Envelope ON (f32 pyramid)' : 'Analog Envelope OFF (f64)',
-          ),
-          // Pyramid Debug
-          IconButton(
-            icon: Icon(Icons.bug_report, size: 20, color: AppTheme.textSecondary),
-            onPressed: _showPyramidDebug,
-            tooltip: 'Pyramid Debug',
           ),
           // Data source toggle
           IconButton(

@@ -23,6 +23,15 @@ const STAGING_MAX_SIZE: usize = 4;
 
 // ── Structs ─────────────────────────────────────────────────────────
 
+/// LTTB compute params (persistent buffer, written per frame)
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct LttbParams {
+    input_count: u32,
+    output_count: u32,
+    threshold: u32,
+}
+
 /// Staging buffer entry for async readback
 struct StagingEntry {
     buffer: Buffer,
@@ -50,6 +59,10 @@ pub struct GpuRenderer {
     // Uniform buffer (color)
     uniform_buffer: Buffer,
     uniform_bind_group: BindGroup,
+
+    // Persistent params buffer for LTTB compute (pre-allocated, write_buffer per frame)
+    #[allow(dead_code)]
+    lttb_params_buffer: Buffer,
 
     // Staging buffer pool for readback
     staging_pool: Vec<StagingEntry>,
@@ -254,7 +267,15 @@ impl GpuRenderer {
             cache: None,
         });
 
-        // ── 8. Uniform buffer ─────────────────────────────────────
+        // ── 8. Persistent LTTB params buffer (pre-allocated for reuse) ──
+        let lttb_params_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("LTTB Params Buffer (Persistent)"),
+            size: 12, // 3 × u32 (input_count, output_count, threshold)
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // ── 9. Uniform buffer ─────────────────────────────────────
         let uniform_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Uniform Buffer (Color)"),
             size: 16, // vec4<f32>
@@ -286,6 +307,7 @@ impl GpuRenderer {
             waveform_pipeline,
             uniform_buffer,
             uniform_bind_group,
+            lttb_params_buffer,
             staging_pool,
             staging_idx: 0,
             decimated_buffer: None,
@@ -419,30 +441,15 @@ impl GpuRenderer {
             .as_ref()
             .ok_or("Decimated buffer not allocated")?;
 
-        // ── Params uniform buffer ──────────────────────────────────
-        #[repr(C)]
-        #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-        struct LttbParams {
-            input_count: u32,
-            output_count: u32,
-            threshold: u32,
-        }
-
+        // ── Params: write to persistent buffer (no per-frame allocation) ──
         let params = LttbParams {
             input_count,
             output_count,
-            threshold: output_count * 2, // No-op if input < 2× output
+            threshold: output_count * 2,
         };
 
-        let params_buffer = self.device.create_buffer(&BufferDescriptor {
-            label: Some("LTTB Params"),
-            size: std::mem::size_of::<LttbParams>() as u64,
-            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
         self.queue
-            .write_buffer(&params_buffer, 0, bytemuck::bytes_of(&params));
+            .write_buffer(&self.lttb_params_buffer, 0, bytemuck::bytes_of(&params));
 
         // ── Bind group ────────────────────────────────────────────
         let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
@@ -459,7 +466,7 @@ impl GpuRenderer {
                 },
                 BindGroupEntry {
                     binding: 2,
-                    resource: params_buffer.as_entire_binding(),
+                    resource: self.lttb_params_buffer.as_entire_binding(),
                 },
             ],
         });

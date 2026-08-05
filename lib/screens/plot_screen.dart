@@ -22,6 +22,18 @@ import 'package:ffi/ffi.dart' show calloc;
 // ============================================================================
 
 
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  TABLE OF CONTENTS                                          ║
+// ╠══════════════════════════════════════════════════════════════╣
+// ║  [1/6] FIELDS & INIT  L33-L431    — All state fields + initState
+// ║  [2/6] DATA PIPELINE   L434-L1280 — Data gen, viewport, real fetch
+// ║  [3/6] AXIS & FITTING  L1283-L1543 — X/Y axis fitting algorithms
+// ║  [4/6] LIFECYCLE       L1546-L2029 — Config, GPU, AA, CSV
+// ║  [5/6] ACTIONS         L2032-L2257 — Channel/group mgmt, debug
+// ║  [6/6] UI & DIALOGS    L2260-3666 — build(), config dialogs, painter
+// ╚══════════════════════════════════════════════════════════════╝
+
 part 'plot_models.dart';
 part 'plot_painter.dart';
 
@@ -430,6 +442,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Ensure AnalogSegment instances exist for every visible channel
   /// and set the pipeline's envelope source to AnalogSegment.
+
+  // ══════════════════════════════════════════════════════════════
+  // SECTION [2/6] DATA PIPELINE
+  //   _ensureAnalogSegments → _initDemoChannels → Demo/Real data → viewport refresh
+  // ══════════════════════════════════════════════════════════════
   /// Also sets samplerate based on _deltaTime (time-per-sample in ms).
   void _ensureAnalogSegments() {
     _analogEnvelopeEnabled = true; // Sync Dart field (saved config may have set it to false)
@@ -582,16 +599,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           bridge.pushChannelBatch(dk, i, batchPerChannel[i]);
         }
       }
-      // Trim: only when data exceeds _maxPoints by a safe margin to avoid O(n) per tick.
-      // Using sublist() on a large list is O(n) — we defer trimming until 110% capacity.
-      if (_channels.isNotEmpty && _channels.first.data.length > _maxPoints * 11 ~/ 10) {
-        _debugLog('[TRIM] Trimming data: first.data.length=${_channels.first.data.length}, _maxPoints=$_maxPoints');
-        for (final ch in _channels) {
-          if (ch.data.length > _maxPoints) {
-            ch.data.removeRange(0, ch.data.length - _maxPoints);
-          }
-        }
-      }
+      // FixedCapacityRing auto-overwrites oldest when full — no manual trim needed.
       // Demo mode: incremental count (sum of all sub-samples across all channels)
       _totalPoints += _channels.length * _demoSubSamples;
       // 每100帧输出一次调试信息
@@ -1094,7 +1102,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               final allPoints = plotGetAllChannels(deviceId: deviceId);
               final pts = allPoints[chName];
               if (pts != null && pts.isNotEmpty) {
-                ch.data = pts.map((p) => _DataPoint(p.timestampMs, p.value)).toList();
+                for (final p in pts) { ch.data.add(_DataPoint(p.timestampMs, p.value)); }
                 ch.currentValue = pts.last.value;
               }
             }
@@ -1108,11 +1116,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                   ch.data.add(_DataPoint(latestData[k].timestampMs, latestData[k].value));
                 }
                 ch.currentValue = latestData.last.value;
-                // Keep only _maxPoints points (trim from front, keep newest)
-                if (ch.data.length > _maxPoints) {
-                  ch.data.removeRange(0, ch.data.length - _maxPoints);
-                  // Pyramid self-manages via TimeBucket::max_buckets — no Dart trimming needed
-                }
+                // FixedCapacityRing auto-overwrites — no manual trim needed.
                 // NOTE: Incremental point counting (avoid O(all_data) fold)
                 _totalPoints += latestData.length;
               }
@@ -1279,6 +1283,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _saveConfig();
     });
   }
+
+  // ══════════════════════════════════════════════════════════════
+  // SECTION [3/6] AXIS & FITTING
+  //   _fitXAxis → _fitYAxisForChannel → _fitYAxis
+  // ══════════════════════════════════════════════════════════════
 
   void _fitXAxis() {
     _debugLog('[FITX] called, _scrollMode=$_scrollMode, _useRealData=$_useRealData, _maxPoints=$_maxPoints');
@@ -1542,6 +1551,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       _tickBusy = false;
     }
   }
+
+  // ══════════════════════════════════════════════════════════════
+  // SECTION [4/6] LIFECYCLE & CONFIG
+  //   dispose → loadConfig → saveConfig → GPU → AA → CSV
+  // ══════════════════════════════════════════════════════════════
 
   @override
   void dispose() {
@@ -2029,6 +2043,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Channel management ──
 
+  // ══════════════════════════════════════════════════════════════
+  // SECTION [5/6] ACTIONS
+  //   add/remove channel → plot groups → scroll mode → pyramid debug
+  // ══════════════════════════════════════════════════════════════
+
   void _addChannel() {
     final idx = _channels.length;
     setState(() {
@@ -2256,6 +2275,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       ),
     );
   }
+
+  // ══════════════════════════════════════════════════════════════
+  // SECTION [6/6] UI: BUILD & DIALOGS
+  //   build() → channel config → plot group manager → chart painter
+  // ══════════════════════════════════════════════════════════════
 
   // ── Build UI ──
 

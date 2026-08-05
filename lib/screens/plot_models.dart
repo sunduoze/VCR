@@ -80,6 +80,54 @@ class PlotGroup {
 /// samplesPerPixel >= envelopeThreshold -> envelope mode (min-max band)
 const double envelopeThreshold = 2.0;
 
+/// Fixed-capacity ring buffer for streaming data.
+/// O(1) push, auto-overwrites oldest when full.
+/// Memory stable: never grows beyond capacity.
+class FixedCapacityRing {
+  final int _capacity;
+  final List<_DataPoint> _buf;
+  int _head = 0; // next write position
+  int _count = 0; // current valid count
+
+  FixedCapacityRing({int capacity = 250000})
+      : _capacity = capacity,
+        _buf = List.filled(capacity, _DataPoint(0, 0), growable: false);
+
+  /// O(1) add. When full, oldest is silently overwritten.
+  void add(_DataPoint pt) {
+    _buf[_head] = pt;
+    _head = (_head + 1) % _capacity;
+    if (_count < _capacity) _count++;
+  }
+
+  /// Access by logical index (0=oldest). O(1).
+  _DataPoint operator [](int index) {
+    final start = _head >= _count ? 0 : (_head + _capacity - _count) % _capacity;
+    return _buf[(start + index) % _capacity];
+  }
+
+  /// Newest element. O(1).
+  _DataPoint get last {
+    if (_count == 0) throw StateError('FixedCapacityRing is empty');
+    final idx = (_head == 0) ? _capacity - 1 : _head - 1;
+    return _buf[idx];
+  }
+
+  int get length => _count;
+  bool get isEmpty => _count == 0;
+  bool get isNotEmpty => _count > 0;
+
+  void clear() { _head = 0; _count = 0; }
+
+  /// Iterate oldest-to-newest (for CSV export, cursor search).
+  Iterable<_DataPoint> get oldToNew sync* {
+    final start = _head >= _count ? 0 : (_head + _capacity - _count) % _capacity;
+    for (int i = 0; i < _count; i++) {
+      yield _buf[(start + i) % _capacity];
+    }
+  }
+}
+
 class PlotChannel {
   final String deviceId;
   String deviceName;
@@ -91,7 +139,7 @@ class PlotChannel {
   bool showYAxis;
   LineStyle lineStyle;
   double lineWidth;
-  List<_DataPoint> data; // Full data (for scale/cursor) — keeps _DataPoint (not on hot path)
+  FixedCapacityRing data; // Fixed-capacity ring buffer (50K, auto-overwrite)
   _DataBuf viewportData; // P0-2: GC-free Float64List for avg line painting
   _DataBuf envelopeData; // P0-2: GC-free Float64List for min-max fill
   double currentValue;
@@ -123,7 +171,7 @@ class PlotChannel {
     this.yMaxManual = 1,
     this.autoScaleY = true,
     this.plotGroupId = 'default',
-  }) : data = data ?? [],
+  }) : data = FixedCapacityRing(capacity: 250000),
        viewportData = _DataBuf(),
        envelopeData = _DataBuf();
 

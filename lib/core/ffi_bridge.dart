@@ -2,7 +2,7 @@ import 'dart:ffi';
 import 'dart:typed_data';
 
 // Stub — core pipeline/envelope/analog removed after Min-Max simplification.
-// All calls are no-ops. plot_screen.dart still references these during cleanup.
+// All calls are no-ops.
 
 final class CDataPoint extends Struct {
   @Double()
@@ -16,8 +16,6 @@ final class CEnvelopeSample extends Struct {
   external double minVal;
   @Double()
   external double maxVal;
-
-  // Aliases for code that uses .min / .max
   double get min => minVal;
   double get max => maxVal;
 }
@@ -32,16 +30,11 @@ class FfiBridge {
   void analogSetSamplerate(int deviceKey, int channel, double hz) {}
   void analogResetAll() {}
   int analogSampleCount(int deviceKey, int channel) => 0;
-
-  // analogGetTrace: 6 args in code
   int analogGetTrace(int deviceKey, int channel, int startSample, int endSample,
       Pointer<Float> out, int maxLen) => 0;
-
-  // analogGetEnvelope: 9 args in code
   int analogGetEnvelope(int deviceKey, int channel, int startSample, int endSample,
       double samplesPerPixel, Pointer<CEnvelopeSample> out, int maxSamples,
       Pointer<Uint64> sectionStart, Pointer<Uint32> sectionScale) => 0;
-
   String analogDumpDebug(int dk, int ch) => 'stub';
 
   int envelopeGetGeneration() => 0;
@@ -58,8 +51,6 @@ class FfiBridge {
 
   void pushChannelBatch(int deviceKey, int chId, Pointer<CDataPoint> data, int count) {}
   void pushChannelBatchDart(int deviceKey, int chId, List<(double, double)> batch) {}
-  int get analogLevelCount => 10;
-  set analogLevelCount(int v) {}
   void pyramidsSetAcceptConsole(bool v) {}
   void clearAllChannelPyramids() {}
 
@@ -67,4 +58,6 @@ class FfiBridge {
       int maxPts, Pointer<CDataPoint> buf, int bufsz, Float64List fb) => 0;
 
   bool checkDataReady() => false;
+  int get analogLevelCount => 10;
+  set analogLevelCount(int v) {}
 }

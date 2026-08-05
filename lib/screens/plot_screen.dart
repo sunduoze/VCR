@@ -297,10 +297,10 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   static const bool _verbose = false;
   int _frameCount = 0;
 
-  // NOTE: Phase C: Reusable query buffers (allocated once, resized lazily)
-  Float64List? _queryBuffer;        // Reusable Float64List for _refreshViewportData
-  Pointer<CDataPoint>? _queryNative; // Reusable native buffer for FFI queries
-  int _queryNativeCap = 0;           // Current native buffer capacity (in CDataPoint elements)
+  // NOTE: Phase C fields removed (Min-Max pixel decimation replaces FFI queries)
+  // Float64List? _queryBuffer;        // Reusable Float64List for _refreshViewportData
+  // Pointer<CDataPoint>? _queryNative; // Reusable native buffer for FFI queries
+  // int _queryNativeCap = 0;           // Current native buffer capacity (in CDataPoint elements)
 
   // ── Interaction state ──
   Offset? _mousePosition;
@@ -596,7 +596,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       final dk = _activeDevice.deviceKey;
       for (int i = 0; i < _channels.length; i++) {
         if (batchPerChannel[i].isNotEmpty) {
-          bridge.pushChannelBatch(dk, i, batchPerChannel[i]);
+          bridge.pushChannelBatchDart(dk, i, batchPerChannel[i]);
         }
       }
       // FixedCapacityRing auto-overwrites oldest when full — no manual trim needed.
@@ -674,149 +674,14 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   /// Read pre-computed envelope from Rust pipeline (P1: zero-copy via Pointer.asTypedList).
   /// Instead of O(N) individual dataPtr[index] FFI boundary crosses, we create a single
-  /// Float64List view over the Rust Vec memory, then access it in pure Dart.
-  /// Returns true if envelope data was successfully read and populated.
-  bool _refreshViewportDataFromEnvelope() {
-    final bridge = FfiBridge.instance;
-
-    // Check generation — odd means pipeline is currently updating the envelope
-    final gen1 = bridge.envelopeGetGeneration();
-    if (gen1 & 1 != 0) return false;
-
-    // ── Validate viewport matches current _xMin/_xMax ──
-    // Pipeline is async (16ms cycle). Envelope may still be from a previous
-    // viewport if the user just dragged/zoomed. Using stale envelope coords
-    // in a new viewport gaps or compresses the waveform.
-    final vpMinPtr = calloc<Double>();
-    final vpMaxPtr = calloc<Double>();
-    bridge.envelopeGetViewport(vpMinPtr, vpMaxPtr);
-    final envXMin = vpMinPtr.value;
-    final envXMax = vpMaxPtr.value;
-    calloc.free(vpMinPtr);
-    calloc.free(vpMaxPtr);
-
-    // Compute expected absolute range from relative _xMin/_xMax + anchor
-    double anchorX = 0;
-    for (final ch in _channels) {
-      if (ch.data.isNotEmpty) { anchorX = ch.data.last.x; break; }
-    }
-    final expectedMin = anchorX + _xMin;
-    final expectedMax = anchorX + _xMax;
-    // Allow 2% tolerance (async pipeline may have slightly stale viewport)
-    final tolerance = (expectedMax - expectedMin).abs() * 0.02;
-    if ((envXMin - expectedMin).abs() > tolerance + 0.5 ||
-        (envXMax - expectedMax).abs() > tolerance + 0.5) {
-      return false; // Viewport changed — fall through to synchronous refresh
-    }
-
-    final dataPtr = bridge.envelopeGetDataPtr();
-    if (dataPtr.address == 0) return false;
-
-    final numCh = bridge.envelopeGetNumChannels();
-    if (numCh == 0) return false;
-
-    final dk = _activeDevice.deviceKey;
-
-    // P1: Zero-copy — map entire envelope buffer as a Dart Float64List.
-    // Eliminates ~8000 individual FFI boundary crosses per frame.
-    final totalSize = bridge.envelopeGetTotalSize();
-    final envelopeBuf = dataPtr.asTypedList(totalSize);
-
-    bool anyData = false; // Track if any channel had non-zero count
-    for (int ci = 0; ci < numCh && ci < _channels.length; ci++) {
-      final ch = _channels[ci];
-      if (!ch.visible || ch.data.isEmpty) {
-        ch.viewportData.clear();
-        ch.envelopeData.clear();
-        continue;
-      }
-
-      final offset = bridge.envelopeGetChannelOffset(dk, ci);
-      final count = bridge.envelopeGetChannelCount(dk, ci);
-      if (count == 0) {
-        ch.viewportData.clear();
-        ch.envelopeData.clear();
-        continue;
-      }
-      anyData = true;
-
-      final newestAbsX = ch.data.last.x;
-      ch.viewportData.clear();
-      ch.envelopeData.clear();
-
-      // Envelope format: [ts0,lo0, ts0+ϵ,hi0, ts1,lo1, ...] alternating min/max per bucket
-      // Envelope stores ABSOLUTE coords; subtract newestAbsX to get relative.
-      // P1: Direct Float64List index — pure Dart, zero FFI boundary cross
-      for (int i = 0; i < count; i += 2) {
-        if (i + 1 >= count) break;
-        final tsMin = envelopeBuf[offset + i * 2];
-        final yMin = envelopeBuf[offset + i * 2 + 1];
-        final yMax = envelopeBuf[offset + (i + 1) * 2 + 1];
-        final yAvg = (yMin + yMax) * 0.5;
-        final xRel = tsMin - newestAbsX;
-
-        ch.viewportData.add(xRel, yAvg);
-        ch.envelopeData.add(xRel, yMin);
-        ch.envelopeData.add(xRel, yMax);
-      }
-      if (count % 2 != 0 && count > 0) {
-        final lastX = envelopeBuf[offset + (count - 1) * 2] - newestAbsX;
-        final lastY = envelopeBuf[offset + (count - 1) * 2 + 1];
-        ch.viewportData.add(lastX, lastY);
-      }
-    }
-
-    // If no channel had data, fall through to per-channel pyramid query
-    if (!anyData) return false;
-
-    // Verify generation didn't change during read (pipeline update mid-read)
-    // Note: asTypedList provides a live view; pipeline writes are atomic (generation check)
-    final gen2 = bridge.envelopeGetGeneration();
-    if (gen1 != gen2) return false; // Mid-update, discard
-
-    _viewportRefreshCount++;
-    return true;
-  }
-
   void _refreshViewportData() {
+    /// Min-Max pixel decimation: each screen pixel column gets the min+max
+    /// of all data points in that column. Preserves peak detail (no spike loss)
+    /// while reducing e.g. 250K points 鈫?~4000 drawing primitives per channel.
+    /// Runs entirely in Dart 鈥?zero FFI, zero pipeline, zero analog segment.
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
-    // FIXED(P0)-4: Zero-copy envelope read (pre-computed by Rust pipeline thread).
-    // When pipeline is enabled, try envelope read first; fall back to pyramid query on failure.
-    if (_pipelineEnabled) {
-      if (_refreshViewportDataFromEnvelope()) return;
-      if (_refreshViewportFromAnalog()) return;
-    } else if (_analogEnvelopeEnabled) {
-      // AnalogSegment direct C-ABI path (works without pipeline thread).
-      if (_refreshViewportFromAnalog()) return;
-    }
-
-    // Fallback: per-channel pyramid query (always active)
-    final maxPts = _screenWidth.round().clamp(500, 4000);
-    final bridge = FfiBridge.instance;
-
-    // NOTE: Reusable Float64List buffer for pyramid query results
-    final maxDatapoints = maxPts * 2;
-    if (_queryBuffer == null || _queryBuffer!.length != maxDatapoints * 2) {
-      _queryBuffer = Float64List(maxDatapoints * 2);
-    }
-    final fb = _queryBuffer!;
-
-    // NOTE: Phase C: Reuse native CDataPoint buffer
-    Pointer<CDataPoint> nativeBuf;
-    if (_queryNative != null && _queryNativeCap >= maxDatapoints) {
-      nativeBuf = _queryNative!;
-    } else {
-      // Free old buffer if it exists (resize up)
-      if (_queryNative != null) {
-        calloc.free(_queryNative!);
-      }
-      _queryNative = calloc<CDataPoint>(maxDatapoints);
-      _queryNativeCap = maxDatapoints;
-      nativeBuf = _queryNative!;
-    }
-
-    final dk = _activeDevice.deviceKey;
+    final w = _screenWidth.round().clamp(1, 4096);
 
     for (int ci = 0; ci < _channels.length; ci++) {
       final ch = _channels[ci];
@@ -826,189 +691,35 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         continue;
       }
 
+      final total = ch.data.length;
+      final step = (total / w).ceil().clamp(1, total);
       final newestAbsX = ch.data.last.x;
-      final tMin = newestAbsX + _xMin;
-      final tMax = newestAbsX + _xMax;
-
-      try {
-        final count = bridge.queryChannelPointsInto(dk, ci, tMin, tMax, maxPts, nativeBuf, maxDatapoints, fb);
-        if (count == 0) {
-          ch.viewportData.clear();
-          ch.envelopeData.clear();
-          continue;
-        }
-        ch.viewportData.clear();
-        ch.envelopeData.clear();
-        for (int i = 0; i < count; i += 2) {
-          if (i + 1 >= count) break;
-          final xMin = fb[i * 2] - newestAbsX;
-          final yMin = fb[i * 2 + 1];
-          final yMax = fb[(i + 1) * 2 + 1];
-          final yAvg = (yMin + yMax) * 0.5;
-          ch.viewportData.add(xMin, yAvg);
-          ch.envelopeData.add(xMin, yMin);
-          ch.envelopeData.add(xMin, yMax);
-        }
-        if (count % 2 != 0 && count > 0) {
-          final lastX = fb[(count - 1) * 2] - newestAbsX;
-          final lastY = fb[(count - 1) * 2 + 1];
-          ch.viewportData.add(lastX, lastY);
-        }
-      } catch (_) {
-        // FFI call failed (e.g. DLL unloaded, Rust panic) — clear this channel and continue
-        ch.viewportData.clear();
-        ch.envelopeData.clear();
-      }
-
-    }
-    _viewportRefreshCount++;
-  }
-
-  // ── AnalogSegment envelope read ──
-  // Called when _analogEnvelopeEnabled is true (runtime toggle).
-  // Reads per-channel envelope from AnalogSegment via C-ABI (f32 min/max pairs).
-  // When samplesPerPixel < envelopeThreshold, uses trace mode (raw f32 values).
-  bool _refreshViewportFromAnalog() {
-    // Wrap entire method in try to prevent calloc leaks on FFI crash (P2-3)
-    try {
-      return _refreshViewportFromAnalogImpl();
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /// Query AnalogSegment per-channel for viewport rendering.
-  /// Iterates _channels directly (not RENDER_ENVELOPE, which only pipeline sets).
-  bool _refreshViewportFromAnalogImpl() {
-    final bridge = FfiBridge.instance;
-    final dk = _activeDevice.deviceKey;
-    // Each analogGetEnvelope call returns at most this many envelope samples.
-    // Must be large enough to hold the entire viewport at the *finest* pyramid level.
-    // Finest level = Level 0 (1 envelope per 16 raw samples).
-    // So maxSamples >= ceil(viewportSamples / 16) + safety_margin.
-    //   viewportSamples = _xMax - _xMin (abs values, e.g. 250000)
-    //   level0_envelopes = ceil(250000 / 16) = 15625
-    // Add 50% headroom for multi-section拼接: 15625 * 1.5 = 23437 → round to 24000.
-    // Cap at 65536 (CEnvelopeSample array reasonable limit, ~2MB).
-    final viewportSamples = (_xMax - _xMin).abs().round();
-    final level0Envelopes = (viewportSamples / 16).ceil() + 2000; // +2000 headroom for partial sections
-    final maxSamples = level0Envelopes.clamp(4000, 65536);
-    final sampleBuf = calloc<CEnvelopeSample>(maxSamples);
-    // Trace mode buffer: raw f32 values (sized dynamically below)
-    Pointer<Float>? traceBuf;
-
-    bool anyData = false;
-    for (int ci = 0; ci < _channels.length; ci++) {
-      final ch = _channels[ci];
-      if (!ch.visible) {
-        ch.viewportData.clear();
-        ch.envelopeData.clear();
-        continue;
-      }
-
-      final sampleCount = bridge.analogSampleCount(dk, ci);
-      if (sampleCount == 0) {
-        ch.viewportData.clear();
-        ch.envelopeData.clear();
-        continue;
-      }
-
-      // Calculate samplesPerPixel: viewport sample span / screen width.
-      final samplesPerPixelDouble = (_xMax - _xMin).abs() / _screenWidth;
-
-      // Map relative viewport coords to absolute sample indices.
-      // _xMin/_xMax are relative to newest sample (newest=0, older<0).
-      // AnalogSegment stores samples by absolute index [0, sampleCount).
-      //   newestSample = sampleCount - 1   (0-indexed)
-      //   absIdx = newestSample + _xRel  →  startSample = newestSample + _xMin
-      final newestSample = sampleCount - 1;
-      final startSample = (newestSample + _xMin).round().clamp(0, sampleCount - 1);
-      final clampedEnd = (newestSample + _xMax).round().clamp(startSample + 1, sampleCount);
-      // Base offset: convert absolute index back to painter-relative coordinate
-      final double xBase = -newestSample.toDouble();
 
       ch.viewportData.clear();
       ch.envelopeData.clear();
 
-      // FIX: When viewport range exceeds maxSamples, force envelope mode to avoid truncation.
-      // Trace mode returns at most maxSamples (8000) points; large viewports would show partial data.
-      final viewportSampleCount = clampedEnd - startSample;
-      final useTrace = (_renderMode == _RenderMode.trace ||
-          (_renderMode == _RenderMode.auto && samplesPerPixelDouble < envelopeThreshold))
-          && viewportSampleCount <= maxSamples; // Force envelope if too many samples
-      // ── Trace mode: raw f32 values ──
-      if (useTrace) {
-        traceBuf ??= calloc<Float>(maxSamples);
-        final traceCount = bridge.analogGetTrace(
-          dk, ci, startSample, clampedEnd, traceBuf, maxSamples,
-        );
-        if (traceCount > 0) {
-          final relStart = startSample + xBase.toInt();
-          final values = List<double>.generate(traceCount, (i) => traceBuf![i].toDouble());
-          ch.viewportData = _DataBuf.fromTrace(values, relStart);
-          anyData = true;
-        }
-        continue;
-      }
+      for (int x = 0; x < w; x++) {
+        final start = x * step;
+        final end = (start + step).clamp(0, total);
+        if (start >= total) break;
 
-      // ── Envelope mode: min/max pairs from AnalogSegment pyramid ──
-      // Loop to fetch multiple sections if needed to cover the full viewport range.
-      // This handles the case where a single envelope section doesn't cover [startSample, clampedEnd]
-      // due to pyramid level boundaries or incomplete data cascading.
-      int currentStart = startSample;
-      int loopSafety = 0;
-      const maxLoops = 10; // Prevent infinite loops
-      
-      while (currentStart < clampedEnd && loopSafety < maxLoops) {
-        loopSafety++;
-        
-        final sectionStartPtr = calloc<Uint64>();
-        final sectionScalePtr = calloc<Uint32>();
-        final remainingCapacity = maxSamples - ch.viewportData.length;
-        if (remainingCapacity <= 0) break;
-        
-        final count = bridge.analogGetEnvelope(
-          dk, ci, currentStart, clampedEnd, samplesPerPixelDouble, sampleBuf, remainingCapacity,
-          sectionStartPtr, sectionScalePtr,
-        );
-        final sectionStart = sectionStartPtr.value;
-        final sectionScale = sectionScalePtr.value;
-        calloc.free(sectionStartPtr);
-        calloc.free(sectionScalePtr);
-        
-        if (count == 0) break;
-        
-        // Add samples from this section
-        for (int i = 0; i < count; i++) {
-          final sample = sampleBuf[i];
-          final yMin = sample.min.toDouble();
-          final yMax = sample.max.toDouble();
-          final yAvg = (yMin + yMax) * 0.5;
-          final xRel = (sectionStart + (i * sectionScale)).toDouble() + xBase;
-          
-          ch.viewportData.add(xRel, yAvg);
-          ch.envelopeData.add(xRel, yMin);
-          ch.envelopeData.add(xRel, yMax);
+        double curMin = ch.data[start].y;
+        double curMax = ch.data[start].y;
+        for (int i2 = start + 1; i2 < end; i2++) {
+          final v = ch.data[i2].y;
+          if (v < curMin) curMin = v;
+          if (v > curMax) curMax = v;
         }
-        anyData = true;
-        
-        // Calculate where this section ends and advance
-        final sectionEndAbs = sectionStart + (count - 1) * sectionScale;
-        currentStart = (sectionEndAbs + sectionScale).toInt(); // Advance past this section
-        
-        // If we've covered the requested range, we're done
-        if (sectionEndAbs >= clampedEnd - 1) break;
+
+        final xRel = ch.data[end - 1].x - newestAbsX;
+        ch.viewportData.add(xRel, (curMin + curMax) * 0.5);
+        ch.envelopeData.add(xRel, curMin);
+        ch.envelopeData.add(xRel, curMax);
       }
     }
-
-    calloc.free(sampleBuf);
-    if (traceBuf != null) calloc.free(traceBuf);
-
-    if (anyData) {
-      _viewportRefreshCount++;
-    }
-    return anyData;
+    _viewportRefreshCount++;
   }
+
 
   /// 分离的数据轮询（策略 B: 减少 FRB 调用）
   /// 后台快速轮询，不触发 UI 更新

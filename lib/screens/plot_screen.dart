@@ -289,6 +289,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   int get _viewportRefreshCount => _activeDevice.viewportRefreshCount;
   set _viewportRefreshCount(int v) => _activeDevice.viewportRefreshCount = v;
 
+  // DIAG: performance counters (written to vcr_perf.log)
+  int _rvdUs = 0;
+
   // DIAG: Diagnostic: set true to enable verbose per-frame logging (DISABLE for production)
   static const bool _verbose = false;
   int _frameCount = 0;
@@ -635,7 +638,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   void _debugLog(String msg, {int level = 2}) {
     // Check if logging is enabled and level is sufficient
     if (!_flutterFileLogging || _flutterLogLevel == 0 || level < _flutterLogLevel) return;
-    
+
     try {
       final file = File(_flutterLogPath);
       final levelStr = ['OFF', 'TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR'][level.clamp(0, 5)];
@@ -643,6 +646,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     } catch (_) {
       // Ignore file write errors
     }
+  }
+
+  void _forceLog(String msg) {
+    try {
+      File('vcr_perf.log').writeAsStringSync('${DateTime.now()} $msg\n', mode: FileMode.append);
+    } catch (_) {}
   }
 
   /// Refresh viewportData for all channels using current _xMin/_xMax.
@@ -674,6 +683,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   void _refreshViewportData() {
+    final sw = Stopwatch()..start();
     /// Min-Max pixel decimation: sample only data within [_xMin, _xMax].
     /// Zoomed in -> per-point precision; zoomed out -> pixel-column min/max.
     if (_xMin == _xMax || _screenWidth <= 0) return;
@@ -682,63 +692,77 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
     for (int ci = 0; ci < _channels.length; ci++) {
       final ch = _channels[ci];
-      if (!ch.visible || ch.data.isEmpty) {
-        ch.viewportData.clear();
-        ch.envelopeData.clear();
-        continue;
-      }
-
-      final total = ch.data.length;
-      final newestAbsX = ch.data.last.x;
-      // When data is sparse (< screen width), clamp _xMin so we don't search an empty range.
-      final adjustedXMin = total < w ? (-total).toDouble().clamp(_xMin, 0.0) : _xMin;
-      final viewMinAbs = newestAbsX + adjustedXMin;
-      final viewMaxAbs = newestAbsX + _xMax;
-
-      // Binary search first index with x >= viewMinAbs
-      int lo = 0, hi = total;
-      while (lo < hi) {
-        final mid = (lo + hi) ~/ 2;
-        if (ch.data[mid].x < viewMinAbs) lo = mid + 1; else hi = mid;
-      }
-      final firstIdx = lo;
-      if (firstIdx >= total) { ch.viewportData.clear(); ch.envelopeData.clear(); continue; }
-
-      // Binary search first index with x > viewMaxAbs; lastIdx = lo - 1
-      lo = 0; hi = total;
-      while (lo < hi) {
-        final mid = (lo + hi) ~/ 2;
-        if (ch.data[mid].x <= viewMaxAbs) lo = mid + 1; else hi = mid;
-      }
-      final lastIdx = lo - 1;
-      if (lastIdx < firstIdx) { ch.viewportData.clear(); ch.envelopeData.clear(); continue; }
-
-      final visibleCount = lastIdx - firstIdx + 1;
-      final step = (visibleCount / w).ceil().clamp(1, visibleCount);
-
-      ch.viewportData.clear();
-      ch.envelopeData.clear();
-
-      for (int x = 0; x < w; x++) {
-        final start = firstIdx + x * step;
-        final end = (start + step).clamp(start, lastIdx + 1);
-        if (start > lastIdx) break;
-
-        double curMin = ch.data[start].y;
-        double curMax = ch.data[start].y;
-        for (int i2 = start + 1; i2 < end; i2++) {
-          final v = ch.data[i2].y;
-          if (v < curMin) curMin = v;
-          if (v > curMax) curMax = v;
+      try {
+        if (!ch.visible || ch.data.isEmpty) {
+          ch.viewportData.clear();
+          ch.envelopeData.clear();
+          continue;
         }
 
-        final xRel = ch.data[end - 1].x - newestAbsX;
-        ch.viewportData.add(xRel, (curMin + curMax) * 0.5);
-        ch.envelopeData.add(xRel, curMin);
-        ch.envelopeData.add(xRel, curMax);
+        final total = ch.data.length;
+        final newestAbsX = ch.data.last.x;
+        // When data is sparse (< screen width), clamp _xMin so we don't search an empty range.
+        final adjustedXMin = total < w ? (-total).toDouble().clamp(_xMin, 0.0) : _xMin;
+        final viewMinAbs = newestAbsX + adjustedXMin;
+        final viewMaxAbs = newestAbsX + _xMax;
+
+        // Binary search first index with x >= viewMinAbs
+        int lo = 0, hi = total;
+        while (lo < hi) {
+          final mid = (lo + hi) ~/ 2;
+          if (ch.data[mid].x < viewMinAbs) lo = mid + 1; else hi = mid;
+        }
+        final firstIdx = lo;
+        if (firstIdx >= total) { ch.viewportData.clear(); ch.envelopeData.clear(); continue; }
+
+        // Binary search first index with x > viewMaxAbs; lastIdx = lo - 1
+        lo = 0; hi = total;
+        while (lo < hi) {
+          final mid = (lo + hi) ~/ 2;
+          if (ch.data[mid].x <= viewMaxAbs) lo = mid + 1; else hi = mid;
+        }
+        final lastIdx = lo - 1;
+        if (lastIdx < firstIdx) { ch.viewportData.clear(); ch.envelopeData.clear(); continue; }
+
+        final visibleCount = lastIdx - firstIdx + 1;
+        final step = (visibleCount / w).ceil().clamp(1, visibleCount);
+
+        ch.viewportData.clear();
+        ch.envelopeData.clear();
+
+        for (int x = 0; x < w; x++) {
+          final start = firstIdx + x * step;
+          final end = (start + step).clamp(start, lastIdx + 1);
+          if (start > lastIdx) break;
+
+          double curMin = ch.data[start].y;
+          double curMax = ch.data[start].y;
+          for (int i2 = start + 1; i2 < end; i2++) {
+            final v = ch.data[i2].y;
+            if (v < curMin) curMin = v;
+            if (v > curMax) curMax = v;
+          }
+
+          final xRel = ch.data[end - 1].x - newestAbsX;
+          ch.viewportData.add(xRel, (curMin + curMax) * 0.5);
+          ch.envelopeData.add(xRel, curMin);
+          ch.envelopeData.add(xRel, curMax);
+        }
+      } catch (e, st) {
+        // Isolate per-channel failures so one bad channel doesn't freeze the others.
+        _forceLog('[RVD-ERR] ch=$ci name=${ch.channelName} err=$e');
+        try { File('vcr_rvd_err.txt').writeAsStringSync('ch=$ci ${ch.channelName}\n$e\n$st\n', mode: FileMode.append); } catch (_) {}
       }
     }
     _viewportRefreshCount++;
+    _rvdUs = sw.elapsedMicroseconds;
+    _sampleIndex++;
+    if (_sampleIndex % 100 == 0) {
+      _forceLog('[PERF] rvd=${_rvdUs}us paint=${_paintUs}us cacheHit=$_cacheHitFrames miss=$_cacheMissFrames staticRebuild=$_staticRebuildFrames pts=$_totalPoints xMin=${_xMin.toStringAsFixed(1)}');
+      _cacheHitFrames = 0;
+      _cacheMissFrames = 0;
+      _staticRebuildFrames = 0;
+    }
   }
 
 

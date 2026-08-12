@@ -1,6 +1,12 @@
 ﻿// Plot painters — part of plot_screen.dart
 part of 'plot_screen.dart';
 
+// Performance counters bridged from _PlotScreenState
+int _paintUs = 0;
+int _cacheHitFrames = 0;
+int _cacheMissFrames = 0;
+int _staticRebuildFrames = 0;
+
 class _MinimapPainter extends CustomPainter {
   final List<PlotChannel> channels;
   final double dataXMin, dataXMax;
@@ -275,6 +281,7 @@ class _PlotPainter extends CustomPainter {
     // ── GPU-accelerated rendering path ──
     // If we have a GPU-rendered waveform texture, use it directly
     if (gpuWaveformImage != null) {
+      final paintSw = Stopwatch()..start();
       // Draw background first (matches _paintInternal)
       canvas.drawRect(Rect.fromLTWH(0, 0, w, h), _bgPaint);
       
@@ -312,11 +319,15 @@ class _PlotPainter extends CustomPainter {
           _drawCrosshair(canvas, mx, my, plotLeft, plotTop, plotW, plotH, w, h);
         }
       }
+      _paintUs = paintSw.elapsedMicroseconds;
+      _cacheHitFrames = 0;
+      _cacheMissFrames = 1;
       return; // Skip CPU rendering
     }
 
     // ── Anti-aliasing via supersampling ──
     if (aaScale > 1.0) {
+      final paintSw = Stopwatch()..start();
       final recorder = ui.PictureRecorder();
       final ssCanvas = Canvas(recorder);
       // Scale up: draw logical coordinates at aaScale× resolution.
@@ -341,10 +352,14 @@ class _PlotPainter extends CustomPainter {
         _paintInternal(canvas, w, h, 1.0);
       }
       picture.dispose();
+      _paintUs = paintSw.elapsedMicroseconds;
+      _cacheHitFrames = 0;
+      _cacheMissFrames = 1;
     } else {
       // FIXED(P1)-A 优化：PictureRecorder 缓存
       // Content-based hash: tracks actual viewport data shape, not frame counter.
       // The counter changes every frame in real-time mode → cache was always invalid.
+      final paintSw = Stopwatch()..start();
       int contentHash = Object.hash(xMin, xMax, yMin, yMax);
       for (final ch in channels) {
         if (ch.visible) {
@@ -370,6 +385,9 @@ class _PlotPainter extends CustomPainter {
         _cacheVersion = contentHash;
         canvas.drawPicture(_cachedPicture!);
       }
+      _paintUs = paintSw.elapsedMicroseconds;
+      if (cacheValid) _cacheHitFrames++;
+      else _cacheMissFrames++;
     }
 
     // ── Crosshair overlay (drawn AFTER cached/AA picture — never cached) ──
@@ -391,11 +409,11 @@ class _PlotPainter extends CustomPainter {
 
     if (plotW <= 0 || plotH <= 0) return;
 
-    // P2-2: Static layer cache — rebuild only on layout/theme/axis-range change
-    // Hash includes: layout geometry + theme + visible Y-axis channels state + axis ranges
-    // P3-3: Added shareYAxis to hash (toggling shareYAxis changes grid rendering)
-    // Memory-leak fix: round float values to 4 significant digits so that tiny
-    // auto-scale fluctuations (<0.01% of range) don't invalidate the cache every frame.
+    // P2-2: Static layer cache — rebuild only on layout/theme/Y-axis config change.
+    // NOTE: xMin/xMax/yMin/yMax are intentionally EXCLUDED. In auto-scale mode they
+    // change every frame and would invalidate this cache continuously, causing the
+    // jitter the user sees. Grid/labels that depend on ranges are redrawn in the
+    // dynamic layer below.
     double hashRound(double v) {
       if (v == 0.0) return 0.0;
       final abs = v.abs();
@@ -405,7 +423,6 @@ class _PlotPainter extends CustomPainter {
     int staticHash = Object.hash(
       isDarkTheme,
       plotLeft, plotTop, plotW, plotH,
-      hashRound(xMin), hashRound(xMax), hashRound(yMin), hashRound(yMax),
       deltaTime, globalDecimals,
       shareYAxis,
       yAxisChannels.length,
@@ -421,6 +438,7 @@ class _PlotPainter extends CustomPainter {
     }
 
     if (_staticPicture == null || _staticVersion != staticHash) {
+      _staticRebuildFrames++;
       // DIAG: Memory leak fix: dispose old Picture before creating new one.
       // Skia Picture wraps native GPU resources; without explicit dispose(),
       // the old picture's resources leak until Dart GC runs (which may take
@@ -435,7 +453,7 @@ class _PlotPainter extends CustomPainter {
       _staticVersion = staticHash;
     }
 
-    // Draw cached static layer (background, grid, axes, labels, border)
+    // Draw cached static layer (background + border only)
     canvas.drawPicture(_staticPicture!);
 
     // ── FPS / point count overlay (dynamic, changes every frame) ──
@@ -445,6 +463,9 @@ class _PlotPainter extends CustomPainter {
       textDirection: TextDirection.ltr,
     )..layout();
     infoTp.paint(canvas, Offset(plotLeft + plotW - infoTp.width - 4, plotTop + 4));
+
+    // ── Grid, axes, labels (depend on ranges → dynamic, not static-cached) ──
+    _drawDynamicGrid(canvas, w, h, scale, plotLeft, plotTop, plotW, plotH, plotRight, plotBottom);
 
     // ── Waveform clipping (dynamic layer) ──
     canvas.save();
@@ -543,8 +564,8 @@ class _PlotPainter extends CustomPainter {
     }
   }
 
-  /// Draws the static (non-waveform) layer: background, grid, axes, labels, border, info.
-  /// Cached via _staticPicture / _staticVersion since these only change on zoom/pan/theme.
+  /// Draws the static layer: background, plot-area background, border.
+  /// Cached via _staticPicture / _staticVersion since these only change on layout/theme/Y-axis config.
   void _drawStaticLayer(Canvas canvas, double w, double h, double scale,
       double plotLeft, double plotTop, double plotW, double plotH,
       double plotRight, double plotBottom) {
@@ -556,6 +577,16 @@ class _PlotPainter extends CustomPainter {
     final plotBg = isDarkTheme ? _dkPlotBg : _ltPlotBg;
     canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), plotBg);
 
+    // ── Border ──
+    final borderPaint = isDarkTheme ? _dkBorder : _ltBorder;
+    canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), borderPaint);
+  }
+
+  /// Draws the dynamic grid, axes, zero-line and labels that depend on the
+  /// current viewport ranges. Called inside the waveform clip region.
+  void _drawDynamicGrid(Canvas canvas, double w, double h, double scale,
+      double plotLeft, double plotTop, double plotW, double plotH,
+      double plotRight, double plotBottom) {
     // ── Grid lines (dashed) ──
     final xTicks = _niceTicks(xMin, xMax, 10);
     for (final tick in xTicks) {
@@ -657,11 +688,6 @@ class _PlotPainter extends CustomPainter {
         }
       }
     }
-
-    // ── Border ──
-    final borderPaint = isDarkTheme ? _dkBorder : _ltBorder;
-    canvas.drawRect(Rect.fromLTWH(plotLeft, plotTop, plotW, plotH), borderPaint);
-
   }
   void _drawChannel(Canvas canvas, PlotChannel ch, double ox, double oy, double w, double h,
       double chYMin, double chYMax, double scale,

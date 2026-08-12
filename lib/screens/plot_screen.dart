@@ -328,10 +328,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   // ── Animation ──
   late Ticker _ticker;
-  bool _tickBusy = false; // P0-2: frame budget guard — skip tick if previous frame still rendering
-  int _lastVpGen = -1; // Idle skip: track last viewport generation to skip expensive refresh when idle
-  double _lastIdleXMin = 0; // Idle skip: prevent stale viewport rendering after scrollbar drag
-  double _lastIdleXMax = 0; // Idle skip: prevent stale viewport rendering after scrollbar drag
+  bool _tickBusy = false;
+  int _dataVersion = 0;        // increment on every data update / viewport refresh
+  int _lastRenderVersion = -1; // version consumed by last paint
+  double _lastIdleXMin = 0;
+  double _lastIdleXMax = 0;
 
   // ── Demo ──
   double _demoPhase = 0;  // Demo phase for waveform generation (time in seconds)
@@ -564,61 +565,64 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     
     final dt = 0.008 / _demoSubSamples; // sub-sample interval
     _demoTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {  // ~20fps timer
-      if (!mounted || !_isPlaying) return;
+      try {
+        if (!mounted || !_isPlaying) return;
       
-      final rng = Random();
-      
-      // Generate sub-samples per tick for smooth curves
-      // Performance: batch-push to pyramid via single FFI call per channel (not per-point)
-      final batchPerChannel = List.generate(_channels.length, (_) => <(double, double)>[]);
-      for (int s = 0; s < _demoSubSamples; s++) {
-        _demoPhase += dt;
-        final t = _demoPhase;
-        for (int i = 0; i < _channels.length; i++) {
-          final noise = 0.05 * (rng.nextDouble() - 0.5);
-          final val = _demoEval(i, t, noise);
-          // Append at end: data[0]=oldest, data[last]=newest
-          // Store per-channel sample index (continuous); displayed X = data.x(i) - data.lastX (offset from newest)
-          final x = _demoSampleIndices[i].toDouble();
-          _channels[i].data.add(_DataPoint(x, val));
-          _channels[i].currentValue = val;
-          batchPerChannel[i].add((x, val));
-          _demoSampleIndices[i]++;
-          // NOTE: analogPushSample is called inside pushChannelBatch, no need to call here.
-        }
-      }
-      // NOTE: Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
-      final bridge = FfiBridge.instance;
-      final dk = _activeDevice.deviceKey;
-      for (int i = 0; i < _channels.length; i++) {
-        if (batchPerChannel[i].isNotEmpty) {
-          bridge.pushChannelBatchDart(dk, i, batchPerChannel[i]);
-        }
-      }
-      // FixedCapacityRing auto-overwrites oldest when full — no manual trim needed.
-      // Demo mode: incremental count (sum of all sub-samples across all channels)
-      _totalPoints += _channels.length * _demoSubSamples;
-      // 每100帧输出一次调试信息
-      if (_sampleIndex % 100 == 0) {
-        _debugLog('[TICK] sampleIndex=$_sampleIndex, totalPoints=$_totalPoints, first.ch.data.length=${_channels.isNotEmpty ? _channels.first.data.length : 0}');
-      }
-
-      // DIAG: Fix: _refreshViewportData() MUST run BEFORE _fitYAxis() to ensure
-      // Y-axis uses the same data that will be rendered (not stale data from previous frame).
-      // This eliminates a one-frame Y-axis↔data mismatch glitch.
-      _refreshViewportData(); // Step 1: populate ch.viewportData with fresh data
+        final rng = Random();
         
+        // Generate sub-samples per tick for smooth curves
+        // Performance: batch-push to pyramid via single FFI call per channel (not per-point)
+        final batchPerChannel = List.generate(_channels.length, (_) => <(double, double)>[]);
+        for (int s = 0; s < _demoSubSamples; s++) {
+          _demoPhase += dt;
+          final t = _demoPhase;
+          for (int i = 0; i < _channels.length; i++) {
+            final noise = 0.05 * (rng.nextDouble() - 0.5);
+            final val = _demoEval(i, t, noise);
+            // Append at end: data[0]=oldest, data[last]=newest
+            // Store per-channel sample index (continuous); displayed X = data.x(i) - data.lastX (offset from newest)
+            final x = _demoSampleIndices[i].toDouble();
+            _channels[i].data.add(_DataPoint(x, val));
+            _channels[i].currentValue = val;
+            batchPerChannel[i].add((x, val));
+            _demoSampleIndices[i]++;
+            // NOTE: analogPushSample is called inside pushChannelBatch, no need to call here.
+          }
+        }
+        // NOTE: Batch push all sub-samples at once: 1 FFI call per channel instead of N×sub-samples
+        final bridge = FfiBridge.instance;
+        final dk = _activeDevice.deviceKey;
+        for (int i = 0; i < _channels.length; i++) {
+          if (batchPerChannel[i].isNotEmpty) {
+            bridge.pushChannelBatchDart(dk, i, batchPerChannel[i]);
+          }
+        }
+        // FixedCapacityRing auto-overwrites oldest when full — no manual trim needed.
+        // Demo mode: incremental count (sum of all sub-samples across all channels)
+        _totalPoints += _channels.length * _demoSubSamples;
+        // 每100帧输出一次调试信息
+        if (_sampleIndex % 100 == 0) {
+          _debugLog('[TICK] sampleIndex=$_sampleIndex, totalPoints=$_totalPoints, first.ch.data.length=${_channels.isNotEmpty ? _channels.first.data.length : 0}');
+        }
+
+        // Step 1: determine viewport range BEFORE sampling so we only decimate visible data.
         if (_scrollMode) {
-          // Auto-track: always show the latest data at the right edge (x=0)
           _xMax = 0.0;
           _xMin = -_effectiveScrollWindowWidth;
           _scrollMinTime = _xMin;
-          if (_autoScaleY) _fitYAxis(); // Step 2: use fresh viewportData
-        } else {
-          if (_autoScaleX) _fitXAxis(); // Step 2: use fresh data
-          if (_autoScaleY) _fitYAxis(); // Step 2: use fresh viewportData
+        } else if (_autoScaleX) {
+          _fitXAxis();
         }
+        // Step 2: sample only the visible range
+        _refreshViewportData();
+        // Step 3: fit Y-axis using freshly populated viewportData
+        if (_autoScaleY) _fitYAxis();
+        _dataVersion++;
+        _lastRenderVersion = _dataVersion;
         setState(() {});
+      } catch (e, st) {
+        try { File('vcr_err.txt').writeAsStringSync('DemoTimer err: $e\\n$st\\n', mode: FileMode.append); } catch (_) {}
+      }
     });
   }
 
@@ -653,6 +657,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   /// (= ch.data.last.x). The Rust side uses:
   /// - TimeBucketPyramid path: t_min/t_max directly (pyramid stores abs coords)
   /// - AnalogSegment path: converts to relative via `t_min - anchor` → sample index
+  // ignore: unused_element
   void _notifyPipelineViewport() {
     if (_xMin == _xMax || _screenWidth <= 0) return;
     final maxPts = _screenWidth.round().clamp(500, 4000);
@@ -669,10 +674,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   }
 
   void _refreshViewportData() {
-    /// Min-Max pixel decimation: each screen pixel column gets the min+max
-    /// of all data points in that column. Preserves peak detail (no spike loss)
-    /// while reducing e.g. 250K points 鈫?~4000 drawing primitives per channel.
-    /// Runs entirely in Dart 鈥?zero FFI, zero pipeline, zero analog segment.
+    /// Min-Max pixel decimation: sample only data within [_xMin, _xMax].
+    /// Zoomed in -> per-point precision; zoomed out -> pixel-column min/max.
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
     final w = _screenWidth.round().clamp(1, 4096);
@@ -686,16 +689,40 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       }
 
       final total = ch.data.length;
-      final step = (total / w).ceil().clamp(1, total);
       final newestAbsX = ch.data.last.x;
+      // When data is sparse (< screen width), clamp _xMin so we don't search an empty range.
+      final adjustedXMin = total < w ? (-total).toDouble().clamp(_xMin, 0.0) : _xMin;
+      final viewMinAbs = newestAbsX + adjustedXMin;
+      final viewMaxAbs = newestAbsX + _xMax;
+
+      // Binary search first index with x >= viewMinAbs
+      int lo = 0, hi = total;
+      while (lo < hi) {
+        final mid = (lo + hi) ~/ 2;
+        if (ch.data[mid].x < viewMinAbs) lo = mid + 1; else hi = mid;
+      }
+      final firstIdx = lo;
+      if (firstIdx >= total) { ch.viewportData.clear(); ch.envelopeData.clear(); continue; }
+
+      // Binary search first index with x > viewMaxAbs; lastIdx = lo - 1
+      lo = 0; hi = total;
+      while (lo < hi) {
+        final mid = (lo + hi) ~/ 2;
+        if (ch.data[mid].x <= viewMaxAbs) lo = mid + 1; else hi = mid;
+      }
+      final lastIdx = lo - 1;
+      if (lastIdx < firstIdx) { ch.viewportData.clear(); ch.envelopeData.clear(); continue; }
+
+      final visibleCount = lastIdx - firstIdx + 1;
+      final step = (visibleCount / w).ceil().clamp(1, visibleCount);
 
       ch.viewportData.clear();
       ch.envelopeData.clear();
 
       for (int x = 0; x < w; x++) {
-        final start = x * step;
-        final end = (start + step).clamp(0, total);
-        if (start >= total) break;
+        final start = firstIdx + x * step;
+        final end = (start + step).clamp(start, lastIdx + 1);
+        if (start > lastIdx) break;
 
         double curMin = ch.data[start].y;
         double curMax = ch.data[start].y;
@@ -912,7 +939,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       // BUGFIX: Re-create AnalogSegments after reset. Without this the new
       // channel list has no FFI_CH_ANALOG entries → analogPushSample drops all data silently.
       if (_analogEnvelopeEnabled) {
-        _ensureAnalogSegments();
+        // ignore: avoid_catches_without_on_clauses
+        // ignore: avoid_catches_without_on_clauses
+        try { _ensureAnalogSegments(); } catch (_) {}
       }
 
       // Reset viewport: auto-scale as data accumulates from scratch.
@@ -1144,33 +1173,21 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
 
   void _onTick(Duration elapsed) {
-    // P0-2: Frame budget guard — skip if prev tick still rendering (prevents cascading lag)
+    // Frame budget guard — skip if prev tick still rendering
     if (_tickBusy) return;
     if (!mounted || !_isPlaying) return;
     _tickBusy = true;
     try {
-      // Skip expensive refresh if viewport unchanged AND no new data arrived
-      bool idleSkip = false;
-      try {
-        final vpGen = FfiBridge.instance.envelopeGetGeneration();
-        final hasNewData = FfiBridge.instance.checkDataReady();
-        // Also skip idle if _xMin/_xMax changed (scrollbar drag / zoom without refresh).
-        // Otherwise shouldRepaint renders stale viewportData at new coordinates →
-        // data points appear outside the slider's visual bounds.
-        final vpChanged = _xMin != _lastIdleXMin || _xMax != _lastIdleXMax;
-        if (!hasNewData && vpGen == _lastVpGen && _lastVpGen >= 0 && !vpChanged) {
-          _lastVpGen = vpGen;
-          idleSkip = true;
-        } else {
-          _lastVpGen = vpGen;
-          _lastIdleXMin = _xMin;
-          _lastIdleXMax = _xMax;
-        }
-      } catch (_) {
-        // checkDataReady or envelopeGetGeneration not available — fall through to normal refresh
+      final vpChanged = _xMin != _lastIdleXMin || _xMax != _lastIdleXMax;
+      // Demo: Timer drives data+rendering; Ticker only updates FPS/cursor overlays
+      // Real: skip refresh if viewport unchanged AND no new data arrived
+      bool idleSkip = _useRealData && !vpChanged && _dataVersion == _lastRenderVersion && _lastRenderVersion >= 0;
+      if (!vpChanged) {
+        _lastRenderVersion = _dataVersion;
       }
+      _lastIdleXMin = _xMin;
+      _lastIdleXMax = _xMax;
       if (idleSkip) {
-        // Only tick FPS counter, skip data refresh
         _fpsFrameCount++;
         final now = DateTime.now();
         if (now.difference(_lastFpsTime).inMilliseconds >= 1000) {
@@ -1178,7 +1195,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _fpsFrameCount = 0;
           _lastFpsTime = now;
         }
-        setState(() {}); // Still need FPS display update
+        setState(() {});
         return;
       }
       _fpsFrameCount++;
@@ -1188,28 +1205,17 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _fpsFrameCount = 0;
         _lastFpsTime = now;
       }
-      // P0-2: Ticker-driven vsync rendering — lightweight pyramid query + repaint
-      // Timer still handles data generation/fetching; Ticker provides smooth 60fps rendering
       if (_useRealData) {
-        if (_pipelineEnabled) _notifyPipelineViewport(); // Feed viewport BEFORE refresh → pipeline computes async
-        // _fitXAxis BEFORE _refreshViewportData: _fitXAxis reads ch.data (not viewport),
-        // so it can safely establish the correct viewport first. Otherwise, after
-        // _clearData(), the initial _xMin=-50 forces _refreshViewportData to sample
-        // only the last 50 data points out of _xMin, producing a right-edge blip.
         if (!_scrollMode && _autoScaleX) _fitXAxis();
-        _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
+        _refreshViewportData();
         if (_autoScaleY) _fitYAxis();
+        _dataVersion++;
+        _lastRenderVersion = _dataVersion;
         setState(() {});
       } else {
-        if (_pipelineEnabled) _notifyPipelineViewport(); // Feed viewport BEFORE refresh
-        if (!_scrollMode && _autoScaleX) _fitXAxis();
-        _refreshViewportData(); // Reads envelope (from prev frame) or falls back to pyramid query
-        if (_scrollMode) {
-          _xMax = 0.0;
-          _xMin = -_effectiveScrollWindowWidth;
-          _scrollMinTime = _xMin;
-        }
-        if (_autoScaleY) _fitYAxis();
+        // Demo rendering is handled by _demoTimer
+        _dataVersion++;
+        _lastRenderVersion = _dataVersion;
         setState(() {});
       }
     } finally {

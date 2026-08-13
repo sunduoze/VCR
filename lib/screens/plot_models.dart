@@ -84,8 +84,8 @@ const double envelopeThreshold = 2.0;
 /// O(1) push, auto-overwrites oldest when full.
 /// Memory stable: never grows beyond capacity.
 class FixedCapacityRing {
-  final int _capacity;
-  final List<_DataPoint> _buf;
+  int _capacity;
+  List<_DataPoint> _buf;
   int _head = 0; // next write position
   int _count = 0; // current valid count
 
@@ -119,6 +119,23 @@ class FixedCapacityRing {
     } else {
       for (final pt in pts) add(pt);
     }
+  }
+
+  /// Resize the ring buffer to a new capacity while preserving the newest data.
+  /// If [newCapacity] < current length, oldest data is discarded to fit.
+  void resize(int newCapacity) {
+    if (newCapacity == _capacity) return;
+    // Extract newest data to preserve (up to newCapacity points)
+    final keep = newCapacity < _count ? newCapacity : _count;
+    final preserved = List<_DataPoint>.generate(keep, (i) => this[_count - keep + i]);
+    // Rebuild internal buffer
+    _capacity = newCapacity;
+    _buf = List.filled(newCapacity, _DataPoint(0, 0), growable: false);
+    for (int i = 0; i < keep; i++) {
+      _buf[i] = preserved[i];
+    }
+    _head = keep % _capacity;
+    _count = keep;
   }
 
   /// Access by logical index (0=oldest). O(1).
@@ -184,7 +201,7 @@ class PlotChannel {
     this.showYAxis = true,
     this.lineStyle = LineStyle.line,
     this.lineWidth = 1.5,
-    List<_DataPoint>? data,
+    int maxPoints = 250000,
     this.currentValue = 0.0,
     this.yMin = 0,
     this.yMax = 1,
@@ -192,7 +209,7 @@ class PlotChannel {
     this.yMaxManual = 1,
     this.autoScaleY = true,
     this.plotGroupId = 'default',
-  }) : data = FixedCapacityRing(capacity: 250000),
+  }) : data = FixedCapacityRing(capacity: maxPoints),
        viewportData = _DataBuf(),
        envelopeData = _DataBuf();
 

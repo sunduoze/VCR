@@ -469,51 +469,63 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       PlotChannel(
         deviceId: 'demo_ch1', deviceName: deviceName, channelName: 'Voltage',
         color: c(0), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch2', deviceName: deviceName, channelName: 'Current',
         color: c(1), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch3', deviceName: deviceName, channelName: 'Power',
         color: c(2), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch4', deviceName: deviceName, channelName: 'Temp',
         color: c(3), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch5', deviceName: deviceName, channelName: 'Pressure',
         color: c(4), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch6', deviceName: deviceName, channelName: 'Flow',
         color: c(5), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch7', deviceName: deviceName, channelName: 'Torque',
         color: c(6), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch8', deviceName: deviceName, channelName: 'RPM',
         color: c(7), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       // Fourier square wave approximations (5+ terms)
       PlotChannel(
         deviceId: 'demo_ch9', deviceName: deviceName, channelName: 'Square_1Hz',
         color: c(8), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch10', deviceName: deviceName, channelName: 'Square_3Hz',
         color: c(9), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch11', deviceName: deviceName, channelName: 'PWM_2Hz',
         color: c(10), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
       PlotChannel(
         deviceId: 'demo_ch12', deviceName: deviceName, channelName: 'Step_0.5Hz',
         color: c(11), decimals: 3, lineStyle: LineStyle.line, showYAxis: false,
+        maxPoints: _maxPoints,
       ),
     ];
   }
@@ -817,6 +829,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               lineStyle: LineStyle.line,
               showYAxis: false,
               plotGroupId: 'default',
+              maxPoints: _maxPoints,
             ));
             if (_analogEnvelopeEnabled) {
               final newChId = _channels.length - 1;
@@ -1703,6 +1716,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           deviceName: 'Imported',
           channelName: header[col].trim(),
           color: _channelColors[(col - 1) % _channelColors.length],
+          maxPoints: _maxPoints,
         ));
       }
 
@@ -1759,6 +1773,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         channelName: 'Channel ${idx + 1}',
         color: _channelColors[idx % _channelColors.length],
         plotGroupId: _plotGroups.isNotEmpty ? _plotGroups.first.id : 'default',
+        maxPoints: _maxPoints,
       ));
     });
     if (_analogEnvelopeEnabled) {
@@ -1988,6 +2003,13 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         // Reset X range to new [-MaxPoints, 0]
                         _xMin = -_maxPoints.toDouble();
                         _xMax = 0.0;
+                        // Resize all channels' ring buffers to new capacity,
+                        // preserving newest data (oldest discarded if shrinking).
+                        for (final dev in _devices) {
+                          for (final ch in dev.channels) {
+                            ch.data.resize(_maxPoints);
+                          }
+                        }
                       });
                       _saveConfig();
                       // 同步到 Rust 缓冲区

@@ -732,8 +732,8 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
         for (int x = 0; x < w; x++) {
           final start = firstIdx + x * step;
-          final end = (start + step).clamp(start, lastIdx + 1);
           if (start > lastIdx) break;
+          final end = (start + step).clamp(start, lastIdx + 1);
 
           double curMin = ch.data[start].y;
           double curMax = ch.data[start].y;
@@ -847,9 +847,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               try {
                 final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
                 if (latestData.isNotEmpty) {
-                  for (int k = 0; k < latestData.length; k++) {
-                    ch.data.add(_DataPoint(latestData[k].timestampMs, latestData[k].value));
-                  }
+                  final pts = List<_DataPoint>.generate(latestData.length,
+                      (k) => _DataPoint(latestData[k].timestampMs, latestData[k].value));
+                  ch.data.addAll(pts);
                   ch.currentValue = latestData.last.value;
                 }
               } catch (_) {}
@@ -858,7 +858,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               final allPoints = plotGetAllChannels(deviceId: deviceId);
               final pts = allPoints[chName];
               if (pts != null && pts.isNotEmpty) {
-                for (final p in pts) { ch.data.add(_DataPoint(p.timestampMs, p.value)); }
+                final bufPts = List<_DataPoint>.generate(pts.length,
+                    (k) => _DataPoint(pts[k].timestampMs, pts[k].value));
+                ch.data.addAll(bufPts);
                 ch.currentValue = pts.last.value;
               }
             }
@@ -868,9 +870,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               final latestData = plotGetChannelLatestData(deviceId: deviceId, channel: chName);
               if (latestData.isNotEmpty) {
                 // FIXED(P0)-1: Use Rust timestampMs (synced with pipeline::push_sample_batch_with_x)
-                for (int k = 0; k < latestData.length; k++) {
-                  ch.data.add(_DataPoint(latestData[k].timestampMs, latestData[k].value));
-                }
+                final pts = List<_DataPoint>.generate(latestData.length,
+                    (k) => _DataPoint(latestData[k].timestampMs, latestData[k].value));
+                ch.data.addAll(pts);
                 ch.currentValue = latestData.last.value;
                 // FixedCapacityRing auto-overwrites — no manual trim needed.
                 // NOTE: Incremental point counting (avoid O(all_data) fold)
@@ -1100,8 +1102,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     final targetMax = maxVal + padding;
     
     // DIAG: EMA-smooth Y-axis to eliminate 1-frame range oscillation glitches.
-    // Smoothing factor 0.4: ~40% new + 60% old. Smaller = more stable, larger = faster adaptation.
-    const double ySmooth = 0.4;
+    // Smoothing factor 0.8: ~80% new + 20% old. Higher factor tracks the signal
+    // faster while still damping single-frame noise that makes the trace look jittery.
+    const double ySmooth = 0.8;
     if (ch._smoothedYMin == null) {
       ch._smoothedYMin = targetMin;
       ch._smoothedYMax = targetMax;
@@ -1237,10 +1240,19 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _lastRenderVersion = _dataVersion;
         setState(() {});
       } else {
-        // Demo rendering is handled by _demoTimer
-        _dataVersion++;
-        _lastRenderVersion = _dataVersion;
-        setState(() {});
+        // Demo rendering is handled by _demoTimer at ~20fps.
+        // The Ticker only updates the FPS overlay once per second to avoid
+        // redundant 60fps setState() calls that make the waveform look jittery.
+        _fpsFrameCount++;
+        final now = DateTime.now();
+        bool fpsSecondElapsed = false;
+        if (now.difference(_lastFpsTime).inMilliseconds >= 1000) {
+          _fps = _fpsFrameCount;
+          _fpsFrameCount = 0;
+          _lastFpsTime = now;
+          fpsSecondElapsed = true;
+        }
+        if (fpsSecondElapsed) setState(() {});
       }
     } finally {
       _tickBusy = false;

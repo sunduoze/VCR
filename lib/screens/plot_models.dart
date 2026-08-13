@@ -100,6 +100,27 @@ class FixedCapacityRing {
     if (_count < _capacity) _count++;
   }
 
+  /// Batch add with discard semantics.
+  /// If [pts] is larger than the remaining free space, old data is overwritten
+  /// as usual. If [pts] is larger than the whole buffer, only the newest
+  /// [_capacity] points are kept and all older points are discarded in one
+  /// shot — avoids iterating over tens of thousands of samples that would
+  /// otherwise be thrown away anyway.
+  void addAll(List<_DataPoint> pts) {
+    if (pts.isEmpty) return;
+    if (pts.length >= _capacity) {
+      // Discard the oldest samples: keep only the last capacity points.
+      final start = pts.length - _capacity;
+      for (int i = 0; i < _capacity; i++) {
+        _buf[i] = pts[start + i];
+      }
+      _head = 0;
+      _count = _capacity;
+    } else {
+      for (final pt in pts) add(pt);
+    }
+  }
+
   /// Access by logical index (0=oldest). O(1).
   _DataPoint operator [](int index) {
     final start = _head >= _count ? 0 : (_head + _capacity - _count) % _capacity;

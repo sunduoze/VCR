@@ -917,9 +917,28 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     // 消除 _fetchTimer / _realDataTimer 双定时器竞态：
     // - 旧架构：两个独立 100ms Timer，执行顺序不确定
     // - 新架构：单个 50ms Timer，先 fetch → 再 UI update，保证 pyramid 数据就绪
-    // _updateRealDataUI 内部保留 33ms 节流，控制实际 UI 刷新率
     _realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
       _fetchRealData();
+      
+      // 数据获取后，驱动渲染（类似 Demo 模式）
+      // 这样可以确保数据变化和 UI 更新同步，避免 Ticker 空转
+      if (_channels.isNotEmpty && _channels.any((c) => c.data.isNotEmpty)) {
+        // Step 1: 固定滚动窗口（Real 模式始终显示最新 _maxPoints 点）
+        _xMax = 0.0;
+        _xMin = -_maxPoints.toDouble();
+        
+        // Step 2: 采样可见范围
+        _refreshViewportData();
+        
+        // Step 3: Y 轴自适应
+        if (_autoScaleY) _fitYAxis();
+        
+        // Step 4: 标记数据版本，触发渲染
+        _dataVersion++;
+        _lastRenderVersion = _dataVersion;
+        setState(() {});
+      }
+      
       // DIAG: Diagnostic: track viewportData population
       if (_channels.isNotEmpty) {
         final hasData = _channels.where((c) => c.visible && c.data.isNotEmpty);
@@ -1003,6 +1022,26 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
           _realDataTimer?.cancel();
           _activeDevice.realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
             _fetchRealData();
+            // Real 模式：Timer 驱动渲染（类似 Demo 模式）
+            // 数据获取后，固定滚动窗口并采样可见范围
+            if (_channels.isNotEmpty && _channels.any((c) => c.data.isNotEmpty)) {
+              // Step 1: 如果 autoScaleX 开启，固定滚动窗口；否则尊重用户缩放/滑块设置
+              if (_autoScaleX) {
+                _xMax = 0.0;
+                _xMin = -_maxPoints.toDouble();
+              }
+              
+              // Step 2: 采样可见范围
+              _refreshViewportData();
+              
+              // Step 3: Y 轴自适应
+              if (_autoScaleY) _fitYAxis();
+              
+              // Step 4: 标记数据版本，触发渲染
+              _dataVersion++;
+              _lastRenderVersion = _dataVersion;
+              setState(() {});
+            }
           });
         }
       } else {
@@ -1027,35 +1066,27 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     if (_scrollMode) return; // X axis is controlled by scroll window
     final bufMin = -_maxPoints.toDouble();
     
-    // 统一 Demo 和 Real 模式的 X 轴范围计算
-    // 两种模式都使用相同的坐标系统：X 值是相对索引（-N+1 到 0）
+    // Real 模式：如果 autoScaleX 开启，固定滚动窗口显示最新 _maxPoints 个数据点
+    // 如果 autoScaleX 关闭（用户手动缩放/滑块），尊重用户设置的视口范围
+    if (_useRealData && _autoScaleX) {
+      _xMin = bufMin;
+      _xMax = 0.0;
+      _debugLog('[FITX] Real mode: fixed scroll window xMin=$_xMin, xMax=$_xMax');
+      return;
+    }
+    
+    // Demo 模式：使用实际数据点数计算范围（保持原有行为）
     if (_channels.isNotEmpty) {
       final firstCh = _channels.first;
       if (firstCh.data.isNotEmpty) {
-        // 使用实际数据点数计算范围，确保滑块与波形一致
         final numPoints = firstCh.data.length;
         _xMin = (-numPoints).toDouble().clamp(bufMin, 0.0);
         _xMax = 0.0;
-        _debugLog('[FITX] Unified mode: numPoints=$numPoints, bufMin=$bufMin, xMin=$_xMin, _maxPoints=$_maxPoints');
+        _debugLog('[FITX] Demo mode: numPoints=$numPoints, bufMin=$bufMin, xMin=$_xMin, _maxPoints=$_maxPoints');
         return;
       }
-      // ch.data 为空时，检查 AnalogSegment 作为 fallback。
-      // Real 模式下 console 数据直接推送到 AnalogSegment，不经过
-      // PLOT_DATA → ch.data。如果 _clearData() 清空了 ch.data 但
-      // AnalogSegment 仍有样本（console 持续推送），_fitXAxis 必须
-      // 根据 AnalogSegment 的 sampleCount 设置正确的视口范围。
-      if (_analogEnvelopeEnabled) {
-        final asCount = FfiBridge.instance.analogSampleCount(_activeDevice.deviceKey, 0);
-        if (asCount > 0) {
-          _xMin = (-asCount).toDouble().clamp(bufMin, 0.0);
-          _xMax = 0.0;
-          _debugLog('[FITX] AnalogSegment fallback: asCount=$asCount, xMin=$_xMin');
-          return;
-        }
-      }
-      // 数据为空：保持当前 _xMin 不变（切换模式时已设为 -50）。
-      // 不跳转到 bufMin=-250000，否则刚切换后第一个数据点会被压缩到视口的 0.02%，肉眼不可见。
-      _debugLog('[FITX] Unified mode: no data, keeping xMin=$_xMin (bufMin=$bufMin)');
+      // 数据为空：保持当前 _xMin 不变
+      _debugLog('[FITX] Demo mode: no data, keeping xMin=$_xMin (bufMin=$bufMin)');
       return;
     }
     
@@ -1246,12 +1277,16 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         _lastFpsTime = now;
       }
       if (_useRealData) {
-        if (!_scrollMode && _autoScaleX) _fitXAxis();
-        _refreshViewportData();
-        if (_autoScaleY) _fitYAxis();
-        _dataVersion++;
-        _lastRenderVersion = _dataVersion;
-        setState(() {});
+        // Real 模式：Timer 50ms 驱动数据获取 + 渲染
+        // Ticker 只更新 FPS 和光标，不重复执行 _refreshViewportData
+        _fpsFrameCount++;
+        final now = DateTime.now();
+        if (now.difference(_lastFpsTime).inMilliseconds >= 1000) {
+          _fps = _fpsFrameCount;
+          _fpsFrameCount = 0;
+          _lastFpsTime = now;
+          setState(() {});
+        }
       } else {
         // Demo rendering is handled by _demoTimer at ~20fps.
         // The Ticker only updates the FPS overlay once per second to avoid

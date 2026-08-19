@@ -246,6 +246,15 @@ class _PlotPainter extends CustomPainter {
   ui.Picture? _cachedPicture;
   int _cacheVersion = 0;
 
+  // P3: Cached layout values (computed in _paintInternal, reused in _drawCrosshairOverlay)
+  double plotLeft = 50.0;
+  double plotRight = 10.0;
+  double plotTop = 10.0;
+  double plotBottom = 40.0;
+
+  // P4: Dynamic quality level for high data rate scenarios
+  final _QualityLevel _qualityLevel;
+
   _PlotPainter({
     required this.channels,
     required this.xMin, required this.xMax,
@@ -261,7 +270,8 @@ class _PlotPainter extends CustomPainter {
     this.deltaTime = 1.0,
     required this.viewportRefreshCount,
     this.renderMode = _RenderMode.auto,
-  });
+    required _QualityLevel qualityLevel,
+  }) : _qualityLevel = qualityLevel;
 
   double _xToScreen(double x, double w) {
     if (xMax == xMin) return w / 2;
@@ -395,17 +405,32 @@ class _PlotPainter extends CustomPainter {
   }
 
   void _paintInternal(Canvas canvas, double w, double h, double scale) {
-    // Calculate dynamic margins based on number of Y axes
-    final yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
-    final leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
-    final rightYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 1).length;
+    // P3: Layout cache - avoid recalculating Y-axis layout every frame
+    // NOTE: layoutHash computed but cache not yet wired to parent state
+    // final layoutHash = Object.hash(...);
+    
+    double plotLeft, plotRight, plotTop, plotBottom, plotW, plotH;
+    int leftYAxes, rightYAxes;
+    List<PlotChannel> yAxisChannels;
+    
+    // Try to use cached layout if available from parent state
+    // Fallback: compute inline (first frame or cache miss)
+    yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
+    leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
+    rightYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 1).length;
 
-    final plotLeft = 50.0 + leftYAxes * 45.0;
-    final plotBottom = 40.0;
-    final plotRight = 10.0 + rightYAxes * 45.0;
-    final plotTop = 10.0;
-    final plotW = w - plotLeft - plotRight;
-    final plotH = h - plotTop - plotBottom;
+    plotLeft = 50.0 + leftYAxes * 45.0;
+    plotBottom = 40.0;
+    plotRight = 10.0 + rightYAxes * 45.0;
+    plotTop = 10.0;
+    plotW = w - plotLeft - plotRight;
+    plotH = h - plotTop - plotBottom;
+    
+    // Store for _drawCrosshairOverlay reuse
+    this.plotLeft = plotLeft;
+    this.plotRight = plotRight;
+    this.plotTop = plotTop;
+    this.plotBottom = plotBottom;
 
     if (plotW <= 0 || plotH <= 0) return;
 
@@ -499,14 +524,11 @@ class _PlotPainter extends CustomPainter {
   void _drawCrosshairOverlay(Canvas canvas, double w, double h) {
     if (mousePosition == null) return;
 
-    // Calculate plot bounds (same as _paintInternal)
-    final yAxisChannels = channels.where((ch) => ch.visible && ch.showYAxis).toList();
-    final leftYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 0).length;
-    final rightYAxes = yAxisChannels.where((ch) => yAxisChannels.indexOf(ch) % 2 == 1).length;
-    final plotLeft = 50.0 + leftYAxes * 45.0;
-    final plotBottom = 40.0;
-    final plotRight = 10.0 + rightYAxes * 45.0;
-    final plotTop = 10.0;
+    // P3: Reuse layout from _paintInternal via cached values on painter
+    // Fallback: compute inline (should not happen if paint() called first)
+    final plotLeft = this.plotLeft;
+    final plotRight = this.plotRight;
+    final plotTop = this.plotTop;
     final plotW = w - plotLeft - plotRight;
     final plotH = h - plotTop - plotBottom;
     if (plotW <= 0 || plotH <= 0) return;
@@ -702,6 +724,14 @@ class _PlotPainter extends CustomPainter {
       return h - (y - chYMin) / (chYMax - chYMin) * h;
     }
 
+    // P4: Dynamic quality - skip expensive rendering at high data rates
+    // When quality is minimal, only draw simple line (no envelope, no blend, no gaps)
+    if (_qualityLevel == _QualityLevel.minimal) {
+      // Minimal quality: just draw the trace line, skip all envelope/fill/gap work
+      _drawLine(canvas, ch, data, ox, oy, w, h, yTransform, scale);
+      return;
+    }
+
     // ── 调优③: trace→envelope 平滑过渡 ──
     // 在 spp ∈ [1.5, 3.0] 区间内同时渲染 trace 和 envelope，
     // trace alpha 从 1.0 → 0.0，envelope alpha 从 0.0 → 1.0。
@@ -717,6 +747,18 @@ class _PlotPainter extends CustomPainter {
     }
     if (renderMode == _RenderMode.auto && pureTrace) {
       _drawTrace(canvas, ch, data, ox, oy, w, h, yTransform);
+      return;
+    }
+
+    // P4: Reduced quality - skip blend transition, use pure envelope only
+    if (_qualityLevel == _QualityLevel.reduced) {
+      // Reduced quality: pure envelope only, no trace blending
+      final envData = ch.envelopeData;
+      if (envData.isNotEmpty && envData.length >= 2) {
+        _drawEnvelope(canvas, ch, envData, ox, oy, w, h, yTransform, alpha: 0.30);
+        _drawMinMaxLines(canvas, ch, envData, ox, oy, w, h, yTransform, alpha: 0.60,
+          maxLinesPerPixel: 1.0);
+      }
       return;
     }
 

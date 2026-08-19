@@ -157,6 +157,20 @@ class FixedCapacityRing {
 
   void clear() { _head = 0; _count = 0; }
 
+  /// Extract all data as interleaved Float64List [x0, y0, x1, y1, ...].
+  /// Used for zero-copy transfer to isolate. Length = _count * 2.
+  Float64List get rawBuf {
+    if (_count == 0) return Float64List(0);
+    final result = Float64List(_count * 2);
+    final start = _head >= _count ? 0 : (_head + _capacity - _count) % _capacity;
+    for (int i = 0; i < _count; i++) {
+      final pt = _buf[(start + i) % _capacity];
+      result[i * 2] = pt.x;
+      result[i * 2 + 1] = pt.y;
+    }
+    return result;
+  }
+
   /// Iterate oldest-to-newest (for CSV export, cursor search).
   Iterable<_DataPoint> get oldToNew sync* {
     final start = _head >= _count ? 0 : (_head + _capacity - _count) % _capacity;
@@ -301,6 +315,21 @@ class _DataBuf {
   }
 
   void clear() => _len = 0;
+
+  /// Fast bulk load from interleaved Float64List [x0, y0, x1, y1, ...]
+  /// Replaces current contents. Used for zero-copy isolate result transfer.
+  void loadFromFloat64List(Float64List data) {
+    final count = data.length ~/ 2;
+    if (count == 0) {
+      _len = 0;
+      return;
+    }
+    if (data.length > _buf.length) {
+      _buf = Float64List(data.length);
+    }
+    _buf.setAll(0, data);
+    _len = count;
+  }
 
   /// Copy of the underlying data buffer (safe — caller cannot mutate internal state).
   Float64List get rawBuf => Float64List.fromList(_buf.sublist(0, _len * 2));

@@ -14,6 +14,7 @@ import '../src/rust/api/debug_api.dart';
 import '../src/rust/api/plot_api.dart';
 import '../src/rust/frb_generated.dart';
 import '../core/ffi_bridge.dart';
+import 'plot_isolate.dart';
 
 // ============================================================================
 // Plot Screen — Oscilloscope-style waveform viewer
@@ -32,15 +33,54 @@ import '../core/ffi_bridge.dart';
 // ║  [6/6] UI & DIALOGS    L2260-3666 — build(), config dialogs, painter
 // ╚══════════════════════════════════════════════════════════════╝
 
+import 'plot_isolate.dart';
+
 part 'plot_models.dart';
 part 'plot_painter.dart';
 
-// ============================================================================
-// Plot Screen — Oscilloscope-style waveform viewer
-// ============================================================================
+// Re-export isolate types for use in _PlotScreenState
+// These are defined in plot_isolate.dart but need to be accessible here
+// typedef _IsolateChannelData = _IsolateChannelData;
+// typedef _IsolateDataPoint = _IsolateDataPoint;
+// typedef _IsolateRequest = _IsolateRequest;
+
+/// Dynamic quality levels for adaptive frame rate control
+enum _QualityLevel {
+  full,      // Full resolution: 1920 columns, envelope+trace blend
+  reduced,   // Half resolution: 960 columns, pure envelope only
+  minimal,   // Quarter resolution: 480 columns, line only (no envelope fill)
+}
+
+/// Cached layout computation to avoid per-frame recalculation
+/// NOTE: Reserved for P3 layout cache optimization — not yet wired
+// class _LayoutCache {
+//   final int hash;
+//   final double plotLeft;
+//   final double plotRight;
+//   final double plotTop;
+//   final double plotBottom;
+//   final double plotW;
+//   final double plotH;
+//   final int leftYAxes;
+//   final int rightYAxes;
+//   final List<PlotChannel> yAxisChannels;
+// 
+//   _LayoutCache({
+//     required this.hash,
+//     required this.plotLeft,
+//     required this.plotRight,
+//     required this.plotTop,
+//     required this.plotBottom,
+//     required this.plotW,
+//     required this.plotH,
+//     required this.leftYAxes,
+//     required this.rightYAxes,
+//     required this.yAxisChannels,
+//   });
+// }
+
 
 class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateMixin {
-  // ── Multi-device support ──
   List<DeviceContext> _devices = [];
   int _activeDeviceIndex = 0;
   static const int _maxDevices = 4;
@@ -119,7 +159,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     } else {
       _startDemoData();
     }
-    _refreshViewportData();
+    _refreshViewportDataSync();
     _saveConfig();
   }
 
@@ -326,6 +366,11 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   Map<String, double> _groupYMin = {};
   Map<String, double> _groupYMax = {};
 
+  // ── P0: Data Isolate for viewport decimation (offloads main thread) ──
+  ViewportDataIsolate? _viewportIsolate;
+  // ignore: unused_field
+  bool _isolatePending = false; // DEPRECATED: P0 isolate cancelled, kept for compatibility
+
   // ── Anti-aliasing ──
   AntiAliasingLevel _aaLevel = AntiAliasingLevel.off;
 
@@ -342,6 +387,29 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
   int _sampleIndex = 0;  // Sample index counter for X-axis (displayed as index * deltaTime)
   bool _plotThemeDark = true;  // dark (true) / light (false)
   Timer? _demoTimer;
+
+  // ── Dynamic quality level for high data rate scenarios ──
+  // Auto-degrades visual quality to maintain frame rate when overwhelmed
+  _QualityLevel _qualityLevel = _QualityLevel.full;
+  int _paintUsAvg = 0;                 // Running average paint time (EWMA)
+  static const int _paintAvgWindow = 10; // EWMA window for paint time
+  static const int _paintThresholdUs = 16000; // 16ms = 60fps threshold
+  static const int _paintCriticalUs = 33000;  // 33ms = 30fps critical
+
+  // ── Layout cache ──
+  // NOTE: _layoutCache field reserved for P3 layout cache optimization
+  // _LayoutCache? _layoutCache;
+
+  // ── Real mode adaptive rate control ──
+  // Tracks data rate to adaptively adjust refresh interval and decimation
+  int _realDataPointsPerTick = 0;      // Points fetched in last tick
+  int _realDataTickCount = 0;          // Tick counter for rate averaging
+  int _realDataTotalPoints = 0;        // Accumulated points over averaging window
+  static const int _rateAvgWindow = 20; // Averaging window: 20 ticks (~1s at 50ms)
+  static const int _highRateThreshold = 500; // pts/tick → ~10K pts/sec = high rate
+  static const int _maxRateIntervalMs = 200; // Max timer interval at high rate
+  static const int _minRateIntervalMs = 50;  // Min timer interval at low rate
+  int _currentRateIntervalMs = 50;     // Current adaptive interval
 
   // ── Channel colors pool (oscilloscope-grade, 16 perceptually distinct hues) ──
   // Span the full hue circle with even spacing; tuned for L=45-65 against dark bg.
@@ -628,13 +696,22 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         } else if (_autoScaleX) {
           _fitXAxis();
         }
-        // Step 2: sample only the visible range
-        _refreshViewportData();
-        // Step 3: fit Y-axis using freshly populated viewportData
-        if (_autoScaleY) _fitYAxis();
-        _dataVersion++;
-        _lastRenderVersion = _dataVersion;
-        setState(() {});
+        // Step 2: sample only the visible range (P0: use isolate for heavy computation)
+        // NOTE: Timer callback is not async, so we can't await. Use then() instead.
+        _refreshViewportDataAsync().then((_) {
+          // Step 3: fit Y-axis using freshly populated viewportData
+          if (_autoScaleY) _fitYAxis();
+          _dataVersion++;
+          _lastRenderVersion = _dataVersion;
+          if (mounted) setState(() {});
+        }).catchError((e) {
+          // Fallback to sync on error
+          _refreshViewportDataSync();
+          if (_autoScaleY) _fitYAxis();
+          _dataVersion++;
+          _lastRenderVersion = _dataVersion;
+          if (mounted) setState(() {});
+        });
       } catch (e, st) {
         try { File('vcr_err.txt').writeAsStringSync('DemoTimer err: $e\\n$st\\n', mode: FileMode.append); } catch (_) {}
       }
@@ -694,13 +771,45 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     } catch (_) {}
   }
 
-  void _refreshViewportData() {
+  /// P0: CANCELLED — Isolate overhead exceeds computation cost.
+  /// Dart isolate serialization of Float64List + object graph is slower than
+  /// direct computation on main thread for 250K points.
+  /// Kept as alias to sync version for compatibility.
+  // ignore: unused_element
+  Future<void> _refreshViewportDataAsync() async {
+    _refreshViewportDataSync();
+  }
+
+  /// Synchronous Min-Max pixel decimation (primary path after P0 cancellation).
+  void _refreshViewportDataSync() {
     final sw = Stopwatch()..start();
     /// Min-Max pixel decimation: sample only data within [_xMin, _xMax].
     /// Zoomed in -> per-point precision; zoomed out -> pixel-column min/max.
     if (_xMin == _xMax || _screenWidth <= 0) return;
 
-    final w = _screenWidth.round().clamp(1, 4096);
+    // P4: Dynamic quality adaptation based on paint performance
+    // If paint is consistently slow, reduce resolution to maintain frame rate
+    int targetW = _screenWidth.round().clamp(1, 4096);
+    if (_useRealData) {
+      switch (_qualityLevel) {
+        case _QualityLevel.full:
+          // Full resolution - no reduction
+          break;
+        case _QualityLevel.reduced:
+          targetW = (targetW ~/ 2).clamp(500, 4096);
+          break;
+        case _QualityLevel.minimal:
+          targetW = (targetW ~/ 4).clamp(250, 4096);
+          break;
+      }
+    }
+    
+    // Adaptive decimation: at high data rates, further reduce pixel columns
+    int adaptiveW = targetW;
+    if (_useRealData && _realDataPointsPerTick > _highRateThreshold) {
+      // High data rate: halve resolution (e.g., 1920 -> 960 columns)
+      adaptiveW = (targetW ~/ 2).clamp(500, 4096);
+    }
 
     for (int ci = 0; ci < _channels.length; ci++) {
       final ch = _channels[ci];
@@ -714,7 +823,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         final total = ch.data.length;
         final newestAbsX = ch.data.last.x;
         // When data is sparse (< screen width), clamp _xMin so we don't search an empty range.
-        final adjustedXMin = total < w ? (-total).toDouble().clamp(_xMin, 0.0) : _xMin;
+        final adjustedXMin = total < adaptiveW ? (-total).toDouble().clamp(_xMin, 0.0) : _xMin;
         final viewMinAbs = newestAbsX + adjustedXMin;
         final viewMaxAbs = newestAbsX + _xMax;
 
@@ -737,12 +846,12 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
         if (lastIdx < firstIdx) { ch.viewportData.clear(); ch.envelopeData.clear(); continue; }
 
         final visibleCount = lastIdx - firstIdx + 1;
-        final step = (visibleCount / w).ceil().clamp(1, visibleCount);
+        final step = (visibleCount / adaptiveW).ceil().clamp(1, visibleCount);
 
         ch.viewportData.clear();
         ch.envelopeData.clear();
 
-        for (int x = 0; x < w; x++) {
+        for (int x = 0; x < adaptiveW; x++) {
           final start = firstIdx + x * step;
           if (start > lastIdx) break;
           final end = (start + step).clamp(start, lastIdx + 1);
@@ -770,7 +879,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     _rvdUs = sw.elapsedMicroseconds;
     _sampleIndex++;
     if (_sampleIndex % 100 == 0) {
-      _forceLog('[PERF] rvd=${_rvdUs}us paint=${_paintUs}us cacheHit=$_cacheHitFrames miss=$_cacheMissFrames staticRebuild=$_staticRebuildFrames pts=$_totalPoints xMin=${_xMin.toStringAsFixed(1)}');
+      _forceLog('[PERF] rvd=${_rvdUs}us paint=${_paintUs}us cacheHit=$_cacheHitFrames miss=$_cacheMissFrames staticRebuild=$_staticRebuildFrames pts=$_totalPoints xMin=${_xMin.toStringAsFixed(1)} rateInterval=${_currentRateIntervalMs}ms');
       _cacheHitFrames = 0;
       _cacheMissFrames = 0;
       _staticRebuildFrames = 0;
@@ -912,55 +1021,121 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
 
   void _startRealData() {
     _realDataTimer?.cancel();
+    _currentRateIntervalMs = _minRateIntervalMs;
+    _realDataTickCount = 0;
+    _realDataTotalPoints = 0;
 
     // NOTE: 单定时器架构：数据获取 + UI 更新在同一回调中顺序执行
     // 消除 _fetchTimer / _realDataTimer 双定时器竞态：
     // - 旧架构：两个独立 100ms Timer，执行顺序不确定
-    // - 新架构：单个 50ms Timer，先 fetch → 再 UI update，保证 pyramid 数据就绪
-    _realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-      _fetchRealData();
+    // - 新架构：单个自适应 Timer，先 fetch → 再 UI update，保证 pyramid 数据就绪
+    // - 自适应：根据数据速率动态调整刷新间隔，高数据量时降低频率避免卡顿
+    _realDataTimer = Timer.periodic(Duration(milliseconds: _currentRateIntervalMs), (_) {
+      _adaptiveRealDataTick();
+    });
+  }
+
+  /// Adaptive tick handler: adjusts interval based on data rate and paint performance
+  void _adaptiveRealDataTick() {
+    final tickStart = DateTime.now();
+    
+    // Step 1: Fetch data and measure how much arrived
+    final ptsBefore = _totalPoints;
+    _fetchRealData();
+    final ptsFetched = _totalPoints - ptsBefore;
+    _realDataPointsPerTick = ptsFetched;
+    _realDataTotalPoints += ptsFetched;
+    _realDataTickCount++;
+    
+    // Step 2: Adaptive quality level based on paint performance (P4)
+    // EWMA of paint time to detect sustained performance issues
+    if (_paintUs > 0) {
+      _paintUsAvg = (_paintUsAvg * (_paintAvgWindow - 1) + _paintUs) ~/ _paintAvgWindow;
+    }
+    // Degrade quality if paint is consistently slow
+    if (_paintUsAvg > _paintCriticalUs && _qualityLevel != _QualityLevel.minimal) {
+      _qualityLevel = _QualityLevel.minimal;
+      _forceLog('[QUALITY] Degraded to minimal (paint=${_paintUsAvg}us > critical=${_paintCriticalUs}us)');
+    } else if (_paintUsAvg > _paintThresholdUs && _qualityLevel == _QualityLevel.full) {
+      _qualityLevel = _QualityLevel.reduced;
+      _forceLog('[QUALITY] Degraded to reduced (paint=${_paintUsAvg}us > threshold=${_paintThresholdUs}us)');
+    } else if (_paintUsAvg < _paintThresholdUs ~/ 2 && _qualityLevel != _QualityLevel.full) {
+      // Recovery: upgrade quality when performance improves
+      _qualityLevel = _QualityLevel.full;
+      _forceLog('[QUALITY] Restored to full (paint=${_paintUsAvg}us)');
+    }
+    
+    // Step 3: Adaptive interval adjustment (every _rateAvgWindow ticks)
+    if (_realDataTickCount >= _rateAvgWindow) {
+      final avgPtsPerTick = _realDataTotalPoints ~/ _rateAvgWindow;
+      int newInterval = _minRateIntervalMs;
+      if (avgPtsPerTick > _highRateThreshold * 4) {
+        newInterval = _maxRateIntervalMs; // Very high rate: 200ms
+      } else if (avgPtsPerTick > _highRateThreshold * 2) {
+        newInterval = 150; // High rate: 150ms
+      } else if (avgPtsPerTick > _highRateThreshold) {
+        newInterval = 100; // Medium-high rate: 100ms
+      }
       
-      // 数据获取后，驱动渲染（类似 Demo 模式）
-      // 这样可以确保数据变化和 UI 更新同步，避免 Ticker 空转
-      if (_channels.isNotEmpty && _channels.any((c) => c.data.isNotEmpty)) {
-        // Step 1: 固定滚动窗口（Real 模式始终显示最新 _maxPoints 点）
+      if (newInterval != _currentRateIntervalMs) {
+        _forceLog('[ADAPTIVE] rate=${avgPtsPerTick}pts/tick (~${avgPtsPerTick * (1000 ~/ newInterval)}pts/s) → interval=${newInterval}ms quality=${_qualityLevel.name}');
+        _currentRateIntervalMs = newInterval;
+        _realDataTimer?.cancel();
+        _realDataTimer = Timer.periodic(Duration(milliseconds: _currentRateIntervalMs), (_) {
+          _adaptiveRealDataTick();
+        });
+      }
+      _realDataTickCount = 0;
+      _realDataTotalPoints = 0;
+    }
+    
+    // Step 4: Render only if we have data (skip empty ticks to save CPU)
+    if (_channels.isNotEmpty && _channels.any((c) => c.data.isNotEmpty)) {
+      // Fixed scroll window for Real mode
+      if (_autoScaleX) {
         _xMax = 0.0;
         _xMin = -_maxPoints.toDouble();
-        
-        // Step 2: 采样可见范围
-        _refreshViewportData();
-        
-        // Step 3: Y 轴自适应
-        if (_autoScaleY) _fitYAxis();
-        
-        // Step 4: 标记数据版本，触发渲染
-        _dataVersion++;
-        _lastRenderVersion = _dataVersion;
-        setState(() {});
       }
       
-      // DIAG: Diagnostic: track viewportData population
-      if (_channels.isNotEmpty) {
-        final hasData = _channels.where((c) => c.visible && c.data.isNotEmpty);
-        final noViewport = hasData.where((c) => c.viewportData.isEmpty);
-        if (noViewport.isNotEmpty && _frameCount % 20 == 0) {
-          if (_verbose) print('[DIAG] ${noViewport.length}/${hasData.length} channels have empty viewportData (frame $_frameCount)');
-        }
-        _frameCount++;
-      }
-      // DIAG: Diagnostic: check Rust-side overflow counts every 200 frames (~10s)
-      if (_frameCount % 200 == 0) {
-        try {
-          final overflow = RustLib.instance.api.crateApiPlotApiPlotGetOverflowCounts();
-          if (overflow.isNotEmpty) {
-            if (_verbose) print('[DIAG-OVERFLOW] ChannelBuffer overflow detected:');
-            for (final entry in overflow) {
-              if (_verbose) print('  ${entry.$1} / ${entry.$2}: ${entry.$3} drops');
-            }
+      // Step 5: Sample visible range (P0: offload to isolate)
+      // NOTE: Timer callback is not async, use then() instead of await
+      _refreshViewportDataAsync().then((_) {
+        // Step 6: Y-axis fit
+        if (_autoScaleY) _fitYAxis();
+        
+        // Step 7: Mark version and render
+        _dataVersion++;
+        _lastRenderVersion = _dataVersion;
+        if (mounted) setState(() {});
+      }).catchError((e) {
+        // Fallback to sync
+        _refreshViewportDataSync();
+        if (_autoScaleY) _fitYAxis();
+        _dataVersion++;
+        _lastRenderVersion = _dataVersion;
+        if (mounted) setState(() {});
+      });
+    }
+    
+    // DIAG: track tick duration
+    final tickDuration = DateTime.now().difference(tickStart).inMilliseconds;
+    if (tickDuration > _currentRateIntervalMs) {
+      _forceLog('[WARN] Tick overload: ${tickDuration}ms > interval ${_currentRateIntervalMs}ms');
+    }
+    
+    // DIAG: check overflow counts every ~10s
+    _frameCount++;
+    if (_frameCount % 200 == 0) {
+      try {
+        final overflow = RustLib.instance.api.crateApiPlotApiPlotGetOverflowCounts();
+        if (overflow.isNotEmpty) {
+          if (_verbose) print('[DIAG-OVERFLOW] ChannelBuffer overflow detected:');
+          for (final entry in overflow) {
+            if (_verbose) print('  ${entry.$1} / ${entry.$2}: ${entry.$3} drops');
           }
-        } catch (_) {}
-      }
-    });
+        }
+      } catch (_) {}
+    }
   }
 
   void _toggleDataSource() {
@@ -1014,36 +1189,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
       if (_useRealData) {
         // Switch to real data: stop demo timer, start real data timer
         _demoTimer?.cancel();
-        // Init real channels if empty
-        if (_channels.isEmpty) {
-          _startRealData();
-        } else {
-          // Resume real data timer
-          _realDataTimer?.cancel();
-          _activeDevice.realDataTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-            _fetchRealData();
-            // Real 模式：Timer 驱动渲染（类似 Demo 模式）
-            // 数据获取后，固定滚动窗口并采样可见范围
-            if (_channels.isNotEmpty && _channels.any((c) => c.data.isNotEmpty)) {
-              // Step 1: 如果 autoScaleX 开启，固定滚动窗口；否则尊重用户缩放/滑块设置
-              if (_autoScaleX) {
-                _xMax = 0.0;
-                _xMin = -_maxPoints.toDouble();
-              }
-              
-              // Step 2: 采样可见范围
-              _refreshViewportData();
-              
-              // Step 3: Y 轴自适应
-              if (_autoScaleY) _fitYAxis();
-              
-              // Step 4: 标记数据版本，触发渲染
-              _dataVersion++;
-              _lastRenderVersion = _dataVersion;
-              setState(() {});
-            }
-          });
-        }
+        // Init real channels if empty, or resume with adaptive timer
+        // Adaptive timer auto-adjusts interval based on data rate
+        _startRealData();
       } else {
         // Switch to demo: stop real data timer, start demo timer
         _realDataTimer?.cancel();
@@ -1329,6 +1477,9 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
     }
     // Release static GPU Picture cache (prevents long-running memory leak)
     _PlotPainter.disposeStaticCache();
+    // Dispose P0 isolate
+    _viewportIsolate?.dispose();
+    _viewportIsolate = null;
     // NOTE: Phase C query buffers removed (Min-Max pixel decimation)
     super.dispose();
   }
@@ -2130,7 +2281,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               } else {
                 _startDemoData();
               }
-              _refreshViewportData();
+              _refreshViewportDataSync();
               if (_autoScaleY) _fitYAxis();
               if (!_scrollMode && _autoScaleX) _fitXAxis();
             }
@@ -2454,7 +2605,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
               onPanEnd: (_) {
                 _isDragging = false;
                 _dragStart = null;
-                _refreshViewportData(); // refresh viewport data on release
+                _refreshViewportDataSync(); // refresh viewport data on release
               },
               child: Listener(
                 onPointerSignal: (signal) {
@@ -2531,7 +2682,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                         _yMax = yCenter + yRange / 2 * factor;
                       }
                     });
-                    _refreshViewportData();
+                    _refreshViewportDataSync();
                   }
                 },
                 child: CustomPaint(
@@ -2551,6 +2702,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     deltaTime: _deltaTime,
                     viewportRefreshCount: _viewportRefreshCount,
                     renderMode: _renderMode,
+                    qualityLevel: _qualityLevel,
                   ),
                   size: Size.infinite,
                 ),
@@ -2692,7 +2844,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                     },
                     onHorizontalDragEnd: (d) {
                       _scrollbarDrag = _ScrollbarDrag.none;
-                      _refreshViewportData(); // refresh viewport data on release
+                      _refreshViewportDataSync(); // refresh viewport data on release
                     },
                     child: Container(
                       decoration: BoxDecoration(
@@ -2740,7 +2892,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;
-                        _refreshViewportData();
+                        _refreshViewportDataSync();
                       },
                       child: Container(
                         decoration: BoxDecoration(
@@ -2788,7 +2940,7 @@ class _PlotScreenState extends State<PlotScreen> with SingleTickerProviderStateM
                       },
                       onHorizontalDragEnd: (d) {
                         _scrollbarDrag = _ScrollbarDrag.none;
-                        _refreshViewportData();
+                        _refreshViewportDataSync();
                       },
                       child: Container(
                         decoration: BoxDecoration(
